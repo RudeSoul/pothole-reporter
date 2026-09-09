@@ -4,7 +4,7 @@
 Production transforms and request semantics are mirrored here. Repetitions stay nested
 under their source event; they are never presented as additional ground truth.
 """
-import argparse, base64, hashlib, io, json, math, os, random, re, subprocess, sys
+import argparse, base64, hashlib, io, json, math, os, subprocess, sys
 import urllib.request
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -12,34 +12,37 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-API = "https://api.openai.com/v1/responses"
-DEFAULT_MODEL = "gpt-5-mini"
-ALLOWED_MODELS = {DEFAULT_MODEL, "gpt-5.6"}
-ALLOWED_DETAILS = {"high", "original"}
-ROAD_BAND = 0.60
-PROMPT_VERSION = "road-damage-v3"
-SCHEMA_VERSION = 3
+CONTRACT_PATH = ROOT / "llm" / "generated" / "contract.json"
+try:
+    CONTRACT = json.loads(CONTRACT_PATH.read_bytes())
+except (OSError, json.JSONDecodeError) as error:
+    raise RuntimeError(
+        "The generated LLM contract is missing or unreadable. "
+        "Run `node llm/generate.mjs` from the repository root."
+    ) from error
 
-SCHEMA = {
-    "type": "object", "additionalProperties": False,
-    "required": ["reportable", "assessment", "image_quality", "damage_type",
-                 "on_drivable_surface", "has_broken_edge_or_rim",
-                 "has_depth_or_surface_loss", "temporal_consistency", "size", "description"],
-    "properties": {
-        "reportable": {"type": "boolean"},
-        "assessment": {"type": "string", "enum": ["clear", "probable", "uncertain", "absent"]},
-        "image_quality": {"type": "string", "enum": ["usable", "degraded", "unusable"]},
-        "damage_type": {"type": "string", "enum": ["pothole_cavity", "failed_patch",
-            "surface_breakup", "rut_or_depression", "other_road_damage", "none"]},
-        "on_drivable_surface": {"type": "boolean"},
-        "has_broken_edge_or_rim": {"type": "boolean"},
-        "has_depth_or_surface_loss": {"type": "boolean"},
-        "temporal_consistency": {"type": "string", "enum": ["consistent", "single_view",
-            "inconsistent", "not_applicable"]},
-        "size": {"type": ["string", "null"], "enum": ["small", "medium", "large", None]},
-        "description": {"type": "string"},
-    },
-}
+DETECTION = CONTRACT["prompts"]["detection"]
+MODEL_CONFIG = CONTRACT["config"]["models"]
+RUNTIME_CONFIG = CONTRACT["config"]["runtime"]
+IMAGING_CONFIG = CONTRACT["config"]["imaging"]
+LUMINANCE_CONFIG = IMAGING_CONFIG["adaptiveLuminance"]
+
+API = RUNTIME_CONFIG["responsesUrl"]
+DEFAULT_MODEL = MODEL_CONFIG["defaultModel"]
+ALLOWED_MODELS = frozenset(MODEL_CONFIG["allowedModels"])
+ALLOWED_DETAILS = frozenset(MODEL_CONFIG["allowedImageDetails"])
+ORIGINAL_DETAIL_MODELS = frozenset(MODEL_CONFIG["originalDetailModels"])
+DEFAULT_DETAIL = MODEL_CONFIG["defaultImageDetail"]
+MAX_DETECTION_IMAGES = IMAGING_CONFIG["maxDetectionImages"]
+PROMPT_VERSION = DETECTION["version"]
+SCHEMA_VERSION = DETECTION["schemaVersion"]
+SCHEMA_NAME = DETECTION["schemaName"]
+SCHEMA = DETECTION["schema"]
+
+if RUNTIME_CONFIG["storeResponses"] is not False:
+    raise RuntimeError("The evaluator refuses to run while the canonical contract stores responses.")
+if MAX_DETECTION_IMAGES != 1:
+    raise RuntimeError("road-damage-v4 evaluation requires exactly one detection image.")
 
 
 def sha(value):
@@ -59,24 +62,18 @@ def load_key():
 
 
 def prompts():
-    """Read the live prompt from the pure client so the control cannot drift."""
-    src = (ROOT / "static" / "standalone.js").read_text()
-    found = re.search(r"const DETECT_PROMPT = `(.*?)`;", src, re.S)
-    if not found:
-        sys.exit("could not find DETECT_PROMPT in static/standalone.js")
-    variants = {"baseline": found.group(1)}
-    extra = ROOT / "eval" / "prompts"
-    if extra.is_dir():
-        for path in sorted(extra.glob("*.txt")):
-            variants[path.stem] = path.read_text().rstrip("\n")
-    return variants
+    """Return only prompt arms registered by the canonical LLM contract."""
+    registered = DETECTION.get("evaluationVariants", {})
+    if "baseline" in registered:
+        raise RuntimeError("The reserved baseline arm cannot be replaced by an evaluation variant.")
+    return {"baseline": DETECTION["base"], **registered}
 
 
 def normalise_config(model, detail):
     model = model if model in ALLOWED_MODELS else DEFAULT_MODEL
-    detail = detail if detail in ALLOWED_DETAILS else "high"
-    if detail == "original" and model != "gpt-5.6":
-        detail = "high"
+    detail = detail if detail in ALLOWED_DETAILS else DEFAULT_DETAIL
+    if detail == MODEL_CONFIG["originalImageDetail"] and model not in ORIGINAL_DETAIL_MODELS:
+        detail = DEFAULT_DETAIL
     return model, detail
 
 
@@ -84,7 +81,8 @@ def adaptive_lift(image):
     """Mirror the client's sampled RGB luma test on the already-resized view."""
     from PIL import ImageEnhance
     pixels = image.load()
-    step = max(1, math.floor(math.sqrt((image.width * image.height) / 12000)))
+    step = max(1, math.floor(math.sqrt(
+        (image.width * image.height) / LUMINANCE_CONFIG["targetSamples"])))
     total = count = clipped_dark = clipped_bright = 0
     for y in range(0, image.height, step):
         for x in range(0, image.width, step):
@@ -92,22 +90,26 @@ def adaptive_lift(image):
             luminance = .2126 * red + .7152 * green + .0722 * blue
             total += luminance
             count += 1
-            clipped_dark += luminance < 12
-            clipped_bright += luminance > 245
+            clipped_dark += luminance < LUMINANCE_CONFIG["darkPixelThreshold"]
+            clipped_bright += luminance > LUMINANCE_CONFIG["brightPixelThreshold"]
     mean = total / max(1, count)
     dark = clipped_dark / max(1, count)
     bright = clipped_bright / max(1, count)
-    if mean >= 72 or bright >= .08:
+    if (mean >= LUMINANCE_CONFIG["meanThreshold"]
+            or bright >= LUMINANCE_CONFIG["brightFractionThreshold"]):
         return image, {"luminance": mean, "dark": dark, "bright": bright,
                        "enhanced": False}
-    lift = min(1.65, max(1.15, 85 / max(35, mean)))
+    lift = min(LUMINANCE_CONFIG["maximumLift"],
+               max(LUMINANCE_CONFIG["minimumLift"],
+                   LUMINANCE_CONFIG["targetMean"]
+                   / max(LUMINANCE_CONFIG["meanFloor"], mean)))
     image = ImageEnhance.Brightness(image).enhance(lift)
-    image = ImageEnhance.Contrast(image).enhance(1.10)
+    image = ImageEnhance.Contrast(image).enhance(LUMINANCE_CONFIG["contrast"])
     return image, {"luminance": mean, "dark": dark, "bright": bright,
                    "enhanced": True, "brightness": lift}
 
 
-def encode_view(path, max_dim, quality=85, band=1.0, enhance=False):
+def encode_view(path, max_dim, quality, band, enhance):
     from PIL import Image
     image = Image.open(path).convert("RGB")
     source = {"width": image.width, "height": image.height}
@@ -130,8 +132,12 @@ def encode_view(path, max_dim, quality=85, band=1.0, enhance=False):
     }
 
 
-def entry_paths(entry):
-    return (entry.get("frames") or [entry["path"]])[:3]
+def entry_image(entry):
+    """Return the single frame selected for this labelled event."""
+    paths = entry.get("frames") or [entry["path"]]
+    primary = int(entry.get("primary_index", 0))
+    primary = primary if 0 <= primary < len(paths) else 0
+    return paths[primary]
 
 
 def entry_mode(entry):
@@ -141,54 +147,63 @@ def entry_mode(entry):
 
 
 def prepare_event(entry, root, mode):
-    paths = [root / path for path in entry_paths(entry)]
-    primary = int(entry.get("primary_index", 0))
-    primary = primary if 0 <= primary < len(paths) else 0
-    views, transforms = [], []
-    if mode == "manual":
-        view, meta = encode_view(paths[primary], 2000, 85, 1.0, True)
-        views.append(view); transforms.append(meta)
-        note = "\n- Capture layout: one user-framed full image."
-    else:
-        context, meta = encode_view(paths[primary], 768, 82, 1.0, False)
-        views.append(context); transforms.append({"role": "primary_context", **meta})
-        for index, path in enumerate(paths):
-            view, meta = encode_view(path, 1024, 85, ROAD_BAND, True)
-            views.append(view); transforms.append({"role": "chronological_road_crop", "frame_index": index, **meta})
-        note = (f"\n- Capture layout: image 1 is full-frame context from the sharpest burst frame. "
-                f"Images 2-{len(views)} are lower-road crops in chronological order; "
-                f"the sharpest crop is chronological frame {primary + 1}.")
-    return views, transforms, note
+    config = IMAGING_CONFIG[mode]
+    selected = entry_image(entry)
+    view, meta = encode_view(
+        root / selected, config["maxDimension"],
+        round(config["jpegQuality"] * 100), config["roadBand"],
+        config["adaptiveBrightness"])
+    transform = {"selected_image": selected, **meta}
+    return [view], [transform], DETECTION["captureLayouts"][mode]
 
 
 def build_request(views, prompt, model, detail):
     model, detail = normalise_config(model, detail)
-    content = [{"type": "input_image", "image_url": url, "detail": detail} for url in views[:4]]
-    image_count = len(content)
-    content.append({"type": "input_text", "text":
-        f"{prompt}\n\nThe {image_count} supplied image(s) are ordered exactly as labelled by the capture pipeline."})
+    content = [
+        {"type": "input_image", "image_url": url, "detail": detail}
+        for url in views
+    ]
+    if len(content) != 1:
+        raise ValueError("road-damage-v5 requests must contain exactly one image")
+    content.append({"type": "input_text", "text": prompt})
     return {
         "model": model,
-        "reasoning": {"effort": "none" if model == "gpt-5.6" else "minimal"},
-        "input": [{"role": "user", "content": content}],
-        "text": {"format": {"type": "json_schema", "name": "road_damage_assessment",
-                              "schema": SCHEMA, "strict": True}, "verbosity": "low"},
+        "store": RUNTIME_CONFIG["storeResponses"],
+        "reasoning": {"effort": MODEL_CONFIG["reasoningEffortByModel"].get(
+            model, MODEL_CONFIG["defaultReasoningEffort"])},
+        "input": [{"role": DETECTION["role"], "content": content}],
+        "text": {"format": {"type": "json_schema", "name": SCHEMA_NAME,
+                              "schema": SCHEMA,
+                              "strict": RUNTIME_CONFIG["strictStructuredOutputs"]},
+                 "verbosity": RUNTIME_CONFIG["textVerbosity"]},
     }
 
 
 def decision(result):
-    if not result or result.get("reportable") is not True or result.get("damage_type") == "none":
+    if not result or result.get("image_quality") == "rejected":
+        return "review"
+    if result.get("image_quality") != "acceptable":
+        return "review"
+    allowed_damage_types = {
+        value for value in SCHEMA["properties"]["damage_type"]["enum"]
+        if isinstance(value, str)
+    }
+    allowed_sizes = {
+        value for value in SCHEMA["properties"]["size"]["enum"]
+        if isinstance(value, str)
+    }
+    size = result.get("size")
+    if (result.get("assessment") == "damaged"
+            and result.get("damage_type") in allowed_damage_types
+            and (size is None or size in allowed_sizes)):
+        return "accept"
+    if (result.get("assessment") == "undamaged"
+            and result.get("damage_type") is None
+            and result.get("size") is None):
         return "reject"
-    if result.get("on_drivable_surface") is not True or result.get("assessment") == "absent":
-        return "reject"
-    if (result.get("image_quality") == "unusable" or result.get("assessment") == "uncertain"
-            or result.get("temporal_consistency") == "inconsistent"):
-        return "review"
-    if result.get("assessment") not in {"clear", "probable"}:
-        return "review"
-    if not result.get("has_broken_edge_or_rim") and not result.get("has_depth_or_surface_loss"):
-        return "review"
-    return "accept"
+    # Any other field combination contradicts the canonical schema semantics.
+    # It is not safe to turn a malformed result into a complaint decision.
+    return "review"
 
 
 def call(key, body, cache_dir, cache_slot):
@@ -204,7 +219,9 @@ def call(key, body, cache_dir, cache_slot):
     result = None
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(
+                    request, timeout=RUNTIME_CONFIG["timeoutsMs"]["personalOpenAI"] / 1000
+            ) as response:
                 payload = json.loads(response.read())
             message = next(o for o in payload.get("output", []) if o.get("type") == "message")
             text = next(c for c in message["content"] if c.get("type") == "output_text")["text"]
@@ -219,23 +236,72 @@ def call(key, body, cache_dir, cache_slot):
 
 def binary_label(label):
     if label in {"pothole", "pothole_cavity", "failed_patch", "surface_breakup",
-                 "rut_or_depression", "other_road_damage", "reportable"}:
+                 "rut_or_depression", "other_road_damage", "damaged"}:
         return True
-    if label in {"not_pothole", "not_reportable", "none"}:
+    if label in {"not_pothole", "undamaged"}:
         return False
     return None
 
 
-def cluster_interval(values, seed=17, samples=3000):
-    if not values:
-        return 0.0, 0.0, 0.0
-    rng = random.Random(seed)
-    means = []
-    for _ in range(samples):
-        picked = [values[rng.randrange(len(values))] for _ in values]
-        means.append(sum(picked) / len(picked))
-    means.sort()
-    return sum(values) / len(values), means[int(.025 * samples)], means[int(.975 * samples)]
+def ratio(numerator, denominator):
+    return numerator / denominator if denominator else None
+
+
+def grouped_metrics(source_rows, suppress_precision_without_negatives=False):
+    """Count each labelled event once, regardless of stochastic trial count."""
+    grouped = defaultdict(list)
+    for row in source_rows:
+        if binary_label(row["label"]) is not None:
+            grouped[row["event"]].append(row)
+
+    counts = Counter(tp=0, fp=0, tn=0, fn=0)
+    event_results = []
+    for event, event_rows in sorted(grouped.items()):
+        truth = binary_label(event_rows[0]["label"])
+        decisions = Counter(row["decision"] for row in event_rows)
+        # A complaint is the positive action. Require a strict majority of the
+        # event's repetitions so ties and review-heavy events fail closed.
+        predicted_positive = decisions["accept"] > len(event_rows) / 2
+        if truth and predicted_positive:
+            counts["tp"] += 1
+        elif truth:
+            counts["fn"] += 1
+        elif predicted_positive:
+            counts["fp"] += 1
+        else:
+            counts["tn"] += 1
+        event_results.append({
+            "event": event,
+            "truth": "positive" if truth else "negative",
+            "predicted": "positive" if predicted_positive else "negative",
+            "decisions": dict(decisions),
+            "accept_rate": decisions["accept"] / len(event_rows),
+        })
+
+    positive_events = counts["tp"] + counts["fn"]
+    negative_events = counts["tn"] + counts["fp"]
+    predicted_positive_events = counts["tp"] + counts["fp"]
+    precision = ratio(counts["tp"], predicted_positive_events)
+    recall = ratio(counts["tp"], positive_events)
+    specificity = ratio(counts["tn"], negative_events)
+    false_accept_rate = ratio(counts["fp"], negative_events)
+    precision_note = None
+    if suppress_precision_without_negatives and negative_events == 0:
+        precision = None
+        precision_note = "not estimable: no owner-verified negative events"
+    f1 = (2 * precision * recall / (precision + recall)
+          if precision is not None and recall is not None and precision + recall else None)
+    return {
+        "events": len(event_results),
+        "positive_events": positive_events,
+        "negative_events": negative_events,
+        "tp": counts["tp"], "fp": counts["fp"],
+        "tn": counts["tn"], "fn": counts["fn"],
+        "precision": precision, "precision_note": precision_note,
+        "recall": recall, "specificity": specificity,
+        "false_accept_rate": false_accept_rate, "f1": f1,
+        "event_results": event_results,
+    }
 
 
 def git_commit():
@@ -250,7 +316,8 @@ def main():
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--arms", default="baseline", help="comma-separated prompt arms")
     parser.add_argument("--models", default=DEFAULT_MODEL, help="comma-separated model IDs")
-    parser.add_argument("--details", default="high", help="comma-separated high/original")
+    parser.add_argument("--details", default=DEFAULT_DETAIL,
+                        help="comma-separated image-detail values from the LLM contract")
     parser.add_argument("--mode", choices=["manual", "drive"], default="drive")
     parser.add_argument("--images-root", default=str(ROOT / "eval" / "images"))
     parser.add_argument("--labels", default=str(ROOT / "eval" / "labels.json"))
@@ -268,7 +335,7 @@ def main():
     if not entries:
         sys.exit(f"no {args.mode} entries in the selected label set")
     root = Path(args.images_root)
-    missing = [path for entry in entries for path in entry_paths(entry) if not (root / path).exists()]
+    missing = [entry_image(entry) for entry in entries if not (root / entry_image(entry)).exists()]
     if missing:
         sys.exit(f"{len(missing)} labelled images not found under {root}, first: {missing[0]}\n"
                  "Images are not committed; see eval/README.md.")
@@ -308,7 +375,10 @@ def main():
         sample = jobs[0]
         images = [x for x in sample[3]["input"][0]["content"] if x["type"] == "input_image"]
         print(json.dumps({"arm": sample[0], "images": len(images), "model": sample[3]["model"],
-                          "detail": images[0]["detail"], "schema_version": SCHEMA_VERSION,
+                          "reasoning": sample[3]["reasoning"]["effort"],
+                          "detail": images[0]["detail"], "store": sample[3]["store"],
+                          "contract_source_sha256": CONTRACT["sourceHash"],
+                          "schema_version": SCHEMA_VERSION,
                           "transform": sample[4]}, indent=1))
         return
 
@@ -335,53 +405,44 @@ def main():
     print("\n=== event-clustered binary results ===")
     for name, _, _, _ in configs:
         arm_rows = [row for row in rows if row["arm"] == name and "error" not in row]
-        def rates(source_rows):
-            event_rows = defaultdict(list)
-            for row in source_rows:
-                if binary_label(row["label"]) is not None:
-                    event_rows[row["event"]].append(row)
-            positives, negatives, confusion = [], [], Counter()
-            for grouped in event_rows.values():
-                truth = binary_label(grouped[0]["label"])
-                rate = sum(row["decision"] == "accept" for row in grouped) / len(grouped)
-                (positives if truth else negatives).append(rate)
-                for row in grouped:
-                    confusion[(grouped[0]["label"], row.get("damage_type", "none"))] += 1
-            recall = cluster_interval(positives)
-            false_rate = cluster_interval(negatives)
-            return positives, negatives, recall, false_rate, confusion
-
-        provisional = rates(arm_rows)
         verified_rows = [row for row in arm_rows
                          if str(row.get("labelled_by", "")).strip().lower() == "owner"]
-        verified = rates(verified_rows)
-        vp, vn, vr, vf, vc = verified
-        pp, pn, pr, pf, pc = provisional
+        verified = grouped_metrics(verified_rows, suppress_precision_without_negatives=True)
+        provisional = grouped_metrics(arm_rows)
         summary[name] = {
-            "verified": {"positive_events": len(vp), "negative_events": len(vn),
-                         "recall": vr[0] if vp else None,
-                         "recall_cluster_95": list(vr[1:]) if vp else None,
-                         "false_accept_rate": vf[0] if vn else None,
-                         "false_accept_cluster_95": list(vf[1:]) if vn else None,
-                         "confusion": {f"{a}->{b}": n for (a, b), n in vc.items()}},
-            "provisional_including_unverified": {
-                "positive_events": len(pp), "negative_events": len(pn),
-                "recall": pr[0] if pp else None, "recall_cluster_95": list(pr[1:]) if pp else None,
-                "false_accept_rate": pf[0] if pn else None,
-                "false_accept_cluster_95": list(pf[1:]) if pn else None,
-                "confusion": {f"{a}->{b}": n for (a, b), n in pc.items()}},
+            "owner_verified": verified,
+            "provisional_including_unverified": provisional,
         }
-        recall_text = f"{vr[0]:.1%} [{vr[1]:.1%}, {vr[2]:.1%}]" if vp else "n/a"
-        false_text = f"{vf[0]:.1%} [{vf[1]:.1%}, {vf[2]:.1%}]" if vn else "n/a"
-        print(f"  {name:48} VERIFIED recall {recall_text} · false accept {false_text} "
-              f"({len(vp)} positive, {len(vn)} negative events)")
+        def percent(value):
+            return f"{value:.1%}" if value is not None else "n/a"
+
+        print(f"  {name:48} OWNER VERIFIED "
+              f"TP/FP/TN/FN {verified['tp']}/{verified['fp']}/{verified['tn']}/{verified['fn']} · "
+              f"precision {percent(verified['precision'])} · recall {percent(verified['recall'])} · "
+              f"specificity {percent(verified['specificity'])} · FAR {percent(verified['false_accept_rate'])} · "
+              f"F1 {percent(verified['f1'])}")
+        if verified["precision_note"]:
+            print(f"    {verified['precision_note']}")
+        print(f"  {name:48} PROVISIONAL    "
+              f"TP/FP/TN/FN {provisional['tp']}/{provisional['fp']}/{provisional['tn']}/{provisional['fn']} · "
+              f"precision {percent(provisional['precision'])} · recall {percent(provisional['recall'])} · "
+              f"specificity {percent(provisional['specificity'])} · FAR {percent(provisional['false_accept_rate'])} · "
+              f"F1 {percent(provisional['f1'])}")
 
     manifest = {
         "created_at": datetime.now(timezone.utc).isoformat(), "git_commit": git_commit(),
+        "llm_contract_version": CONTRACT["contractVersion"],
+        "llm_contract_source_sha256": CONTRACT["sourceHash"],
         "mode": args.mode, "trials_per_event": args.trials, "prompt_version": PROMPT_VERSION,
-        "schema_version": SCHEMA_VERSION, "schema_sha256": sha(json.dumps(SCHEMA, sort_keys=True)),
+        "schema_name": SCHEMA_NAME, "schema_version": SCHEMA_VERSION,
+        "schema_sha256": sha(json.dumps(SCHEMA, sort_keys=True)),
+        "store_responses": RUNTIME_CONFIG["storeResponses"],
+        "text_verbosity": RUNTIME_CONFIG["textVerbosity"],
+        "max_detection_images": MAX_DETECTION_IMAGES,
+        "imaging": IMAGING_CONFIG,
         "labels_sha256": sha(label_bytes), "configs": [config[0] for config in configs],
-        "warning": "The seed set is not a release gate until it contains verified positives and negatives.",
+        "event_aggregation": "strict majority accept across repetitions; ties fail closed",
+        "warning": "The seed set is not a release gate until it contains owner-verified positives and negatives.",
     }
     (outdir / "manifest.json").write_text(json.dumps(manifest, indent=1))
     (outdir / "summary.json").write_text(json.dumps(summary, indent=1))

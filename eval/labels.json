@@ -1,5 +1,5 @@
 {
- "_comment": "Legacy seed labels for the road-damage benchmark. Images are NOT committed: see eval/README.md. The v3 taxonomy is pothole_cavity, failed_patch, surface_breakup, rut_or_depression, other_road_damage, not_reportable or unlabelled; this seed still uses legacy pothole/not_pothole until the owner re-labels each subtype. Only six photos were confirmed by the owner, all positive. Every negative is assistant-judged and UNVERIFIED, so this set cannot measure false-positive accuracy or act as a release gate. Disputed images remain excluded.",
+ "_comment": "Legacy seed labels for the road-damage benchmark. Images are NOT committed: see eval/README.md. Production road-damage-v5 returns acceptable/rejected image quality and damaged/undamaged assessment with pothole_cavity, failed_patch, surface_breakup, rut_or_depression, or other_road_damage subtypes. This seed still uses legacy pothole/not_pothole binary labels until the owner re-labels each subtype. Only six photos were confirmed by the owner, all positive. Every negative is assistant-judged and UNVERIFIED, so this set cannot measure verified precision or act as a release gate. Disputed images remain excluded.",
  "images": [
   {
    "path": "seed/IMG20260720144314.jpg",
@@ -52,7 +52,7 @@
   {
    "path": "seed/t013s.jpg",
    "label": "not_pothole",
-   "notes": "Loose debris and an exposed drainage grate at the kerb. The carriageway itself is intact. The sharpest probe in the set: the live prompt rejects it 10/10, and every road-band crop variant accepted it.",
+   "notes": "Assistant-labelled roadside debris and an exposed drainage grate near the kerb. The current v5 model instead sees road-edge damage and accepted it in both recorded trials. The negative label is unverified and contributes only to provisional metrics until the owner rules whether damage crosses the actual road boundary.",
    "source": "project owner, dashcam frame",
    "licence": "owner",
    "labelled_by": "assistant, UNVERIFIED"
@@ -60,7 +60,7 @@
   {
    "path": "seed/t015s.jpg",
    "label": "not_pothole",
-   "notes": "Intact carriageway with construction debris at the roadside.",
+   "notes": "Assistant-labelled intact road with construction debris at the roadside. The current v5 model accepted it in both recorded trials, so the negative label requires owner review and contributes only to provisional metrics.",
    "source": "project owner, dashcam frame",
    "licence": "owner",
    "labelled_by": "assistant, UNVERIFIED"
@@ -68,7 +68,7 @@
   {
    "path": "seed/t049s.jpg",
    "label": "disputed",
-   "notes": "Silt and erosion strip along the lane, no discrete cavity. DISPUTED: the detector accepts this 4/4 under both the old and the new prompt, describing a specific defect (t049s: a broken strip down the centre of the lane; t061s: a shallow depression near the bottom of frame). The not_pothole label here is the assistant's and was never reviewed. Until a human rules, this image is excluded from the false-positive rate rather than counted against the detector.",
+   "notes": "Silt and an erosion strip along the lane, with no agreed discrete cavity. DISPUTED: the detector describes a broken strip affecting the road, while the assistant's earlier negative label was never reviewed. Until the owner rules, this image is excluded from binary metrics.",
    "source": "project owner, dashcam frame",
    "licence": "owner",
    "labelled_by": "assistant, DISPUTED: needs the owner to rule"
@@ -76,7 +76,7 @@
   {
    "path": "seed/t061s.jpg",
    "label": "disputed",
-   "notes": "Intact road surface, dusty at the edges. DISPUTED: the detector accepts this 4/4 under both the old and the new prompt, describing a specific defect (t049s: a broken strip down the centre of the lane; t061s: a shallow depression near the bottom of frame). The not_pothole label here is the assistant's and was never reviewed. Until a human rules, this image is excluded from the false-positive rate rather than counted against the detector.",
+   "notes": "Assistant initially described an intact road dusty at the edges, while the detector describes a shallow road depression. DISPUTED: the negative label was never owner-reviewed. Until the owner rules, this image is excluded from binary metrics.",
    "source": "project owner, dashcam frame",
    "licence": "owner",
    "labelled_by": "assistant, DISPUTED: needs the owner to rule"

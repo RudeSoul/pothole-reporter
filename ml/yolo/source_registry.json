@@ -1,0 +1,47 @@
+{
+  "schema_version": "pothole-yolo-source-registry-v1",
+  "sources": {
+    "rad_v3": {
+      "name": "RAD (Road Anomaly Detection)",
+      "kaggle_ref": "rohitsuresh15/radroad-anomaly-detection",
+      "dataset_version": 3,
+      "source_url": "https://www.kaggle.com/datasets/rohitsuresh15/radroad-anomaly-detection",
+      "metadata_url": "https://www.kaggle.com/api/v1/datasets/view/rohitsuresh15/radroad-anomaly-detection",
+      "metadata_verified_at": "2026-09-05",
+      "paper_doi": "10.1007/978-981-97-2004-0_34",
+      "license_reported_by_kaggle": "MIT",
+      "last_updated_reported_by_kaggle": "2023-11-28T13:38:31.417Z",
+      "version_3_total_bytes_reported_by_kaggle": 7852662180,
+      "release_identity": "A production import requires a pinned domain-separated SHA-256 over data.yaml and every consumed train/valid/test image path, image byte, label path and label byte. A changed tree is rejected even if aggregate counts match.",
+      "expected_yolo_classes": [
+        "HMV",
+        "LMV",
+        "Pedestrian",
+        "RoadDamages",
+        "SpeedBump",
+        "UnsurfacedRoad"
+      ],
+      "expected_image_annotation_counts": {
+        "images": 8394,
+        "labels": 8394,
+        "boxes": 29941,
+        "HMV_boxes": 4431,
+        "LMV_boxes": 14392,
+        "Pedestrian_boxes": 3563,
+        "road_damage_boxes": 6463,
+        "speed_bump_boxes": 499,
+        "UnsurfacedRoad_boxes": 593,
+        "empty_labels": 91,
+        "pure_speed_bump_frames": 341
+      },
+      "label_limit": "RoadDamages combines potholes, cracks, protrusions and manholes. It is not pothole ground truth and is never automatically mapped to class 0. UnsurfacedRoad describes surface material, not damage, and is never automatically mapped to a positive or negative. Human pothole audits must include real cavities on asphalt, concrete, gravel, dirt and mud roads, including cavities at a road edge."
+    },
+    "owned_app_export": {
+      "format": "road-damage-dataset-*.zip or an extracted directory containing labels.json and images/",
+      "label_field": "images[].label",
+      "group_fields": ["images[].server_pothole_id", "images[].drive_id", "images[].capture_session_id", "images[].lat+lng within 25 metres"],
+      "provenance_fields": ["images[].labelled_by", "images[].captured_at"],
+      "label_limit": "The export carries image-level damaged/undamaged labels, not bounding boxes. Positive images require a separate human box audit before detection training. A capture is one manual or Drive Mode image. Stable IDs are hashed before entering manifests; nearby geolocations coalesce across exports. Images without a server pothole ID, capture ID, or location are conservatively kept in one split."
+    }
+  }
+}

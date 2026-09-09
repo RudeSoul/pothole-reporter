@@ -26,6 +26,11 @@
   #viewer { position:fixed; inset:0; background:#000; z-index:50; display:flex; align-items:center; justify-content:center; overflow:hidden; touch-action:none; }
   #viewerImg { max-width:100%; max-height:100%; transform-origin:0 0; will-change:transform; user-select:none; -webkit-user-drag:none; }
   #viewerClose { position:absolute; top:calc(env(safe-area-inset-top) + 12px); right:12px; background:rgba(255,255,255,.15); color:#fff; font-size:20px; padding:10px 16px; border-radius:12px; }
+  #viewerMeta { position:absolute; top:calc(env(safe-area-inset-top) + 12px); left:12px; right:84px;
+                background:rgba(0,0,0,.78); color:#fff; padding:10px 12px; border-radius:12px;
+                font-size:13px; line-height:1.35; pointer-events:none; }
+  #viewerMeta .viewer-description { display:block; color:#d5d5da; margin-top:4px;
+                                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   #viewerHint { position:absolute; bottom:calc(env(safe-area-inset-bottom) + 16px); left:0; right:0; text-align:center; color:#9a9ba1; font-size:12px; }
   .group-head { display:flex; align-items:center; gap:8px; margin:16px 0 6px; cursor:pointer; user-select:none; }
   .group-head .caret { transition:transform .15s; display:inline-block; }
@@ -42,6 +47,7 @@
   .chip.review { background:#3a2b12; color:#ffd28a; }
   .chip.queued { background:#122f33; color:#7cd8e8; }
   .chip.unrouted { background:#2b2b33; color:#b9b9c6; }
+  .chip.duplicate { background:#24263a; color:#b9c2ff; }
   .meta { color:var(--mut); font-size:12px; margin-top:2px; }
   label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; }
   input[type=text], input[type=password], select, textarea { width:100%; background:#131417; color:#f2f2f4; border:1px solid var(--line); border-radius:10px; padding:10px; font:inherit; font-size:14px; }
@@ -108,6 +114,11 @@
       <div class="meta" id="dashRange"></div>
       <div id="dashStats" class="row" style="flex-wrap:wrap;gap:8px;margin-top:12px"></div>
     </div>
+    <div class="card hidden" id="communityCard">
+      <div class="verdict" id="communityTitle">Community impact</div>
+      <div class="meta" id="communityNote"></div>
+      <div id="communityStats" class="row" style="flex-wrap:wrap;gap:8px;margin-top:12px"></div>
+    </div>
     <div class="card" style="padding:0;overflow:hidden">
       <div id="map" style="height:46vh;background:#0c0d0f"></div>
       <div class="meta" id="mapNote" style="padding:8px 12px"></div>
@@ -129,7 +140,7 @@
       <button class="ghost" id="lblRut">Rut / depression</button>
     </div>
     <div class="btn-row">
-      <button class="ghost danger" id="lblNo">Not reportable</button>
+      <button class="ghost danger" id="lblNo">Undamaged</button>
       <button class="ghost" id="lblSkip">Skip</button>
     </div>
     <div class="btn-row">
@@ -146,20 +157,20 @@
         <option value="en">English</option>
         <option value="kn">ಕನ್ನಡ</option>
       </select>
+      <label id="providerLabel">Vision provider</label>
+      <select id="setProvider">
+        <option id="providerPersonal" value="personal">My OpenAI API key</option>
+        <option id="providerShared" value="shared">Shared project service</option>
+      </select>
+      <div class="meta" id="providerNote" style="margin-top:6px"></div>
       <label id="keyLabel">OpenAI API key (stored only on this device)</label>
       <input type="password" id="setKey" placeholder="sk-...">
       <label id="nameLabel">Your name (signs the complaints)</label>
       <input type="text" id="setName" placeholder="Gaurav Sen">
       <label id="modelLabel">Detection model</label>
-      <select id="setModel">
-        <option value="gpt-5-mini">gpt-5-mini — current baseline</option>
-        <option value="gpt-5.6">gpt-5.6 — accuracy experiment</option>
-      </select>
+      <select id="setModel"></select>
       <label id="detailLabel">Image detail</label>
-      <select id="setDetail">
-        <option value="high">High</option>
-        <option value="original">Original (gpt-5.6 only)</option>
-      </select>
+      <select id="setDetail"></select>
       <div class="meta" id="accuracyNote"></div>
       <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:13px;color:#f2f2f4">
         <input type="checkbox" id="setDebug" style="width:18px;height:18px;accent-color:var(--accent)">
@@ -171,11 +182,16 @@
         <span id="recordLabel">Record video during a drive</span>
       </label>
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:#f2f2f4">
+        <input type="checkbox" id="setBackgroundDrive" style="width:18px;height:18px;accent-color:var(--accent)">
+        <span id="backgroundDriveLabel">Background Drive Mode (no live preview)</span>
+      </label>
+      <div class="meta" id="backgroundDriveNote"></div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:#f2f2f4">
         <input type="checkbox" id="setKeepFrames" style="width:18px;height:18px;accent-color:var(--accent)">
         <span id="keepFramesLabel">Save every analysed frame to the device</span>
       </label>
       <div class="meta" id="keepFramesNote"></div>
-      <div class="meta" id="settingsNote" style="margin-top:10px">Complaints are always created as email drafts addressed to the concerned corporation officer. Nothing sends until you press send in your email app.</div>
+      <div class="meta" id="settingsNote" style="margin-top:10px">Email is the only complaint option. One tap opens a draft addressed to the responsible authority; nothing sends until you press Send in your email app.</div>
       <div class="meta" id="independentNote" style="margin-top:10px"></div>
       <div class="policy-links">
         <a id="privacyLink" href="https://coding-parrot.github.io/pothole-reporter/privacy.html" target="_blank" rel="noopener noreferrer">Privacy policy</a>
@@ -210,49 +226,86 @@
 
   <div id="viewer" class="hidden">
     <img id="viewerImg" alt="">
+    <div id="viewerMeta" role="status"></div>
     <button id="viewerClose">&times;</button>
     <div id="viewerHint"></div>
   </div>
 
 <script src="vendor/leaflet.js"></script>
+<script src="llm-contract.generated.js"></script>
 <script src="standalone.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
+const LLM_UI_CONFIG = window.PotholeLlmContract.config.models;
+const LLM_UI_MODELS = new Set(LLM_UI_CONFIG.allowedModels);
+const LLM_UI_DETAILS = new Set(LLM_UI_CONFIG.allowedImageDetails);
+const LLM_UI_ORIGINAL_MODELS = new Set(LLM_UI_CONFIG.originalDetailModels);
+const selectedLlmModel = (value) => LLM_UI_MODELS.has(value)
+  ? value : LLM_UI_CONFIG.defaultModel;
+const selectedLlmDetail = (value, model) => {
+  const picked = LLM_UI_DETAILS.has(value) ? value : LLM_UI_CONFIG.defaultImageDetail;
+  return picked === LLM_UI_CONFIG.originalImageDetail && !LLM_UI_ORIGINAL_MODELS.has(model)
+    ? LLM_UI_CONFIG.defaultImageDetail : picked;
+};
+for (const model of LLM_UI_CONFIG.allowedModels) {
+  const option = document.createElement("option");
+  option.value = model;
+  option.textContent = model === LLM_UI_CONFIG.defaultModel
+    ? `${model} — current baseline` : `${model} — accuracy experiment`;
+  $("setModel").appendChild(option);
+}
+for (const detail of LLM_UI_CONFIG.allowedImageDetails) {
+  const option = document.createElement("option");
+  option.value = detail;
+  option.textContent = detail === LLM_UI_CONFIG.defaultImageDetail
+    ? `${detail[0].toUpperCase()}${detail.slice(1)}`
+    : `${detail[0].toUpperCase()}${detail.slice(1)} (${LLM_UI_CONFIG.originalDetailModels.join(" or ")} only)`;
+  $("setDetail").appendChild(option);
+}
 
 // ---------- i18n (English / Kannada) ----------
 const I18N = {
   en: {
-    sub: "Capture it. Verify the damage. Prepare a complaint for a suggested office.",
+    sub: "Capture it. Verify the damage. Email the responsible authority.",
     report_btn: "&#128247; &nbsp;Report road damage",
     drive_btn: "&#128663; &nbsp;Drive mode",
     your_reports: "Your reports",
     no_reports: "No reports yet.",
-    banner_setup: "Setup needed: tap the gear icon and paste your OpenAI API key.",
+    banner_setup: "Analysis is not configured. Add your OpenAI API key in Settings.",
     settings_title: "Settings",
-    key_label: "OpenAI API key (saved here; sent to OpenAI as the credential)",
+    provider_label: "Vision provider",
+    provider_shared: "Shared project service",
+    provider_personal: "My OpenAI API key",
+    provider_shared_note: "Requires the project server to be online. Selected images go through it, without project retention, to its configured shared detector (OpenAI or an in-house YOLO gateway). If capacity is exhausted, the check fails visibly rather than claiming no damage.",
+    provider_personal_note: "Default for this standalone APK. Your key and selected images go directly to OpenAI. Your key is never sent to the project service.",
+    key_label: "OpenAI API key (required only for personal mode)",
+    key_required: "Enter an OpenAI API key in Settings before starting analysis.",
     name_label: "Your name (signs the complaints)",
     model_label: "Detection model",
     detail_label: "Image detail",
     accuracy_note: "gpt-5-mini/high remains the baseline. gpt-5.6/original is an experiment until your held-out drive benchmark proves it better.",
     debug_label: "Debug mode: keep the drive video after analysing it",
-    settings_note: "Photos and video-derived frames are sent to OpenAI for detection and can contain number plates or faces. Exact location is sent to OpenStreetMap/Nominatim and Karnataka GIS for address and jurisdiction lookup. Your API key is sent only to OpenAI as the request credential. Complaints are email drafts; nothing sends until you press send.",
+    settings_note: "Accepted pothole coordinates and small metadata, including an image hash, go to the project service for tender resolution, nearby deduplication, the shared map and aggregate impact. A failed accepted-metadata upload retries when the app starts or reconnects until you delete that report. Email is the only complaint-filing option: one tap opens a pre-addressed draft with the location, road-damage details, photo and any probable tender number. Nothing sends until you press Send in your email app.",
     independent_note: "Independent, unofficial app. It is not affiliated with or endorsed by any government body. Routing is best-effort and must be reviewed before sending.",
     privacy_title: "Before camera and location access",
-    privacy_body: "If you continue, the app will ask for camera and precise foreground location. A photo—or sampled frames from Drive Mode—is sent with your API key to OpenAI for road-damage detection. Exact coordinates are sent to OpenStreetMap/Nominatim and Karnataka GIS to suggest an address and jurisdiction. Processing can occur outside India.",
-    privacy_local: "Drive Mode uses no audio and stops when the app leaves the foreground. Optional video recording is off by default; if you enable it, clips stay on this device until you analyse or delete them. Reports, photos, location tracks and settings remain on this device until deleted.",
-    privacy_government: "This independent app is not a government service and does not submit complaints automatically. It prepares a draft using published sources; review the destination and content before sending.",
+    privacy_body: "If you continue, the app will use camera images and precise location. Shared vision routes selected images through the project service to its configured detector without project retention. Personal vision sends your key and images directly to OpenAI; the key never goes to the project service.",
+    privacy_local: "In both modes, accepted pothole coordinates and small metadata, including an image hash and pseudonymous installation ID, go to the project service for tender resolution, nearby deduplication, aggregate impact and the general map. If that accepted-metadata upload fails, it stays queued on this device and retries when the app starts or reconnects, until you delete the report. Reports, evidence photos and optional drive video stay on this device until deleted.",
+    privacy_government: "Exact detected pothole coordinates appear on the general map and service logs contain request IDs. This independent app is not a government service. Email is its only complaint-filing option; it opens a draft addressed to the routed authority and never presses Send. Network processing can occur outside India.",
     privacy_link: "Privacy policy", sources_link: "Data sources and limits",
     privacy_accept: "Continue", privacy_decline: "Not now",
     wipe_btn: "Delete all app data",
-    welcome_hint: "Welcome. Paste your OpenAI API key to enable detection. It is saved on this device and sent to OpenAI only as the request credential.",
-    back: "Back", save: "Save", discard: "Discard", del: "Delete", email_btn: "Email", stop: "&#9632; Stop", working: "Working...",
-    chip_draft: "Draft", chip_sent: "Sent", chip_queued: "Opened in email", chip_rejected: "Not reportable", chip_review: "Needs review",
-    chip_unrouted: "Outside coverage",
+    welcome_hint: "This standalone APK analyses directly with an OpenAI key stored on this device. Shared mode works only when the project server is deployed.",
+    back: "Back", save: "Save", discard: "Discard", del: "Delete", email_btn: "Email complaint", stop: "&#9632; Stop", working: "Working...",
+    chip_draft: "Draft", chip_sent: "Opened in email", chip_queued: "Opened in email", chip_rejected: "Undamaged", chip_review: "Retake / review",
+    chip_unrouted: "Outside coverage", chip_duplicate: "Already reported",
+    duplicate_title: "Already reported nearby",
+    duplicate_help: "Your detection and photo were kept as evidence and counted as another sighting. A second complaint was not created.",
+    seen_count: "{n} sightings across devices",
     no_location: "The location could not be determined.",
     road_unknown: "Could not check who owns this road",
     road_unknown_help: "The app could not reach the state road network to check whether this is a national highway, so it will not name a city officer for a road that may not be theirs. Try again when you have a signal.",
     nat_highway: "{road} is a national highway",
-    nat_highway_help: "National highways are maintained by NHAI or the state PWD National Highways division, not by the city or town body, so there is no municipal officer to address. Report it on the NHAI Rajmargyatra app or the 1033 helpline.",
+    nat_highway_help: "National highways are maintained by NHAI or the state PWD National Highways division, not by the city or town body. No verified authority email is configured for this stretch yet, so the photo and location have been saved without opening a complaint draft.",
     rural_road: "This road is in {body} gram panchayat, not a town or city.",
     rural_road_help: "Road damage was confirmed, but it sits outside every urban local body, so it belongs to the state PWD or the panchayat engineering department rather than a municipality. Those are not in the directory yet, so no complaint has been addressed. The photo and location are saved.",
     no_address: "No published address for {body}.",
@@ -263,9 +316,15 @@ const I18N = {
     dash_range: "{days} of reporting · first on {first}",
     dash_empty: "No road damage reported yet. Your map fills up as you drive.",
     day_one: "1 day", day_many: "{n} days",
-    stat_found: "damage events found", stat_reported: "complaints sent", stat_frames: "events checked",
+    stat_found: "damage events found", stat_reported: "email drafts opened", stat_frames: "events checked",
     stat_drives: "drives", stat_footage: "MB of footage", stat_km: "km of road covered",
-    by_type: "By damage type", by_size: "By size", by_area: "By corporation", map_pins: "{n} pinned",
+    by_type: "By damage type", by_size: "By size", by_area: "By corporation",
+    map_pins: "{n} shared potholes pinned",
+    map_local_pins: "Shared map unavailable · showing {n} saved on this device",
+    community_title: "Community impact",
+    community_note: "Aggregate activity reported through the project service.",
+    stat_installations: "active installations", stat_requests: "server requests",
+    stat_observations: "observations", stat_mapped: "mapped potholes",
     map_offline: "Map tiles need a connection. Points are still plotted below.",
     zoom_hint: "Pinch to zoom · drag to pan · double tap to reset",
     rec_suffix: "· recording {mb} MB", rec_failed: "· not recording",
@@ -286,21 +345,24 @@ const I18N = {
     frames_no_permission: "Saving frames to storage was not permitted. Analyse anyway without saving them?",
     analysing_failed: "· {n} failed",
     analyse_incomplete: "Could not finish: {failed} of {n} frames were not checked ({err}) So no result is being claimed, and the video has been kept.",
+    decoder_failed: "The phone could not open the next recorded-video segment.",
     debug_note: "On: the video survives analysis, so a drive can be re-examined or re-run against a better model. Off: the video is deleted after its road-damage events are extracted.",
     record_label: "Record local video during a drive (no audio; off by default)",
+    background_drive_label: "Background Drive Mode (no live preview)",
+    background_drive_note: "Off by default. Turn on only when you want detection to continue after switching apps; this mode captures frames without showing or recording a camera preview.",
     keep_frames_label: "Save every analysed frame to the device",
     keep_frames_note: "Writes each frame the AI checked, with its verdict, into Documents/pothole-frames on this phone. Visible in the Files app, and the raw material for building an evaluation set. Adds up fast: roughly 300 KB a frame.",
     frames_saved: "{n} frames written to Documents/{dir}.",
     frames_failed: "Could not write frames to the device.",
     footage_freed: "Video deleted, {mb} MB freed.",
     footage_kept: "Video kept (debug mode).",
-    offer_analyse: "Analyse this drive's video now? {clips} clips, {mb} MB. Reportable road damage is kept as photos; the rest is discarded.",
+    offer_analyse: "Analyse this drive's video now? {clips} clips, {mb} MB. Detected road damage is kept as photos; the rest is discarded.",
     confirm_delete_footage: "Delete the recorded video for this drive? The reports stay.",
     drive_group: "{date} · {found}{known} · {checked} live frames checked{video}",
     drive_video_suffix: " · {n} video frames checked",
     drive_group_partial: "{date} · {found} · {kept} kept",
     lbl_pothole: "Pothole cavity", lbl_patch: "Failed repair", lbl_surface: "Surface breakup",
-    lbl_rut: "Rut / depression", lbl_no: "Not reportable", lbl_skip: "Skip", lbl_done: "Done",
+    lbl_rut: "Rut / depression", lbl_no: "Undamaged", lbl_skip: "Skip", lbl_done: "Done",
     review_empty: "Nothing left to label. Drive with debug mode on to collect frames.",
     review_progress: "{n} left to label · {done} labelled so far",
     model_said: "The app said: {verdict} · {assessment}",
@@ -310,16 +372,16 @@ const I18N = {
     size_small: "small", size_medium: "medium", size_large: "large",
     damage_pothole_cavity: "pothole cavity", damage_failed_patch: "failed road repair",
     damage_surface_breakup: "broken road surface", damage_rut_or_depression: "road rut / depression",
-    damage_other_road_damage: "other road damage", damage_none: "no reportable damage",
-    assessment_clear: "clear", assessment_probable: "probable", assessment_uncertain: "uncertain", assessment_absent: "absent",
+    damage_other_road_damage: "other road damage", damage_none: "no road damage",
+    assessment_damaged: "damaged", assessment_undamaged: "undamaged",
     verdict_detected: "{type} detected · {assessment}",
-    verdict_review: "Possible {type} — retake or review before reporting",
-    verdict_rejected: "No reportable road damage confirmed",
-    early_yes: "Reportable {type} found. Preparing the complaint...",
+    verdict_review: "Result needs review — retake with a clearer view",
+    verdict_rejected: "No road damage detected",
+    early_yes: "{type} found. Preparing the complaint...",
     early_review: "Possible road damage. A clearer photo is needed.",
-    early_no: "No reportable road damage in this photo.",
-    verdict_sent: "Complaint sent",
-    verdict_queued: "Opened in your email app. Edit and resend if you didn't send it.",
+    early_no: "No road damage in this photo.",
+    verdict_sent: "Email draft opened. Tap Email complaint again if you closed it without sending.",
+    verdict_queued: "Email draft opened. Tap Email complaint again if you closed it without sending.",
     confidence: "confidence",
     email_subject_label: "Email subject",
     email_body_label: "Email body (review before sending)",
@@ -330,15 +392,18 @@ const I18N = {
     gps_lost: "GPS signal lost, waiting for a fresh fix...",
     holding: "Holding position ({checked} checked, {found} found)",
     scanning: "Scanning ({mode})... {checked} checked{analyzing}",
+    starting_camera: "Starting camera…",
+    finishing_analysis: "Camera stopped · finishing {n} captured analyses…",
+    shared_unavailable: "The shared project server is unavailable. Choose Personal OpenAI key in Settings. No image or video was sent.",
+    native_vision_error: "Vision check failed: {err}",
     analyzing_suffix: ", {n} analyzing",
     potholes_one: "{n} damage event", potholes_many: "{n} damage events",
-    drive_tip: "Before moving, aim the camera so the travelled road fills the orange guide with little sky or dashboard. Each check uses a three-frame burst. The back button also stops the drive.",
+    drive_tip: "Before moving, aim the camera so the road fills the orange guide with little sky or dashboard. Each scheduled check captures and sends exactly one full frame. The back button also stops the drive.",
     drive_end: "Drive ended: {found} found, {checked} frames checked.",
     drive_end_known: "Drive ended: no new report; {already} seen again, {checked} frames checked.",
     drive_seen_suffix: " {already} seen again.",
-    drive_end_zero: "No reportable road damage found in this drive ({checked} events checked{debug}).",
+    drive_end_zero: "No road damage found in this drive ({checked} events checked{debug}).",
     debug_saved_suffix: ", debug frames saved for review",
-    confirm_send: "Open your email app with the complaint addressed to {to}?",
     confirm_delete: "Delete this report?",
     confirm_wipe: "Delete ALL app data from this phone, including the API key, settings, reports, photos, footage and exported debug frames?",
     camera_failed: "Camera access failed: ",
@@ -346,37 +411,46 @@ const I18N = {
     the_officer: "the concerned officer",
   },
   kn: {
-    sub: "ಫೋಟೋ ತೆಗೆಯಿರಿ. ಹಾನಿ ಪರಿಶೀಲಿಸಿ. ಸೂಚಿಸಿದ ಕಚೇರಿಗೆ ದೂರು ಕರಡು ಸಿದ್ಧಪಡಿಸಿ.",
+    sub: "ಚಿತ್ರ ಸೆರೆಹಿಡಿಯಿರಿ. ಹಾನಿ ಪರಿಶೀಲಿಸಿ. ಜವಾಬ್ದಾರ ಅಧಿಕಾರಿಗೆ ಇಮೇಲ್ ಮಾಡಿ.",
     report_btn: "&#128247; &nbsp;ರಸ್ತೆ ಹಾನಿ ವರದಿ ಮಾಡಿ",
     drive_btn: "&#128663; &nbsp;ಡ್ರೈವ್ ಮೋಡ್",
     your_reports: "ನಿಮ್ಮ ವರದಿಗಳು",
     no_reports: "ಇನ್ನೂ ವರದಿಗಳಿಲ್ಲ. ಗುಂಡಿ ಹುಡುಕಲು ಹೊರಡಿ.",
-    banner_setup: "ಸೆಟಪ್ ಅಗತ್ಯ: ಗಿಯರ್ ಐಕಾನ್ ಒತ್ತಿ ನಿಮ್ಮ OpenAI API ಕೀ ಅಂಟಿಸಿ.",
+    banner_setup: "ವಿಶ್ಲೇಷಣೆ ಸಂರಚಿಸಲಾಗಿಲ್ಲ. ಸೆಟ್ಟಿಂಗ್ಸ್‌ನಲ್ಲಿ ನಿಮ್ಮ OpenAI API ಕೀ ಸೇರಿಸಿ.",
     settings_title: "ಸೆಟ್ಟಿಂಗ್ಸ್",
-    key_label: "OpenAI API ಕೀ (ಈ ಸಾಧನದಲ್ಲಿ ಉಳಿಯುತ್ತದೆ; OpenAI ಗೆ ಪ್ರಮಾಣಪತ್ರವಾಗಿ ಹೋಗುತ್ತದೆ)",
+    provider_label: "ವಿಷನ್ ಸೇವೆ",
+    provider_shared: "ಯೋಜನೆಯ ಹಂಚಿದ ಸೇವೆ",
+    provider_personal: "ನನ್ನ OpenAI API ಕೀ",
+    provider_shared_note: "ಯೋಜನೆಯ ಸರ್ವರ್ ಆನ್‌ಲೈನ್ ಇದ್ದಾಗ ಮಾತ್ರ ಇದು ಕೆಲಸ ಮಾಡುತ್ತದೆ. ಆಯ್ದ ಚಿತ್ರಗಳು ಅಲ್ಲಿ ಉಳಿಯದೆ, ಹಂಚಿದ OpenAI ಅಥವಾ YOLO ಪತ್ತೆ ವ್ಯವಸ್ಥೆಗೆ ಹೋಗುತ್ತವೆ. ಸಾಮರ್ಥ್ಯ ಮುಗಿದರೆ ಪರಿಶೀಲನೆ ವಿಫಲವೆಂದು ಸ್ಪಷ್ಟವಾಗಿ ತೋರಿಸುತ್ತದೆ.",
+    provider_personal_note: "ಈ ಸ್ವತಂತ್ರ APKಯ ಪೂರ್ವನಿಯೋಜಿತ ಆಯ್ಕೆ. ನಿಮ್ಮ ಕೀ ಮತ್ತು ಚಿತ್ರಗಳು ನೇರವಾಗಿ OpenAI ಗೆ ಹೋಗುತ್ತವೆ. ಕೀ ಎಂದಿಗೂ ಯೋಜನೆಯ ಸೇವೆಗೆ ಹೋಗುವುದಿಲ್ಲ.",
+    key_label: "OpenAI API ಕೀ (ವೈಯಕ್ತಿಕ ಮೋಡ್‌ಗೆ ಮಾತ್ರ ಅಗತ್ಯ)",
+    key_required: "ವಿಶ್ಲೇಷಣೆ ಆರಂಭಿಸುವ ಮೊದಲು ಸೆಟ್ಟಿಂಗ್ಸ್‌ನಲ್ಲಿ OpenAI API ಕೀ ನಮೂದಿಸಿ.",
     name_label: "ನಿಮ್ಮ ಹೆಸರು (ದೂರುಗಳಿಗೆ ಸಹಿ)",
     model_label: "ಪತ್ತೆ ಮಾದರಿ",
     detail_label: "ಚಿತ್ರದ ವಿವರ",
     accuracy_note: "gpt-5-mini/high ಪ್ರಸ್ತುತ ಮೂಲಮಟ್ಟ. ನಿಮ್ಮ ಪ್ರತ್ಯೇಕ ಡ್ರೈವ್ ಪರೀಕ್ಷೆ ಉತ್ತಮವೆಂದು ಸಾಬೀತುಪಡಿಸುವವರೆಗೆ gpt-5.6/original ಪ್ರಯೋಗವಾಗಿದೆ.",
     debug_label: "ಡೀಬಗ್ ಮೋಡ್: ವಿಶ್ಲೇಷಣೆಯ ನಂತರವೂ ಡ್ರೈವ್ ವಿಡಿಯೋ ಉಳಿಸಿ",
-    settings_note: "ಫೋಟೋಗಳು ಮತ್ತು ವಿಡಿಯೋದಿಂದ ಪಡೆದ ಫ್ರೇಮ್‌ಗಳನ್ನು OpenAI ಗೆ ಕಳುಹಿಸಲಾಗುತ್ತದೆ; ಅವುಗಳಲ್ಲಿ ವಾಹನ ಸಂಖ್ಯೆ ಅಥವಾ ಮುಖಗಳು ಇರಬಹುದು. ನಿಖರ ಸ್ಥಳವನ್ನು ವಿಳಾಸ ಮತ್ತು ವ್ಯಾಪ್ತಿ ಸೂಚಿಸಲು OpenStreetMap/Nominatim ಮತ್ತು ಕರ್ನಾಟಕ GIS ಗೆ ಕಳುಹಿಸಲಾಗುತ್ತದೆ. ನಿಮ್ಮ API ಕೀ ವಿನಂತಿಯ ಪ್ರಮಾಣಪತ್ರವಾಗಿ OpenAI ಗೆ ಮಾತ್ರ ಹೋಗುತ್ತದೆ. ದೂರು ಇಮೇಲ್ ಕರಡು ಮಾತ್ರ; ನೀವು ಕಳುಹಿಸುವವರೆಗೆ ಅದು ಹೋಗುವುದಿಲ್ಲ.",
+    settings_note: "ದೃಢಪಟ್ಟ ಗುಂಡಿಯ ನಿಖರ ಸ್ಥಳ ಮತ್ತು ಚಿತ್ರದ ಹ್ಯಾಶ್ ಸೇರಿದಂತೆ ಸಣ್ಣ ಮೆಟಾಡೇಟಾ ಟೆಂಡರ್ ಪರಿಹಾರ, ಹತ್ತಿರದ ನಕಲು ತಡೆ, ಸಾಮಾನ್ಯ ನಕ್ಷೆ ಮತ್ತು ಒಟ್ಟು ಪರಿಣಾಮಕ್ಕಾಗಿ ಯೋಜನೆಯ ಸೇವೆಗೆ ಹೋಗುತ್ತದೆ. ಅಪ್‌ಲೋಡ್ ವಿಫಲವಾದರೆ, ಆ ವರದಿಯನ್ನು ಅಳಿಸುವವರೆಗೆ ಆ್ಯಪ್ ಆರಂಭವಾದಾಗ ಅಥವಾ ಸಂಪರ್ಕ ಮರಳಿದಾಗ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸುತ್ತದೆ. ದೂರು ಸಲ್ಲಿಸಲು ಇರುವ ಏಕೈಕ ಆಯ್ಕೆ ಇಮೇಲ್: ಒಂದೇ ಟ್ಯಾಪ್‌ನಲ್ಲಿ ಸರಿಯಾದ ಅಧಿಕಾರಿಗೆ ವಿಳಾಸಿಸಿದ, ಸ್ಥಳ, ರಸ್ತೆ ಹಾನಿಯ ವಿವರ, ಫೋಟೋ ಮತ್ತು ಲಭ್ಯವಿದ್ದರೆ ಸಂಭಾವ್ಯ ಟೆಂಡರ್ ಸಂಖ್ಯೆಯ ಕರಡು ತೆರೆಯುತ್ತದೆ.",
     independent_note: "ಇದು ಸ್ವತಂತ್ರ, ಅನಧಿಕೃತ ಆ್ಯಪ್. ಯಾವುದೇ ಸರ್ಕಾರಿ ಸಂಸ್ಥೆಯೊಂದಿಗೆ ಸಂಬಂಧ ಅಥವಾ ಅನುಮೋದನೆ ಇಲ್ಲ. ಕಚೇರಿ ಸೂಚನೆ ಅತ್ಯುತ್ತಮ ಪ್ರಯತ್ನ ಮಾತ್ರ; ಕಳುಹಿಸುವ ಮೊದಲು ಪರಿಶೀಲಿಸಿ.",
     privacy_title: "ಕ್ಯಾಮೆರಾ ಮತ್ತು ಸ್ಥಳ ಅನುಮತಿಯ ಮೊದಲು",
-    privacy_body: "ಮುಂದುವರಿಸಿದರೆ, ಆ್ಯಪ್ ಕ್ಯಾಮೆರಾ ಮತ್ತು ನಿಖರ ಮುಂಭಾಗದ ಸ್ಥಳಕ್ಕೆ ಅನುಮತಿ ಕೇಳುತ್ತದೆ. ಫೋಟೋ ಅಥವಾ ಡ್ರೈವ್ ಮೋಡ್‌ನ ಆಯ್ದ ಫ್ರೇಮ್‌ಗಳನ್ನು ನಿಮ್ಮ API ಕೀಯೊಂದಿಗೆ ರಸ್ತೆ ಹಾನಿ ಪತ್ತೆಗೆ OpenAI ಗೆ ಕಳುಹಿಸಲಾಗುತ್ತದೆ. ವಿಳಾಸ ಮತ್ತು ವ್ಯಾಪ್ತಿ ಸೂಚಿಸಲು ನಿಖರ ಸ್ಥಳವನ್ನು OpenStreetMap/Nominatim ಮತ್ತು ಕರ್ನಾಟಕ GIS ಗೆ ಕಳುಹಿಸಲಾಗುತ್ತದೆ. ಸಂಸ್ಕರಣೆ ಭಾರತದ ಹೊರಗೆ ನಡೆಯಬಹುದು.",
-    privacy_local: "ಡ್ರೈವ್ ಮೋಡ್ ಆಡಿಯೋ ಬಳಸುವುದಿಲ್ಲ ಮತ್ತು ಆ್ಯಪ್ ಮುಂಭಾಗದಿಂದ ಹೊರಬಂದಾಗ ನಿಲ್ಲುತ್ತದೆ. ಐಚ್ಛಿಕ ವಿಡಿಯೋ ರೆಕಾರ್ಡಿಂಗ್ ಪೂರ್ವನಿಯೋಜಿತವಾಗಿ ಆಫ್; ನೀವು ಆನ್ ಮಾಡಿದರೆ ವಿಶ್ಲೇಷಣೆ ಅಥವಾ ಅಳಿಸುವವರೆಗೆ ಕ್ಲಿಪ್‌ಗಳು ಸಾಧನದಲ್ಲೇ ಇರುತ್ತವೆ. ವರದಿಗಳು, ಫೋಟೋಗಳು, ಸ್ಥಳ ಟ್ರ್ಯಾಕ್ ಮತ್ತು ಸೆಟ್ಟಿಂಗ್ಸ್ ಅಳಿಸುವವರೆಗೆ ಈ ಸಾಧನದಲ್ಲೇ ಇರುತ್ತವೆ.",
-    privacy_government: "ಇದು ಸರ್ಕಾರಿ ಸೇವೆಯಲ್ಲ ಮತ್ತು ಸ್ವಯಂಚಾಲಿತವಾಗಿ ದೂರು ಸಲ್ಲಿಸುವುದಿಲ್ಲ. ಪ್ರಕಟಿತ ಮೂಲಗಳಿಂದ ಕರಡು ತಯಾರಿಸುತ್ತದೆ; ಕಳುಹಿಸುವ ಮೊದಲು ವಿಳಾಸ ಮತ್ತು ವಿಷಯ ಪರಿಶೀಲಿಸಿ.",
+    privacy_body: "ಮುಂದುವರಿಸಿದರೆ ಆ್ಯಪ್ ಕ್ಯಾಮೆರಾ ಚಿತ್ರಗಳು ಮತ್ತು ನಿಖರ ಸ್ಥಳ ಬಳಸುತ್ತದೆ. ಹಂಚಿದ ವಿಷನ್‌ನಲ್ಲಿ ಆಯ್ದ ಚಿತ್ರಗಳು ಯೋಜನೆಯ ಸೇವೆಯಲ್ಲಿ ಉಳಿಯದೆ, ಅದು ಸಂರಚಿಸಿರುವ ಪತ್ತೆ ವ್ಯವಸ್ಥೆಗೆ ಹೋಗುತ್ತವೆ. ವೈಯಕ್ತಿಕ ವಿಷನ್‌ನಲ್ಲಿ ಕೀ ಮತ್ತು ಚಿತ್ರಗಳು ನೇರವಾಗಿ OpenAI ಗೆ ಹೋಗುತ್ತವೆ; ಕೀ ಯೋಜನೆಯ ಸೇವೆಗೆ ಎಂದಿಗೂ ಹೋಗುವುದಿಲ್ಲ.",
+    privacy_local: "ಎರಡೂ ಮೋಡ್‌ಗಳಲ್ಲಿ ದೃಢಪಟ್ಟ ಗುಂಡಿಯ ನಿಖರ ಸ್ಥಳ ಮತ್ತು ಚಿತ್ರ ಹ್ಯಾಶ್ ಹಾಗೂ ಅನಾಮಧೇಯ ಸ್ಥಾಪನೆ ID ಸೇರಿದಂತೆ ಸಣ್ಣ ಮೆಟಾಡೇಟಾ ಟೆಂಡರ್ ಪರಿಹಾರ, ಹತ್ತಿರದ ನಕಲು ತಡೆ, ಒಟ್ಟು ಪರಿಣಾಮ ಮತ್ತು ಸಾಮಾನ್ಯ ನಕ್ಷೆಗಾಗಿ ಯೋಜನೆಯ ಸೇವೆಗೆ ಹೋಗುತ್ತದೆ. ಈ ಮೆಟಾಡೇಟಾ ಅಪ್‌ಲೋಡ್ ವಿಫಲವಾದರೆ, ಆ ವರದಿಯನ್ನು ಅಳಿಸುವವರೆಗೆ ಅದು ಸಾಧನದಲ್ಲಿ ಬಾಕಿ ಉಳಿದು ಆಪ್ ಆರಂಭವಾದಾಗ ಅಥವಾ ಸಂಪರ್ಕ ಮರಳಿದಾಗ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸುತ್ತದೆ. ವರದಿಗಳು, ಸಾಕ್ಷ್ಯ ಫೋಟೋ ಮತ್ತು ಐಚ್ಛಿಕ ವಿಡಿಯೋ ಅಳಿಸುವವರೆಗೆ ಸಾಧನದಲ್ಲೇ ಇರುತ್ತವೆ.",
+    privacy_government: "ಪತ್ತೆಯಾದ ಗುಂಡಿಯ ನಿಖರ ಸ್ಥಳ ಸಾಮಾನ್ಯ ನಕ್ಷೆಯಲ್ಲಿ ಕಾಣುತ್ತದೆ ಮತ್ತು ಸೇವೆಯ ಲಾಗ್‌ಗಳಲ್ಲಿ ವಿನಂತಿ ID ಇರುತ್ತದೆ. ಇದು ಸರ್ಕಾರಿ ಸೇವೆಯಲ್ಲ. ದೂರು ಸಲ್ಲಿಸಲು ಆ್ಯಪ್‌ನಲ್ಲಿ ಇರುವ ಏಕೈಕ ಆಯ್ಕೆ ಇಮೇಲ್; ಅದು ಸರಿಯಾದ ಅಧಿಕಾರಿಗೆ ಕರಡು ತೆರೆಯುತ್ತದೆ ಮತ್ತು ಸ್ವತಃ ಕಳುಹಿಸುವುದಿಲ್ಲ. ಸಂಸ್ಕರಣೆ ಭಾರತದ ಹೊರಗೆ ನಡೆಯಬಹುದು.",
     privacy_link: "ಗೌಪ್ಯತಾ ನೀತಿ", sources_link: "ಡೇಟಾ ಮೂಲಗಳು ಮತ್ತು ಮಿತಿಗಳು",
     privacy_accept: "ಮುಂದುವರಿಸಿ", privacy_decline: "ಈಗ ಬೇಡ",
     wipe_btn: "ಎಲ್ಲಾ ಆ್ಯಪ್ ಡೇಟಾ ಅಳಿಸಿ",
-    welcome_hint: "ಸ್ವಾಗತ. ಪತ್ತೆಗೆ ನಿಮ್ಮ OpenAI API ಕೀ ಅಂಟಿಸಿ. ಇದು ಸಾಧನದಲ್ಲಿ ಉಳಿಯುತ್ತದೆ ಮತ್ತು OpenAI ಗೆ ಪ್ರಮಾಣಪತ್ರವಾಗಿ ಮಾತ್ರ ಕಳುಹಿಸಲಾಗುತ್ತದೆ.",
-    back: "ಹಿಂದೆ", save: "ಉಳಿಸಿ", discard: "ತ್ಯಜಿಸಿ", del: "ಅಳಿಸಿ", email_btn: "ಇಮೇಲ್", stop: "&#9632; ನಿಲ್ಲಿಸಿ", working: "ನಡೆಯುತ್ತಿದೆ...",
-    chip_draft: "ಡ್ರಾಫ್ಟ್", chip_sent: "ಕಳುಹಿಸಲಾಗಿದೆ", chip_queued: "ಇಮೇಲ್‌ನಲ್ಲಿ ತೆರೆಯಲಾಗಿದೆ", chip_rejected: "ವರದಿ ಯೋಗ್ಯವಲ್ಲ", chip_review: "ಪರಿಶೀಲನೆ ಬೇಕು",
-    chip_unrouted: "ವ್ಯಾಪ್ತಿಯ ಹೊರಗೆ",
+    welcome_hint: "ಈ ಸ್ವತಂತ್ರ APK ಸಾಧನದಲ್ಲಿ ಉಳಿಸಿದ OpenAI ಕೀ ಬಳಸಿ ನೇರವಾಗಿ ವಿಶ್ಲೇಷಿಸುತ್ತದೆ. ಯೋಜನೆಯ ಸರ್ವರ್ ನಿಯೋಜಿಸಿದ್ದರೆ ಮಾತ್ರ ಹಂಚಿದ ಮೋಡ್ ಕೆಲಸ ಮಾಡುತ್ತದೆ.",
+    back: "ಹಿಂದೆ", save: "ಉಳಿಸಿ", discard: "ತ್ಯಜಿಸಿ", del: "ಅಳಿಸಿ", email_btn: "ಇಮೇಲ್ ದೂರು", stop: "&#9632; ನಿಲ್ಲಿಸಿ", working: "ನಡೆಯುತ್ತಿದೆ...",
+    chip_draft: "ಡ್ರಾಫ್ಟ್", chip_sent: "ಇಮೇಲ್‌ನಲ್ಲಿ ತೆರೆಯಲಾಗಿದೆ", chip_queued: "ಇಮೇಲ್‌ನಲ್ಲಿ ತೆರೆಯಲಾಗಿದೆ", chip_rejected: "ಹಾನಿ ಇಲ್ಲ", chip_review: "ಮರುಚಿತ್ರ / ಪರಿಶೀಲನೆ",
+    chip_unrouted: "ವ್ಯಾಪ್ತಿಯ ಹೊರಗೆ", chip_duplicate: "ಈಗಾಗಲೇ ವರದಿ",
+    duplicate_title: "ಹತ್ತಿರದಲ್ಲಿ ಈಗಾಗಲೇ ವರದಿಯಾಗಿದೆ",
+    duplicate_help: "ನಿಮ್ಮ ಪತ್ತೆ ಮತ್ತು ಫೋಟೋ ಸಾಕ್ಷ್ಯವಾಗಿ ಉಳಿದು ಮತ್ತೊಂದು ವೀಕ್ಷಣೆಯಾಗಿ ಎಣಿಕೆಯಾಗಿದೆ. ಎರಡನೇ ದೂರು ಸಿದ್ಧಪಡಿಸಲಿಲ್ಲ.",
+    seen_count: "ಸಾಧನಗಳಾದ್ಯಂತ {n} ವೀಕ್ಷಣೆಗಳು",
     no_location: "ಸ್ಥಳ ಪತ್ತೆಯಾಗಲಿಲ್ಲ.",
     road_unknown: "ಈ ರಸ್ತೆ ಯಾರ ವ್ಯಾಪ್ತಿಗೆ ಬರುತ್ತದೆ ಎಂದು ಪರಿಶೀಲಿಸಲಾಗಲಿಲ್ಲ",
     road_unknown_help: "ಇದು ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿಯೇ ಎಂದು ಪರಿಶೀಲಿಸಲು ರಾಜ್ಯ ರಸ್ತೆ ಜಾಲವನ್ನು ತಲುಪಲಾಗಲಿಲ್ಲ. ಆದ್ದರಿಂದ ಬೇರೆಯವರ ರಸ್ತೆಗೆ ನಗರ ಅಧಿಕಾರಿಯ ಹೆಸರು ಸೂಚಿಸುವುದಿಲ್ಲ. ಸಿಗ್ನಲ್ ಬಂದ ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.",
     nat_highway: "{road} ಒಂದು ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿ",
-    nat_highway_help: "ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿಗಳನ್ನು NHAI ಅಥವಾ ರಾಜ್ಯ ಲೋಕೋಪಯೋಗಿ ಇಲಾಖೆಯ ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿ ವಿಭಾಗ ನಿರ್ವಹಿಸುತ್ತದೆ, ನಗರ ಸಂಸ್ಥೆ ಅಲ್ಲ. ಆದ್ದರಿಂದ ಇಲ್ಲಿ ಪುರಸಭೆ ಅಧಿಕಾರಿಗೆ ದೂರು ಸಲ್ಲಿಸಲಾಗದು. NHAI ರಾಜಮಾರ್ಗಯಾತ್ರಾ ಆ್ಯಪ್ ಅಥವಾ 1033 ಸಹಾಯವಾಣಿಯಲ್ಲಿ ವರದಿ ಮಾಡಿ.",
+    nat_highway_help: "ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿಗಳನ್ನು NHAI ಅಥವಾ ರಾಜ್ಯ ಲೋಕೋಪಯೋಗಿ ಇಲಾಖೆಯ ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿ ವಿಭಾಗ ನಿರ್ವಹಿಸುತ್ತದೆ, ನಗರ ಸಂಸ್ಥೆ ಅಲ್ಲ. ಈ ರಸ್ತೆಗೆ ಪರಿಶೀಲಿಸಿದ ಅಧಿಕೃತ ಇಮೇಲ್ ಇನ್ನೂ ಸಂರಚಿಸಲ್ಪಟ್ಟಿಲ್ಲ; ಆದ್ದರಿಂದ ದೂರು ಕರಡು ತೆರೆಯದೆ ಫೋಟೋ ಮತ್ತು ಸ್ಥಳವನ್ನು ಉಳಿಸಲಾಗಿದೆ.",
     rural_road: "ಈ ರಸ್ತೆ {body} ಗ್ರಾಮ ಪಂಚಾಯತ್‌ನಲ್ಲಿದೆ, ಪಟ್ಟಣ ಅಥವಾ ನಗರದಲ್ಲಿ ಅಲ್ಲ.",
     rural_road_help: "ಗುಂಡಿ ದೃಢಪಟ್ಟಿದೆ, ಆದರೆ ಇದು ಯಾವುದೇ ನಗರ ಸ್ಥಳೀಯ ಸಂಸ್ಥೆಯ ಹೊರಗಿದೆ. ಇದು ಲೋಕೋಪಯೋಗಿ ಇಲಾಖೆ ಅಥವಾ ಪಂಚಾಯತ್ ಎಂಜಿನಿಯರಿಂಗ್ ಇಲಾಖೆಗೆ ಸೇರಿದೆ, ಅವು ಇನ್ನೂ ಪಟ್ಟಿಯಲ್ಲಿಲ್ಲ. ಫೋಟೋ ಉಳಿಸಲಾಗಿದೆ.",
     no_address: "{body} ಗೆ ಪ್ರಕಟಿತ ವಿಳಾಸ ಇಲ್ಲ.",
@@ -387,9 +461,15 @@ const I18N = {
     dash_range: "{days} ವರದಿ · ಮೊದಲನೆಯದು {first}",
     dash_empty: "ಇನ್ನೂ ಗುಂಡಿಗಳ ವರದಿ ಇಲ್ಲ. ಡ್ರೈವ್ ಮಾಡಿದಂತೆ ನಕ್ಷೆ ತುಂಬುತ್ತದೆ.",
     day_one: "1 ದಿನ", day_many: "{n} ದಿನಗಳು",
-    stat_found: "ಗುಂಡಿಗಳು ಪತ್ತೆ", stat_reported: "ದೂರುಗಳು ಕಳುಹಿಸಲಾಗಿದೆ", stat_frames: "ಫ್ರೇಮ್ ಪರಿಶೀಲನೆ",
+    stat_found: "ಗುಂಡಿಗಳು ಪತ್ತೆ", stat_reported: "ತೆರೆದ ಇಮೇಲ್ ಕರಡುಗಳು", stat_frames: "ಫ್ರೇಮ್ ಪರಿಶೀಲನೆ",
     stat_drives: "ಡ್ರೈವ್‌ಗಳು", stat_footage: "MB ವಿಡಿಯೋ", stat_km: "ಕಿಮೀ ರಸ್ತೆ",
-    by_type: "ಹಾನಿಯ ಪ್ರಕಾರ", by_size: "ಗಾತ್ರದ ಪ್ರಕಾರ", by_area: "ಪಾಲಿಕೆ ಪ್ರಕಾರ", map_pins: "{n} ಗುರುತಿಸಲಾಗಿದೆ",
+    by_type: "ಹಾನಿಯ ಪ್ರಕಾರ", by_size: "ಗಾತ್ರದ ಪ್ರಕಾರ", by_area: "ಪಾಲಿಕೆ ಪ್ರಕಾರ",
+    map_pins: "ಹಂಚಿದ ನಕ್ಷೆಯಲ್ಲಿ {n} ಗುಂಡಿಗಳು",
+    map_local_pins: "ಹಂಚಿದ ನಕ್ಷೆ ಸಿಗಲಿಲ್ಲ · ಈ ಸಾಧನದ {n} ತೋರಿಸಲಾಗುತ್ತಿದೆ",
+    community_title: "ಸಮುದಾಯದ ಪರಿಣಾಮ",
+    community_note: "ಯೋಜನೆಯ ಸೇವೆಯ ಮೂಲಕ ವರದಿಯಾದ ಒಟ್ಟು ಚಟುವಟಿಕೆ.",
+    stat_installations: "ಸಕ್ರಿಯ ಸ್ಥಾಪನೆಗಳು", stat_requests: "ಸೇವೆಯ ವಿನಂತಿಗಳು",
+    stat_observations: "ವೀಕ್ಷಣೆಗಳು", stat_mapped: "ನಕ್ಷೆಯಲ್ಲಿರುವ ಗುಂಡಿಗಳು",
     map_offline: "ನಕ್ಷೆಗೆ ಇಂಟರ್ನೆಟ್ ಬೇಕು. ಬಿಂದುಗಳು ಕೆಳಗೆ ತೋರಿಸಲಾಗಿದೆ.",
     zoom_hint: "ಜೂಮ್‌ಗೆ ಪಿಂಚ್ · ಸರಿಸಲು ಎಳೆಯಿರಿ · ಮರುಹೊಂದಿಸಲು ಡಬಲ್ ಟ್ಯಾಪ್",
     rec_suffix: "· {mb} MB ರೆಕಾರ್ಡ್", rec_failed: "· ರೆಕಾರ್ಡ್ ಆಗುತ್ತಿಲ್ಲ",
@@ -410,8 +490,11 @@ const I18N = {
     frames_no_permission: "ಫ್ರೇಮ್‌ಗಳನ್ನು ಉಳಿಸಲು ಅನುಮತಿ ಸಿಗಲಿಲ್ಲ. ಉಳಿಸದೆ ವಿಶ್ಲೇಷಣೆ ಮುಂದುವರಿಸಬೇಕೆ?",
     analysing_failed: "· {n} ವಿಫಲ",
     analyse_incomplete: "ಪೂರ್ಣಗೊಳಿಸಲಾಗಲಿಲ್ಲ: {n} ರಲ್ಲಿ {failed} ಫ್ರೇಮ್‌ಗಳನ್ನು ಪರಿಶೀಲಿಸಲಾಗಿಲ್ಲ ({err}) ಆದ್ದರಿಂದ ಯಾವುದೇ ಫಲಿತಾಂಶ ಹೇಳುತ್ತಿಲ್ಲ, ವಿಡಿಯೋ ಉಳಿಸಲಾಗಿದೆ.",
+    decoder_failed: "ಫೋನ್‌ಗೆ ಮುಂದಿನ ರೆಕಾರ್ಡ್ ಮಾಡಿದ ವಿಡಿಯೋ ತುಣುಕನ್ನು ತೆರೆಯಲಾಗಲಿಲ್ಲ.",
     debug_note: "ಆನ್: ವಿಶ್ಲೇಷಣೆಯ ನಂತರವೂ ವಿಡಿಯೋ ಉಳಿಯುತ್ತದೆ. ಆಫ್: ಗುಂಡಿಗಳನ್ನು ತೆಗೆದ ನಂತರ ವಿಡಿಯೋ ಅಳಿಸಲಾಗುತ್ತದೆ.",
     record_label: "ಡ್ರೈವ್ ಸಮಯದಲ್ಲಿ ಸ್ಥಳೀಯ ವಿಡಿಯೋ ರೆಕಾರ್ಡ್ ಮಾಡಿ (ಆಡಿಯೋ ಇಲ್ಲ; ಪೂರ್ವನಿಯೋಜಿತವಾಗಿ ಆಫ್)",
+    background_drive_label: "ಹಿನ್ನೆಲೆ ಡ್ರೈವ್ ಮೋಡ್ (ಲೈವ್ ಪ್ರಿವ್ಯೂ ಇಲ್ಲ)",
+    background_drive_note: "ಪೂರ್ವನಿಯೋಜಿತವಾಗಿ ಆಫ್. ಬೇರೆ ಆ್ಯಪ್‌ಗೆ ಹೋದ ನಂತರವೂ ಪತ್ತೆ ಮುಂದುವರಿಸಲು ಮಾತ್ರ ಆನ್ ಮಾಡಿ; ಈ ಮೋಡ್ ಕ್ಯಾಮೆರಾ ಪ್ರಿವ್ಯೂ ಅಥವಾ ವಿಡಿಯೋ ರೆಕಾರ್ಡಿಂಗ್ ತೋರಿಸುವುದಿಲ್ಲ.",
     keep_frames_label: "ವಿಶ್ಲೇಷಿಸಿದ ಎಲ್ಲ ಫ್ರೇಮ್‌ಗಳನ್ನು ಸಾಧನದಲ್ಲಿ ಉಳಿಸಿ",
     keep_frames_note: "AI ಪರಿಶೀಲಿಸಿದ ಪ್ರತಿ ಫ್ರೇಮ್ ಮತ್ತು ಅದರ ತೀರ್ಮಾನವನ್ನು Documents/pothole-frames ನಲ್ಲಿ ಬರೆಯುತ್ತದೆ. ಫೈಲ್ಸ್ ಆ್ಯಪ್‌ನಲ್ಲಿ ಕಾಣುತ್ತದೆ. ಪ್ರತಿ ಫ್ರೇಮ್ ಸುಮಾರು 300 KB.",
     frames_saved: "{n} ಫ್ರೇಮ್‌ಗಳನ್ನು Documents/{dir} ನಲ್ಲಿ ಬರೆಯಲಾಗಿದೆ.",
@@ -424,7 +507,7 @@ const I18N = {
     drive_video_suffix: " · {n} ವಿಡಿಯೋ ಫ್ರೇಮ್ ಪರಿಶೀಲನೆ",
     drive_group_partial: "{date} · {found} · {kept} ಉಳಿಸಲಾಗಿದೆ",
     lbl_pothole: "ರಸ್ತೆ ಗುಂಡಿ", lbl_patch: "ವಿಫಲ ದುರಸ್ತಿ", lbl_surface: "ಮೇಲ್ಮೈ ಹಾನಿ",
-    lbl_rut: "ರಸ್ತೆ ಕುಸಿತ", lbl_no: "ವರದಿ ಯೋಗ್ಯವಲ್ಲ", lbl_skip: "ಬಿಟ್ಟುಬಿಡಿ", lbl_done: "ಮುಗಿಯಿತು",
+    lbl_rut: "ರಸ್ತೆ ಕುಸಿತ", lbl_no: "ಹಾನಿ ಇಲ್ಲ", lbl_skip: "ಬಿಟ್ಟುಬಿಡಿ", lbl_done: "ಮುಗಿಯಿತು",
     review_empty: "ಗುರುತಿಸಲು ಏನೂ ಉಳಿದಿಲ್ಲ. ಡೀಬಗ್ ಮೋಡ್ ಆನ್ ಮಾಡಿ ಡ್ರೈವ್ ಮಾಡಿ.",
     review_progress: "{n} ಬಾಕಿ · {done} ಗುರುತಿಸಲಾಗಿದೆ",
     model_said: "ಆ್ಯಪ್ ಹೇಳಿದ್ದು: {verdict} · {assessment}",
@@ -434,15 +517,15 @@ const I18N = {
     size_small: "ಸಣ್ಣ", size_medium: "ಮಧ್ಯಮ", size_large: "ದೊಡ್ಡ",
     damage_pothole_cavity: "ರಸ್ತೆ ಗುಂಡಿ", damage_failed_patch: "ವಿಫಲವಾದ ರಸ್ತೆ ದುರಸ್ತಿ",
     damage_surface_breakup: "ಹಾಳಾದ ರಸ್ತೆ ಮೇಲ್ಮೈ", damage_rut_or_depression: "ರಸ್ತೆ ಕುಸಿತ",
-    damage_other_road_damage: "ಇತರೆ ರಸ್ತೆ ಹಾನಿ", damage_none: "ವರದಿ ಮಾಡಬಹುದಾದ ಹಾನಿ ಇಲ್ಲ",
-    assessment_clear: "ಸ್ಪಷ್ಟ", assessment_probable: "ಸಂಭಾವ್ಯ", assessment_uncertain: "ಅನಿಶ್ಚಿತ", assessment_absent: "ಇಲ್ಲ",
+    damage_other_road_damage: "ಇತರೆ ರಸ್ತೆ ಹಾನಿ", damage_none: "ರಸ್ತೆ ಹಾನಿ ಇಲ್ಲ",
+    assessment_damaged: "ಹಾನಿಯಾಗಿದೆ", assessment_undamaged: "ಹಾನಿ ಇಲ್ಲ",
     verdict_detected: "{type} ಪತ್ತೆಯಾಗಿದೆ · {assessment}",
-    verdict_review: "ಸಂಭಾವ್ಯ {type} — ವರದಿಗೂ ಮೊದಲು ಸ್ಪಷ್ಟ ಫೋಟೋ ಅಥವಾ ಪರಿಶೀಲನೆ ಬೇಕು",
-    verdict_rejected: "ವರದಿ ಮಾಡಬಹುದಾದ ರಸ್ತೆ ಹಾನಿ ದೃಢಪಟ್ಟಿಲ್ಲ",
-    early_yes: "ವರದಿ ಮಾಡಬಹುದಾದ {type} ಪತ್ತೆಯಾಗಿದೆ. ದೂರು ಸಿದ್ಧಪಡಿಸಲಾಗುತ್ತಿದೆ...",
+    verdict_review: "ಫಲಿತಾಂಶ ಪರಿಶೀಲನೆ ಬೇಕು — ಇನ್ನಷ್ಟು ಸ್ಪಷ್ಟವಾದ ಫೋಟೋ ತೆಗೆದುಕೊಳ್ಳಿ",
+    verdict_rejected: "ರಸ್ತೆ ಹಾನಿ ಪತ್ತೆಯಾಗಿಲ್ಲ",
+    early_yes: "{type} ಪತ್ತೆಯಾಗಿದೆ. ದೂರು ಸಿದ್ಧಪಡಿಸಲಾಗುತ್ತಿದೆ...",
     early_review: "ಸಂಭಾವ್ಯ ರಸ್ತೆ ಹಾನಿ. ಸ್ಪಷ್ಟ ಫೋಟೋ ಬೇಕು.",
-    early_no: "ಈ ಫೋಟೋದಲ್ಲಿ ವರದಿ ಮಾಡಬಹುದಾದ ರಸ್ತೆ ಹಾನಿ ಇಲ್ಲ.",
-    verdict_sent: "ದೂರು ಕಳುಹಿಸಲಾಗಿದೆ",
+    early_no: "ಈ ಫೋಟೋದಲ್ಲಿ ರಸ್ತೆ ಹಾನಿ ಇಲ್ಲ.",
+    verdict_sent: "ಇಮೇಲ್ ಕರಡು ತೆರೆಯಲಾಗಿದೆ. ಕಳುಹಿಸದೆ ಮುಚ್ಚಿದ್ದರೆ ಇಮೇಲ್ ದೂರು ಅನ್ನು ಮತ್ತೆ ಒತ್ತಿ.",
     verdict_queued: "ನಿಮ್ಮ ಇಮೇಲ್ ಆ್ಯಪ್‌ನಲ್ಲಿ ತೆರೆಯಲಾಗಿದೆ. ಕಳುಹಿಸಿಲ್ಲದಿದ್ದರೆ ತಿದ್ದಿ ಮತ್ತೆ ತೆರೆಯಿರಿ.",
     confidence: "ವಿಶ್ವಾಸ",
     email_subject_label: "ಇಮೇಲ್ ವಿಷಯ",
@@ -454,15 +537,18 @@ const I18N = {
     gps_lost: "GPS ಸಿಗ್ನಲ್ ಕಳೆದುಹೋಗಿದೆ, ಹೊಸ ಫಿಕ್ಸ್‌ಗಾಗಿ ಕಾಯಲಾಗುತ್ತಿದೆ...",
     holding: "ಸ್ಥಳದಲ್ಲಿದ್ದೀರಿ ({checked} ಪರಿಶೀಲನೆ, {found} ಪತ್ತೆ)",
     scanning: "ಸ್ಕ್ಯಾನ್ ({mode})... {checked} ಪರಿಶೀಲನೆ{analyzing}",
+    starting_camera: "ಕ್ಯಾಮೆರಾ ಪ್ರಾರಂಭವಾಗುತ್ತಿದೆ…",
+    finishing_analysis: "ಕ್ಯಾಮೆರಾ ನಿಲ್ಲಿಸಲಾಗಿದೆ · ಸೆರೆಹಿಡಿದ {n} ವಿಶ್ಲೇಷಣೆಗಳನ್ನು ಪೂರ್ಣಗೊಳಿಸಲಾಗುತ್ತಿದೆ…",
+    shared_unavailable: "ಯೋಜನೆಯ ಹಂಚಿದ ಸರ್ವರ್ ಲಭ್ಯವಿಲ್ಲ. ಸೆಟ್ಟಿಂಗ್‌ಗಳಲ್ಲಿ ವೈಯಕ್ತಿಕ OpenAI ಕೀ ಆಯ್ಕೆಮಾಡಿ. ಯಾವುದೇ ಚಿತ್ರ ಅಥವಾ ವಿಡಿಯೋ ಕಳುಹಿಸಲಾಗಿಲ್ಲ.",
+    native_vision_error: "ವಿಷನ್ ಪರಿಶೀಲನೆ ವಿಫಲವಾಗಿದೆ: {err}",
     analyzing_suffix: ", {n} ವಿಶ್ಲೇಷಣೆ",
     potholes_one: "{n} ಹಾನಿ ಘಟನೆ", potholes_many: "{n} ಹಾನಿ ಘಟನೆಗಳು",
-    drive_tip: "ಚಲಿಸುವ ಮೊದಲು ರಸ್ತೆ ಕಿತ್ತಳೆ ಮಾರ್ಗದರ್ಶಿಯೊಳಗೆ ತುಂಬುವಂತೆ ಕ್ಯಾಮೆರಾ ಹೊಂದಿಸಿ; ಆಕಾಶ ಮತ್ತು ಡ್ಯಾಶ್‌ಬೋರ್ಡ್ ಕಡಿಮೆ ಇರಲಿ. ಪ್ರತಿ ಪರಿಶೀಲನೆ ಮೂರು ಫ್ರೇಮ್‌ಗಳನ್ನು ಬಳಸುತ್ತದೆ.",
+    drive_tip: "ಚಲಿಸುವ ಮೊದಲು ರಸ್ತೆ ಕಿತ್ತಳೆ ಮಾರ್ಗದರ್ಶಿಯೊಳಗೆ ತುಂಬುವಂತೆ ಕ್ಯಾಮೆರಾ ಹೊಂದಿಸಿ; ಆಕಾಶ ಮತ್ತು ಡ್ಯಾಶ್‌ಬೋರ್ಡ್ ಕಡಿಮೆ ಇರಲಿ. ಪ್ರತಿ ನಿಗದಿತ ಪರಿಶೀಲನೆ ಒಂದೇ ಪೂರ್ಣ ಫ್ರೇಮ್ ಸೆರೆಹಿಡಿದು ಕಳುಹಿಸುತ್ತದೆ.",
     drive_end: "ಡ್ರೈವ್ ಮುಗಿಯಿತು: {found} ಪತ್ತೆ, {checked} ಫ್ರೇಮ್ ಪರಿಶೀಲನೆ.",
     drive_end_known: "ಡ್ರೈವ್ ಮುಗಿಯಿತು: ಹೊಸ ವರದಿ ಇಲ್ಲ; {already} ಮತ್ತೆ ಕಂಡಿದೆ, {checked} ಫ್ರೇಮ್ ಪರಿಶೀಲನೆ.",
     drive_seen_suffix: " {already} ಮತ್ತೆ ಕಂಡಿದೆ.",
-    drive_end_zero: "ಈ ಡ್ರೈವ್‌ನಲ್ಲಿ ವರದಿ ಮಾಡಬಹುದಾದ ರಸ್ತೆ ಹಾನಿ ಪತ್ತೆಯಾಗಿಲ್ಲ ({checked} ಪರಿಶೀಲನೆ{debug}).",
+    drive_end_zero: "ಈ ಡ್ರೈವ್‌ನಲ್ಲಿ ರಸ್ತೆ ಹಾನಿ ಪತ್ತೆಯಾಗಿಲ್ಲ ({checked} ಪರಿಶೀಲನೆ{debug}).",
     debug_saved_suffix: ", ಡೀಬಗ್ ಫ್ರೇಮ್‌ಗಳು ಉಳಿದಿವೆ",
-    confirm_send: "{to} ಗೆ ಉದ್ದೇಶಿಸಿದ ದೂರಿನೊಂದಿಗೆ ನಿಮ್ಮ ಇಮೇಲ್ ಆ್ಯಪ್ ತೆರೆಯಬೇಕೆ?",
     confirm_delete: "ಈ ವರದಿ ಅಳಿಸಬೇಕೆ?",
     confirm_wipe: "API ಕೀ, ಸೆಟ್ಟಿಂಗ್ಸ್, ವರದಿ, ಫೋಟೋ, ವಿಡಿಯೋ ಮತ್ತು ರಫ್ತು ಮಾಡಿದ ಡೀಬಗ್ ಫ್ರೇಮ್‌ಗಳೂ ಸೇರಿ ಈ ಫೋನ್‌ನಲ್ಲಿರುವ ಎಲ್ಲಾ ಆ್ಯಪ್ ಡೇಟಾವನ್ನು ಅಳಿಸಬೇಕೆ?",
     camera_failed: "ಕ್ಯಾಮೆರಾ ಪ್ರವೇಶ ವಿಫಲ: ",
@@ -470,16 +556,23 @@ const I18N = {
     the_officer: "ಸಂಬಂಧಿತ ಅಧಿಕಾರಿ",
   },
 };
-const LANG = localStorage.getItem("app_lang") === "kn" ? "kn" : "en";
+const LANG = LLM_UI_CONFIG.allowedLanguages.includes(localStorage.getItem("app_lang"))
+  ? localStorage.getItem("app_lang") : LLM_UI_CONFIG.defaultLanguage;
 const t = (k, p) => {
   let s = (I18N[LANG] && I18N[LANG][k]) || I18N.en[k] || k;
   if (p) for (const [key, val] of Object.entries(p)) s = s.split("{" + key + "}").join(val);
   return s;
 };
 const tSize = (s) => (s ? t("size_" + s) : "");
-const damageType = (r) => (r && r.damage_type) || (r && r.is_pothole ? "pothole_cavity" : "none");
-const assessment = (r) => (r && r.assessment) || (r && r.is_pothole ? "clear" : "absent");
-const tDamage = (value) => t("damage_" + (typeof value === "string" ? value : damageType(value)));
+const damageType = (r) => (r && r.damage_type) || (r && r.is_pothole ? "pothole_cavity" : null);
+const assessment = (r) => {
+  const value = r && r.assessment;
+  if (value === "damaged" || value === "undamaged") return value;
+  if (value === "clear" || value === "probable") return "damaged";
+  if (value === "absent") return "undamaged";
+  return r && (r.decision === "accept" || r.is_pothole) ? "damaged" : "undamaged";
+};
+const tDamage = (value) => t("damage_" + ((typeof value === "string" ? value : damageType(value)) || "none"));
 const tAssessment = (value) => t("assessment_" + (typeof value === "string" ? value : assessment(value)));
 const eventCountText = (n) => n === 1 ? t("potholes_one", { n }) : t("potholes_many", { n });
 const alreadyCountText = (n) => n === 1 ? t("already_one", { n }) : t("already_many", { n });
@@ -492,9 +585,20 @@ const safePhotoSrc = (value) => {
   return /^(?:blob:|data:image\/(?:jpeg|jpg|png|webp|gif);base64,)/i.test(src)
     ? escapeAttr(src) : "";
 };
-let health = { ai_configured: true, email_configured: false, delivery: "gmail_draft" };
+const CENTRAL_SERVICE_URL = () => (localStorage.getItem("service_url")
+  || "https://pothole-detect.gauravsen.workers.dev").replace(/\/+$/, "");
+// A standalone APK must not silently depend on a project server that may not be
+// deployed. Shared mode remains available, but only after the person explicitly
+// chooses it in Settings.
+const visionProvider = () => localStorage.getItem("vision_provider") === "shared"
+  ? "shared" : "personal";
+let health = { ai_configured: null, provider: "shared_server", email_configured: false,
+               delivery: "email_draft", service_url: CENTRAL_SERVICE_URL() };
 
 function show(screen) {
+  // A route change must never leave the fixed photo modal intercepting the new screen.
+  const viewer = $("viewer");
+  if (viewer) viewer.classList.add("hidden");
   for (const s of ["home", "progress", "detail", "drive", "settings", "review", "dash", "dataConsent"]) {
     $(s).classList.toggle("hidden", s !== screen);
   }
@@ -508,7 +612,7 @@ const sendLabel = () => t("email_btn");
 function chip(status) {
   const labels = { draft: t("chip_draft"), sent: t("chip_sent"), queued: t("chip_queued"),
                    rejected: t("chip_rejected"), review: t("chip_review"),
-                   unrouted: t("chip_unrouted") };
+                   unrouted: t("chip_unrouted"), duplicate: t("chip_duplicate") };
   const css = Object.prototype.hasOwnProperty.call(labels, status) ? status : "review";
   return `<span class="chip ${css}">${escapeHtml(labels[status] || status)}</span>`;
 }
@@ -519,6 +623,9 @@ function applyLang() {
   $("driveBtn").innerHTML = t("drive_btn");
   $("reportsTitle").textContent = t("your_reports");
   $("settingsTitle").textContent = t("settings_title");
+  $("providerLabel").textContent = t("provider_label");
+  $("providerShared").textContent = t("provider_shared");
+  $("providerPersonal").textContent = t("provider_personal");
   $("keyLabel").textContent = t("key_label");
   $("nameLabel").textContent = t("name_label");
   $("modelLabel").textContent = t("model_label");
@@ -527,6 +634,8 @@ function applyLang() {
   $("debugLabel").textContent = t("debug_label");
   $("debugNote").innerHTML = t("debug_note");
   $("recordLabel").textContent = t("record_label");
+  $("backgroundDriveLabel").textContent = t("background_drive_label");
+  $("backgroundDriveNote").textContent = t("background_drive_note");
   $("keepFramesLabel").textContent = t("keep_frames_label");
   $("keepFramesNote").innerHTML = t("keep_frames_note");
   $("settingsNote").textContent = t("settings_note");
@@ -546,6 +655,8 @@ function applyLang() {
   $("setSave").textContent = t("save");
   $("driveTip").textContent = t("drive_tip");
   $("dashBtn").innerHTML = t("dash_btn");
+  $("communityTitle").textContent = t("community_title");
+  $("communityNote").textContent = t("community_note");
   $("reviewBtn").textContent = t("review_btn");
   $("exportBtn").textContent = t("export_btn");
   $("lblPothole").textContent = t("lbl_pothole");
@@ -571,6 +682,7 @@ async function loadHealth() {
       b.style.display = "block";
     } else { b.style.display = "none"; }
   } catch (e) {}
+  return health;
 }
 
 // Shared so cards inserted when a drive is expanded behave exactly like ones rendered
@@ -629,11 +741,56 @@ async function loadReports() {
     api("/api/reports"), api("/api/drives").catch(() => []),
     api("/api/footage").catch(() => []),
   ]);
-  loadReports.latest = reports;
+
+  // ---------- Merge native Drive Mode reports from Room ----------
+  let nativeReports = [];
+  let nativeSessions = [];
+  try {
+    const hasNative = window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()
+      && Capacitor.Plugins && Capacitor.Plugins.DriveMode;
+    if (hasNative) {
+      const [nr, ns] = await Promise.all([
+        Capacitor.Plugins.DriveMode.listReports().catch(() => ({ reports: [] })),
+        Capacitor.Plugins.DriveMode.listDriveSessions().catch(() => ({ sessions: [] })),
+      ]);
+      nativeReports = await Promise.all((nr.reports || []).map(async (r) => {
+        let photoUrl = null;
+        if (r.has_photo && typeof Capacitor.Plugins.DriveMode.getReportPhoto === "function") {
+          try {
+            const photo = await Capacitor.Plugins.DriveMode.getReportPhoto({ id: r.id });
+            photoUrl = photo && photo.dataUrl || null;
+          } catch (_) {}
+        }
+        return {
+          ...r,
+          _nativeStoredStatus: r.status === "sent" ? "queued" : r.status,
+          // Native background preparation used "queued" to mean ready for the UI,
+          // not that an email composer had already opened.
+          status: r.status === "queued" || r.status === "sent" ? "draft" : r.status,
+          photo_url: photoUrl,
+          _native: true,
+          _nativeId: r.id,
+          id: "native_" + r.id,
+        };
+      }));
+      nativeSessions = (ns.sessions || []).map((s) => ({
+        ...s,
+        _native: true,
+        id: s.id,
+      }));
+    }
+  } catch (e) { /* native bridge unavailable — ignore */ }
+
+  const allReports = [...reports, ...nativeReports]
+    .sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  const allDrives = [...drives, ...nativeSessions];
+  // ---------- End native merge ----------
+
+  loadReports.latest = allReports;
   const list = $("list");
   // A recorded drive is history even when GPS never arrived and therefore no frame was
   // assessed. Returning on an empty reports store made its footage impossible to reach.
-  if (!reports.length && !drives.length && !footage.length) {
+  if (!allReports.length && !allDrives.length && !footage.length) {
     list.innerHTML = `<div class="empty">${t("no_reports")}</div>`;
     return;
   }
@@ -641,26 +798,26 @@ async function loadReports() {
     <div class="card row" data-id="${escapeAttr(r.id)}" style="cursor:pointer">
       <img class="thumb" src="${safePhotoSrc(photoSrc(r))}" alt="" loading="lazy" decoding="async">
       <div style="min-width:0">
-        <div>${chip(r.status)} ${damageType(r) !== "none" ? `<span class="chip" style="background:#26272c;color:#cfcfd4">${tDamage(r)}</span>` : ""} ${r.size ? `<span class="chip" style="background:#26272c;color:#cfcfd4">${tSize(r.size)}</span>` : ""}</div>
+        <div>${chip(r.status)} ${damageType(r) ? `<span class="chip" style="background:#26272c;color:#cfcfd4">${tDamage(r)}</span>` : ""} ${r.size ? `<span class="chip" style="background:#26272c;color:#cfcfd4">${tSize(r.size)}</span>` : ""}</div>
         <div class="meta">${escapeHtml(fmtDate(r.created_at))}${r.address ? " · " + escapeHtml(String(r.address).split(",").slice(0, 2).join(", ")) : ""}</div>
       </div>
     </div>`;
   const driveById = {}, footageById = {};
-  for (const d of drives) driveById[String(d.id)] = d;
+  for (const d of allDrives) driveById[String(d.id)] = d;
   for (const f of footage) footageById[String(f.drive_id)] = f;
   // Build from the union of reports, drive summaries and footage. This also recovers
   // footage orphaned by older app versions that never wrote a drive summary.
   const groups = groupsRef;
   groups.length = 0;
   const driveGroups = {};
-  for (const r of reports) {
+  for (const r of allReports) {
     if (!r.drive_id) { groups.push({ driveId: null, items: [r] }); continue; }
     const id = String(r.drive_id);
     const g = driveGroups[id] || (driveGroups[id] = { driveId: id, items: [] });
     if (!groups.includes(g)) groups.push(g);
     g.items.push(r);
   }
-  for (const d of drives) {
+  for (const d of allDrives) {
     const id = String(d.id);
     if (!driveGroups[id]) groups.push(driveGroups[id] = { driveId: id, items: [] });
   }
@@ -679,7 +836,7 @@ async function loadReports() {
   // Inside a drive, what you actually want is the potholes, not the frames that were
   // checked and dismissed. Confirmed ones sit on top, rejects below, each still newest
   // first, so a drive with 3 finds among 200 frames does not bury them.
-  const FOUND = ["draft", "queued", "sent", "unrouted"];
+  const FOUND = ["draft", "queued", "sent", "unrouted", "duplicate"];
   for (const g of groups) {
     if (!g.driveId) continue;
     g.items.sort((a, b) => (FOUND.includes(b.status) ? 1 : 0) - (FOUND.includes(a.status) ? 1 : 0) || b.id - a.id);
@@ -687,7 +844,7 @@ async function loadReports() {
   const willShow = groups.flatMap((g) =>
     (!g.driveId || expandedDrives.has(String(g.driveId))) ? g.items : []);
   await ensureThumbs(willShow);
-  releaseThumbs(new Set(reports.map((r) => r.id)));
+  releaseThumbs(new Set(allReports.map((r) => r.id)));
   const footageRowHtml = (driveId, fo, open) => !fo ? "" :
     `<div class="card" data-footagerow="${driveId}" style="padding:10px 12px;${open ? "" : "display:none"}">
       <div class="meta">${t("footage_line", { mb: (fo.bytes / 1048576).toFixed(0), segments: fo.segments })}</div>
@@ -776,30 +933,80 @@ async function loadReports() {
   wireCards(list, visible);
 }
 
-function getPosition() {
+function getPosition(timeoutMs = 8000) {
   return new Promise((resolve) => {
     if (!navigator.geolocation) return resolve(null);
     navigator.geolocation.getCurrentPosition(
       (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude,
         accuracy: typeof p.coords.accuracy === "number" ? p.coords.accuracy : null,
         speed: typeof p.coords.speed === "number" && !Number.isNaN(p.coords.speed) ? p.coords.speed : null,
-        heading: typeof p.coords.heading === "number" && !Number.isNaN(p.coords.heading) ? p.coords.heading : null }),
+        heading: typeof p.coords.heading === "number" && !Number.isNaN(p.coords.heading) ? p.coords.heading : null,
+        fixedAt: p.timestamp || null }),
       () => resolve(null),
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 5000 }
     );
   });
 }
 
+let primedManualPosition = null;
+let manualPreviewUrl = null;
+let manualAnalysisSequence = 0;
+let manualAnalysisActive = 0;
+function clearManualPreview(url = manualPreviewUrl) {
+  if (url) URL.revokeObjectURL(url);
+  if (manualPreviewUrl === url) {
+    manualPreviewUrl = null;
+    $("progressPhoto").removeAttribute("src");
+  }
+}
+const positionWithin = (promise, timeoutMs) => Promise.race([
+  promise.catch(() => null),
+  new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+]);
+async function prefetchManualPosition() {
+  if (!isNativeApp()) return null;
+  const geo = (Capacitor.Plugins || {}).Geolocation;
+  if (!geo || !geo.checkPermissions) return null;
+  try {
+    const current = await geo.checkPermissions();
+    if (current && (current.location === "granted" || current.coarseLocation === "granted")) {
+      return getPosition(5000);
+    }
+  } catch (e) {}
+  return null;
+}
+
 async function handleFile(file) {
   if (!file) return;
-  $("progressPhoto").src = URL.createObjectURL(file);
+  const token = ++manualAnalysisSequence;
+  manualAnalysisActive = token;
+  const capturedAtMs = Date.now();
+  clearManualPreview();
+  const previewUrl = URL.createObjectURL(file);
+  manualPreviewUrl = previewUrl;
+  $("progressPhoto").src = previewUrl;
   $("progressText").textContent = t("getting_location");
   show("progress");
-  const pos = await getPosition();
+  // Launch the camera as soon as camera permission is ready. Location permission is
+  // needed only after the person returns with a photo, so it must not delay the feed.
+  const prefetched = primedManualPosition;
+  primedManualPosition = null;
+  // Prefetch continues while the external camera is open, but never gets to add its
+  // whole timeout after the user returns with a photo.
+  let pos = prefetched ? await positionWithin(prefetched, 750) : null;
+  if (token !== manualAnalysisSequence) { clearManualPreview(previewUrl); return; }
+  if (!pos) {
+    await requestNativeLocationPermission();
+    if (token !== manualAnalysisSequence) { clearManualPreview(previewUrl); return; }
+    // A first-run location fix must not hold the detector behind a long wait.
+    // A later email can explain that a missing fix prevents authority routing.
+    pos = await getPosition(2000);
+  }
+  if (token !== manualAnalysisSequence) { clearManualPreview(previewUrl); return; }
   $("progressText").textContent = t("working");
   const fd = new FormData();
   fd.append("photo", file);
-  fd.append("captured_at_ms", String(Date.now()));
+  fd.append("captured_at_ms", String(capturedAtMs));
   if (pos) {
     fd.append("lat", pos.lat); fd.append("lng", pos.lng);
     if (pos.accuracy != null) fd.append("gps_accuracy", String(pos.accuracy));
@@ -808,11 +1015,19 @@ async function handleFile(file) {
   }
   try {
     const report = await api("/api/report", { method: "POST", body: fd });
-    await loadReports();
+    if (token !== manualAnalysisSequence) return;
     openDetail(report);
+    // The new result is already complete. Hydrating every historical native thumbnail
+    // can take longer as history grows, so refresh that list behind the visible detail.
+    void loadReports().catch(() => {});
   } catch (e) {
-    alert(e.message);
-    show("home");
+    if (token === manualAnalysisSequence) {
+      alert(e.message);
+      show("home");
+    }
+  } finally {
+    if (manualAnalysisActive === token) manualAnalysisActive = 0;
+    clearManualPreview(previewUrl);
   }
 }
 
@@ -863,7 +1078,7 @@ function unroutedHelp(r) {
 }
 
 function detectionVerdict(r) {
-  if (r.status === "review") return t("verdict_review", { type: tDamage(r) });
+  if (r.status === "review") return t("verdict_review");
   if (r.status === "rejected") return t("verdict_rejected");
   return t("verdict_detected", { type: tDamage(r), assessment: tAssessment(r) });
 }
@@ -873,7 +1088,20 @@ function openDetail(r, list) {
   else if (!detailList.some((x) => x.id === r.id)) { detailList = [r]; detailIdx = 0; }
   else detailIdx = detailList.findIndex((x) => x.id === r.id);
   const d = $("detail");
-  if (r.status === "unrouted") {
+  if (r.status === "duplicate") {
+    d.innerHTML = `
+      <div class="card">
+        ${photoBlock(r)}
+        <div class="verdict" style="color:#b9c2ff">${escapeHtml(t("duplicate_title"))}</div>
+        ${r.address ? `<div class="meta">&#128205; ${escapeHtml(r.address)}</div>` : ""}
+        <div class="meta">${escapeHtml(t("duplicate_help"))}</div>
+        ${r.seen_count ? `<div class="meta">${escapeHtml(t("seen_count", { n: r.seen_count }))}</div>` : ""}
+        <div class="btn-row">
+          <button class="ghost" id="backBtn">${t("back")}</button>
+          <button class="ghost danger" id="discardBtn">${t("del")}</button>
+        </div>
+      </div>`;
+  } else if (r.status === "unrouted") {
     // A confirmed pothole the app cannot address. It says so rather than sending the
     // complaint to a body with no jurisdiction there.
     d.innerHTML = `
@@ -902,64 +1130,118 @@ function openDetail(r, list) {
           <button class="ghost danger" id="discardBtn">${t("del")}</button>
         </div>
       </div>`;
+  } else if (r._native) {
+    // Native Drive Mode owns these Room rows. Show its evidence and central state here,
+    // and open the same routed email composer without touching browser IndexedDB.
+    const nativeSendable = !r.server_duplicate
+      && ["draft", "queued"].includes(r._nativeStoredStatus || r.status);
+    d.innerHTML = `
+      <div class="card">
+        ${photoBlock(r)}
+        <div class="verdict" style="color:var(--accent)">${escapeHtml(detectionVerdict(r))}</div>
+        ${r.address ? `<div class="meta">&#128205; ${escapeHtml(r.address)}</div>` : ""}
+        ${r.body_name ? `<div class="meta">${escapeHtml(r.body_name)}</div>` : ""}
+        ${r.tender_note ? `<div class="meta">&#128209; ${escapeHtml(r.tender_note)}</div>` : ""}
+        <div class="meta">${escapeHtml(r.description || "")}</div>
+        <div class="btn-row">
+          <button class="ghost" id="backBtn">${t("back")}</button>
+          ${nativeSendable ? `<button class="send" id="sendBtn" data-complaint-action="email">${sendLabel()} &#9993;</button>` : ""}
+        </div>
+        <button class="ghost danger" id="discardBtn" style="width:100%;margin-top:10px">${t("del")}</button>
+      </div>`;
+    if (nativeSendable) $("sendBtn").onclick = () => sendReport(r);
   } else {
-    // "queued" stays editable and reopenable: the user may have canceled the
-    // email composer and must not be stranded.
-    const sent = r.status === "sent";
-    const verdictText = r.status === "sent" ? t("verdict_sent")
-      : r.status === "queued"
+    // "queued" stays reopenable: the user may have canceled the email composer and
+    // must not be stranded.
+    const verdictText = r.status === "queued" || r.status === "sent"
       ? t("verdict_queued")
       : detectionVerdict(r);
     d.innerHTML = `
       <div class="card">
         ${photoBlock(r)}
-        <div class="verdict" style="color:${sent ? "var(--ok)" : "var(--accent)"}">
+        <div class="verdict" style="color:var(--accent)">
           ${escapeHtml(verdictText)}
         </div>
         ${r.address ? `<div class="meta">&#128205; ${escapeHtml(r.address)}</div>` : ""}
         ${r.officer_name ? `<div class="meta">&#128231; ${escapeHtml(t("routes_to"))} ${escapeHtml(r.officer_name)}</div>` : ""}
         ${r.tender_note ? `<div class="meta">&#128209; ${escapeHtml(r.tender_note)}</div>` : ""}
-        <label>${t("email_subject_label")}</label>
-        <input type="text" id="subj" value="" ${sent ? "disabled" : ""}>
-        <label>${t("email_body_label")}</label>
-        <textarea id="body" ${sent ? "disabled" : ""}></textarea>
+        ${r.officer_name ? `<div class="meta" style="margin-top:10px">${escapeHtml(t("routes_to"))} ${escapeHtml(r.officer_name)}</div>` : ""}
         <div class="btn-row">
           <button class="ghost" id="backBtn">${t("back")}</button>
-          ${sent ? "" : `<button class="ghost danger" id="discardBtn">${t("discard")}</button>
-          <button class="send" id="sendBtn">${sendLabel()} &#9993;</button>`}
+          <button class="send" id="sendBtn" data-complaint-action="email">${sendLabel()} &#9993;</button>
         </div>
+        <button class="ghost danger" id="discardBtn" style="width:100%;margin-top:10px">${t("del")}</button>
       </div>`;
-    $("subj").value = r.email_subject || "";
-    $("body").value = r.email_body || "";
-    if (!sent) $("sendBtn").onclick = () => sendReport(r);
+    $("sendBtn").onclick = () => sendReport(r);
   }
   wireDetailChrome(r);
   $("backBtn").onclick = () => { show("home"); loadReports(); };
   const discard = $("discardBtn");
   if (discard) discard.onclick = async () => {
     if (!confirm(t("confirm_delete"))) return;
-    try { await api(`/api/reports/${r.id}`, { method: "DELETE" }); } catch (e) { alert(e.message); return; }
+    try {
+      if (r._native && window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.DriveMode
+          && typeof Capacitor.Plugins.DriveMode.deleteReport === "function") {
+        await Capacitor.Plugins.DriveMode.deleteReport({ id: r._nativeId });
+      } else {
+        await api(`/api/reports/${r.id}`, { method: "DELETE" });
+      }
+    } catch (e) { alert(e.message); return; }
     await loadReports(); show("home");
   };
   show("detail");
 }
 
 async function sendReport(r) {
-  // The draft is always addressed to the routed officer; nothing ever auto-sends.
-  const to = r.officer_email || t("the_officer");
-  if (!confirm(t("confirm_send", { to }))) return;
   const btn = $("sendBtn");
+  if (!btn || btn.disabled) return;
   btn.disabled = true; btn.textContent = t("working");
   try {
-    await api(`/api/reports/${r.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email_subject: $("subj").value, email_body: $("body").value }),
-    });
+    if (r._native) {
+      const complaint = await StandaloneAPI.prepareComplaint(r);
+      const driveMode = Capacitor.Plugins && Capacitor.Plugins.DriveMode;
+      const composer = Capacitor.registerPlugin
+        ? Capacitor.registerPlugin("EmailComposer")
+        : Capacitor.Plugins && Capacitor.Plugins.EmailComposer;
+      if (!driveMode || !composer || typeof composer.open !== "function") {
+        throw new Error("The email composer is not available on this device.");
+      }
+      const evidence = await driveMode.getReportPhoto({ id: r._nativeId, full: true });
+      if (!evidence || !evidence.dataUrl) throw new Error("The road photo is unavailable.");
+      await composer.open({
+        to: [complaint.to],
+        subject: complaint.subject,
+        body: complaint.body,
+        attachments: [{ type: "base64", name: "road-damage.jpg",
+          path: await StandaloneAPI.__pure.photoToBase64(evidence.dataUrl) }],
+      });
+      btn.disabled = false; btn.innerHTML = sendLabel() + " &#9993;";
+      return;
+    }
     const updated = await api(`/api/reports/${r.id}/send`, { method: "POST" });
     await loadReports();
     openDetail(updated);
   } catch (e) {
+    const unrouted = e && e.report
+      ? e.report
+      : e && e.code === "complaint_unrouted"
+        ? { ...r, status: "unrouted",
+            unrouted_reason: e.unroutedReason || "road_class_unknown",
+            unrouted_body: e.unroutedBody || null,
+            address: e.address || r.address || null,
+            officer_name: null, officer_email: null,
+            email_subject: null, email_body: null }
+        : null;
+    if (unrouted) {
+      // Deferred personal-key routing has now completed with a definitive refusal.
+      // Replace the optimistic Draft screen immediately; the rendered title/help are
+      // localised and explain the exact reason, while the alert makes the failed tap
+      // explicit for screen-reader and modal users.
+      await loadReports().catch(() => {});
+      openDetail(unrouted);
+      alert(e.message);
+      return;
+    }
     alert(e.message);
     btn.disabled = false; btn.textContent = sendLabel() + " ✉";
   }
@@ -969,7 +1251,7 @@ async function sendReport(r) {
 const FRAME_INTERVAL_MS = 200;   // poll cheaply; the speed-aware gate decides when to capture
 const TARGET_SPACING_M = 6;
 // When speed is unavailable, a 750 ms fallback approximates the 6 m target at
-// ordinary city speed. Measuring from burst start keeps the 360 ms burst itself
+// ordinary city speed. Measuring from capture start keeps slow canvas encoding
 // from silently widening the road gap.
 const FALLBACK_CAPTURE_MS = 750;
 const MIN_CAPTURE_MS = 500;
@@ -978,10 +1260,8 @@ const PARKED_CAPTURE_MS = 8000;
 const GPS_COARSE_M = 30;
 const MOVING_MS = 1.0;
 const GPS_MAX_AGE_MS = 10000; // a fix older than this is stale: pause rather than mistag
-const BURST_COUNT = 3;
-const BURST_SPACING_MS = 180;
-// A burst is heavier than the old single frame. Capture remains independent of these
-// workers and waits in a bounded local queue rather than leaving unseen road gaps.
+// Capture remains independent of inference workers and waits in a bounded local
+// queue rather than leaving unseen road gaps.
 const MAX_IN_FLIGHT = 6;
 const MAX_CAPTURE_QUEUE = 24;
 // Tunable at runtime so a test can use short segments and dense sampling without
@@ -997,7 +1277,8 @@ const RECORD_MIMES = ["video/mp4;codecs=avc1.42E01E", "video/mp4",
 let drive = null;
 let driveStarting = false;
 let driveFinalizing = null;
-const DATA_NOTICE_VERSION = "2026-08-21-v1";
+let nativeDriveListener = null;
+const DATA_NOTICE_VERSION = "2026-09-05-v3";
 let consentWaiter = null;
 
 function finishDataConsent(accepted) {
@@ -1016,19 +1297,34 @@ function ensureDataConsent() {
   return new Promise((resolve) => { consentWaiter = resolve; });
 }
 
+const isNativeApp = () => !!(window.Capacitor && Capacitor.isNativePlatform
+  && Capacitor.isNativePlatform());
+
+async function requestNativeCameraPermission() {
+  if (!isNativeApp()) return;
+  const camera = (Capacitor.Plugins || {}).Camera;
+  if (!camera || !camera.requestPermissions) return;
+  try {
+    const current = camera.checkPermissions ? await camera.checkPermissions() : null;
+    if (current && current.camera === "granted") return;
+    await camera.requestPermissions({ permissions: ["camera"] });
+  } catch (e) {}
+}
+
+async function requestNativeLocationPermission() {
+  if (!isNativeApp()) return;
+  const geo = (Capacitor.Plugins || {}).Geolocation;
+  if (!geo || !geo.requestPermissions) return;
+  try {
+    const current = geo.checkPermissions ? await geo.checkPermissions() : null;
+    if (current && (current.location === "granted" || current.coarseLocation === "granted")) return;
+    await geo.requestPermissions();
+  } catch (e) {}
+}
+
 async function requestNativeCapturePermissions() {
-  if (!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform())) return;
-  const plugins = Capacitor.Plugins || {};
-  try {
-    if (plugins.Camera && plugins.Camera.requestPermissions) {
-      await plugins.Camera.requestPermissions({ permissions: ["camera"] });
-    }
-  } catch (e) {}
-  try {
-    if (plugins.Geolocation && plugins.Geolocation.requestPermissions) {
-      await plugins.Geolocation.requestPermissions();
-    }
-  } catch (e) {}
+  await requestNativeCameraPermission();
+  await requestNativeLocationPermission();
 }
 
 $("privacyAccept").onclick = () => finishDataConsent(true);
@@ -1041,24 +1337,125 @@ function distMeters(a, b) {
   return 2 * R * Math.asin(Math.sqrt(s));
 }
 
+async function ensureVisionAvailable() {
+  if (visionProvider() === "personal") {
+    if ((localStorage.getItem("openai_key") || "").trim()) return true;
+    alert(t("key_required"));
+    openSettings(false);
+    return false;
+  }
+  const status = health.ai_configured === true ? health : await loadHealth();
+  if (status && status.ai_configured) return true;
+  const detail = status && status.service_error ? `\n\n${status.service_error}` : "";
+  alert(t("shared_unavailable") + detail);
+  openSettings(false);
+  return false;
+}
+
+function renderNativeDriveStatus(status) {
+  if (!window._nativeDriveActive) return;
+  const tally = status && status.tally || {};
+  const analyzing = Number(tally.analyzing || tally.pending || status && status.inFlight || 0);
+  $("driveCount").textContent = eventCountText(tally.found || 0)
+    + (tally.already ? ` · ${alreadyCountText(tally.already)}` : "");
+  const stateText = status && status.state === "stopping"
+    ? t("finishing_analysis", { n: analyzing })
+    : status && status.lastError
+      ? t("native_vision_error", { err: String(status.lastError).slice(0, 180) })
+      : status && status.cameraState === "paused_conflict" ? t("camera_lost")
+      : status && status.gpsState === "waiting" ? t("waiting_gps")
+      : t("scanning", { mode: "native", checked: tally.checked || 0,
+          analyzing: analyzing ? t("analyzing_suffix", { n: analyzing }) : "" });
+  $("driveStatus").textContent = stateText;
+}
+
+async function installNativeDriveListener(plugin) {
+  if (nativeDriveListener || !plugin || !plugin.addListener) return;
+  nativeDriveListener = await plugin.addListener("statusUpdate", renderNativeDriveStatus);
+}
+
+async function removeNativeDriveListener() {
+  const listener = nativeDriveListener;
+  nativeDriveListener = null;
+  if (listener && listener.remove) {
+    try { await listener.remove(); } catch (e) {}
+  }
+}
+
 async function startDrive() {
   // Synchronous reentry guard: a second tap during the camera permission prompt
   // must not start a parallel drive session and leak the first camera stream.
-  if (drive || driveStarting || driveFinalizing) return;
+  if (drive || driveStarting || driveFinalizing || window._nativeDriveActive) return;
   driveStarting = true;
   if (!(await ensureDataConsent())) { driveStarting = false; return; }
-  await requestNativeCapturePermissions();
+  if (!(await ensureVisionAvailable())) { driveStarting = false; return; }
+  const video = $("driveVideo");
+  video.style.display = "";
+  video.srcObject = null;
+  $("driveStop").disabled = false;
+  $("driveStatus").textContent = t("starting_camera");
+  $("driveTip").textContent = t("drive_tip");
+  show("drive");
+
+  // ---------- Native Drive Mode routing ----------
+  // Foreground/web Drive Mode is the default because it provides the live preview
+  // and optional recording. The native service deliberately has no Preview surface,
+  // so use it only after the user explicitly selects background/no-preview mode.
+  // Native and web Drive Mode must never run simultaneously.
+  const nativeDrive = window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()
+    && Capacitor.Plugins && Capacitor.Plugins.DriveMode
+    && localStorage.getItem("native_background_drive") === "1"
+    && localStorage.getItem("force_web_drive") !== "1";
+  if (nativeDrive) {
+    try {
+      await installNativeDriveListener(Capacitor.Plugins.DriveMode);
+      await requestNativeCapturePermissions();
+      const provider = visionProvider();
+      const key = (localStorage.getItem("openai_key") || "").trim();
+      const model = selectedLlmModel(localStorage.getItem("detection_model"));
+      const detail = selectedLlmDetail(localStorage.getItem("image_detail"), model);
+      const nativeOptions = {
+        provider: provider === "personal" ? "personal" : "shared_server",
+        serviceUrl: CENTRAL_SERVICE_URL(), model, detail, language: LANG,
+      };
+      if (provider === "personal") nativeOptions.apiKey = key;
+      const result = await Capacitor.Plugins.DriveMode.start(nativeOptions);
+      window._nativeDriveActive = true;
+      window._nativeDriveSessionId = result.sessionId || "";
+      $("driveVideo").style.display = "none";
+      const initial = await Capacitor.Plugins.DriveMode.getStatus().catch(() => null);
+      renderNativeDriveStatus(initial || { state: "running", tally: {} });
+      $("driveTip").textContent = "Native background detection active. You can switch to Google Maps — detection continues.";
+      driveStarting = false;
+      return;
+    } catch (e) {
+      await removeNativeDriveListener();
+      driveStarting = false;
+      show("home");
+      alert((e && e.message) || String(e));
+      return;
+    }
+  }
+  // ---------- End native routing ----------
+
+  // The live feed needs only camera permission. Ask for location after playback has
+  // started so a slow Android permission bridge cannot sit in front of the preview.
+  await requestNativeCameraPermission();
   if (drive || driveFinalizing) { driveStarting = false; return; }
   StandaloneAPI.prewarm();
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 },
-               height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 },
+               height: { ideal: 720 }, frameRate: { ideal: 30 } },
       audio: false,
     });
-  } catch (e) { driveStarting = false; alert(t("camera_failed") + e.message); return; }
-  const video = $("driveVideo");
+  } catch (e) {
+    driveStarting = false;
+    show("home");
+    alert(t("camera_failed") + e.message);
+    return;
+  }
   video.srcObject = stream;
   const ctx = {
     stream, pos: null, lastCapPos: null,
@@ -1066,15 +1463,15 @@ async function startDrive() {
     duplicateIds: new Set(),
     queue: [], pending: new Set(), inFlight: 0, errors: 0, wakeLock: null,
     sessionId: String(Date.now()), startedAt: Date.now(), captureSeq: 0, stillBusy: false,
-    stopping: false, drained: false,
+    stopping: false, drained: false, readyAt: Date.now() + 250,
   };
   ctx.drainPromise = new Promise((resolve) => { ctx.resolveDrained = resolve; });
   drive = ctx;
-  show("drive");
   try { await video.play(); } catch (e) {}
   // Stop can be tapped while play() is waiting for the media pipeline. Do not let
   // this continuation recreate recording, GPS or wake-lock resources after teardown.
   if (drive !== ctx || ctx.stopping) { driveStarting = false; return; }
+  const locationPermission = requestNativeLocationPermission();
   const track = stream.getVideoTracks && stream.getVideoTracks()[0];
   const settings = track && track.getSettings ? track.getSettings() : {};
   ctx.cameraSettings = { width: settings.width || null, height: settings.height || null,
@@ -1092,6 +1489,8 @@ async function startDrive() {
   } catch (e) {}
   // A wake-lock request is asynchronous too. If Stop won that race, the late lock
   // was released above and GPS must never be installed for the dead session.
+  if (drive !== ctx || ctx.stopping) { driveStarting = false; return; }
+  await locationPermission;
   if (drive !== ctx || ctx.stopping) { driveStarting = false; return; }
   ctx.watchId = navigator.geolocation.watchPosition(
     (p) => {
@@ -1114,9 +1513,8 @@ async function startDrive() {
     () => {},
     { enableHighAccuracy: true, maximumAge: 2000 }
   );
-  // Let autofocus and auto-exposure settle before claiming the first road sample.
-  await new Promise((resolve) => setTimeout(resolve, 800));
-  if (drive !== ctx) { driveStarting = false; return; }
+  // The preview is already visible. Give auto-exposure a short, non-blocking head start;
+  // driveTick observes readyAt instead of delaying camera startup or controls.
   ctx.timer = setInterval(driveTick, FRAME_INTERVAL_MS);
   updateHud(t("waiting_gps"));
   driveStarting = false;
@@ -1139,7 +1537,7 @@ function updateHud(status, ctx = drive) {
 const withTimeout = (p, ms) =>
   Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("capture timeout")), ms))]);
 
-// Capture hands the engine the best frame it can get, unmodified. The engine makes
+// Capture hands the engine the current preview frame, unmodified. The engine makes
 // its own small working copy for detection and applies the night boost there, so the
 // copy attached to a complaint stays what the camera actually saw.
 function grabPreview(video) {
@@ -1156,76 +1554,6 @@ function captureFrame(video) {
   return grabPreview(video);
 }
 
-// Scores only the road region. A high-frequency but completely black/white image is
-// penalised by exposure clipping, and ties keep the earliest frame deterministically.
-function scoreRoadPixels(rgba, width, height) {
-  const gray = new Float32Array(width * height);
-  let total = 0, dark = 0, bright = 0;
-  for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
-    const y = 0.2126 * rgba[i] + 0.7152 * rgba[i + 1] + 0.0722 * rgba[i + 2];
-    gray[p] = y; total += y;
-    if (y < 12) dark++;
-    if (y > 245) bright++;
-  }
-  let edgeTotal = 0, samples = 0;
-  for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
-    const i = y * width + x;
-    edgeTotal += Math.abs(4 * gray[i] - gray[i - 1] - gray[i + 1] - gray[i - width] - gray[i + width]);
-    samples++;
-  }
-  const n = width * height;
-  const luminance = total / n;
-  const clipped = (dark + bright) / n;
-  const sharpness = samples ? edgeTotal / samples : 0;
-  const unusableExposure = clipped > 0.70 || luminance < 18 || luminance > 238;
-  const score = unusableExposure ? -100
-    : sharpness - Math.abs(luminance - 115) * 0.055 - clipped * 45;
-  return { sharpness, luminance, clipped, score };
-}
-
-function roadFrameQuality(video) {
-  const width = 160, height = 96;
-  const c = document.createElement("canvas");
-  c.width = width; c.height = height;
-  const ctx = c.getContext("2d", { willReadFrequently: true });
-  const sourceH = Math.max(1, Math.round(video.videoHeight * 0.62));
-  ctx.drawImage(video, 0, video.videoHeight - sourceH, video.videoWidth, sourceH,
-                0, 0, width, height);
-  return scoreRoadPixels(ctx.getImageData(0, 0, width, height).data, width, height);
-}
-
-function bestBurstIndex(frames) {
-  let best = 0;
-  for (let i = 1; i < frames.length; i++) {
-    const score = frames[i].quality ? frames[i].quality.score : -Infinity;
-    const bestScore = frames[best].quality ? frames[best].quality.score : -Infinity;
-    if (score > bestScore) best = i;
-  }
-  return best;
-}
-
-function waitForVideoFrame(video) {
-  const spacing = new Promise((resolve) => setTimeout(resolve, BURST_SPACING_MS));
-  if (typeof video.requestVideoFrameCallback === "function") {
-    const distinct = withTimeout(new Promise((resolve) => video.requestVideoFrameCallback(() => resolve())),
-      BURST_SPACING_MS + 150).catch(() => {});
-    return Promise.all([spacing, distinct]);
-  }
-  return spacing;
-}
-
-async function captureBurst(video) {
-  const frames = [];
-  for (let i = 0; i < BURST_COUNT; i++) {
-    if (i) await waitForVideoFrame(video);
-    let quality = null, blob = null;
-    try { quality = roadFrameQuality(video); } catch (e) {}
-    try { blob = await withTimeout(captureFrame(video), 3000); } catch (e) {}
-    if (blob) frames.push({ blob, quality: quality || { score: -Infinity }, capturedAt: Date.now() });
-  }
-  return { frames, primaryIndex: frames.length ? bestBurstIndex(frames) : -1 };
-}
-
 function finishDriveDrain(ctx) {
   if (ctx.stopping && !ctx.drained && !ctx.queue.length && ctx.inFlight === 0) {
     ctx.drained = true;
@@ -1237,8 +1565,7 @@ function drainDriveQueue(ctx) {
   while (ctx.inFlight < MAX_IN_FLIGHT && ctx.queue.length) {
     const job = ctx.queue.shift();
     const fd = new FormData();
-    job.burst.frames.forEach((f, i) => fd.append("photo", f.blob, `burst-${i + 1}.jpg`));
-    fd.append("primary_index", String(job.burst.primaryIndex));
+    fd.append("photo", job.frame, "drive-frame.jpg");
     fd.append("lat", String(job.pos.lat));
     fd.append("lng", String(job.pos.lng));
     fd.append("drive_id", ctx.sessionId);
@@ -1249,7 +1576,6 @@ function drainDriveQueue(ctx) {
     if (job.gpsAccuracy != null) fd.append("gps_accuracy", String(job.gpsAccuracy));
     if (job.speed != null) fd.append("speed", String(job.speed));
     if (job.heading != null) fd.append("heading", String(job.heading));
-    fd.append("frame_quality", JSON.stringify(job.burst.frames.map((f) => f.quality)));
     ctx.inFlight++;
     const request = api("/api/frame", { method: "POST", body: fd })
       .then((res) => {
@@ -1297,6 +1623,7 @@ function enqueueDriveEvent(ctx, job) {
 async function driveTick() {
   const ctx = drive;
   if (!ctx || ctx.stopping) return;
+  if (Date.now() < (ctx.readyAt || 0)) return;
   const video = $("driveVideo");
   if (!video.videoWidth) return;
   const gpsFresh = ctx.pos && Date.now() - (ctx.posAt || 0) <= GPS_MAX_AGE_MS;
@@ -1344,13 +1671,13 @@ async function driveTick() {
   if (ctx.stillBusy) return;
   const captureStartedAt = Date.now();
   ctx.stillBusy = true;
-  let burst = null;
+  let frame = null;
   try {
-    burst = await withTimeout(captureBurst(video), 10000);
-  } catch (e) { burst = null; }
+    frame = await withTimeout(captureFrame(video), 3000);
+  } catch (e) { frame = null; }
   finally { ctx.stillBusy = false; }
   if (drive !== ctx || ctx.stopping) return;
-  if (!burst || !burst.frames.length) {
+  if (!frame) {
     // The spacing is only consumed by a frame that was actually taken. Marking position
     // before the capture meant a failing camera silently ate 8 m of road per attempt.
     ctx.capBad = (ctx.capBad || 0) + 1;
@@ -1361,7 +1688,7 @@ async function driveTick() {
   ctx.lastCapPos = pos;
   ctx.lastCapAt = captureStartedAt;
   ctx.tally.captured++;
-  enqueueDriveEvent(ctx, { burst, pos, capturedAt: ctx.lastCapAt,
+  enqueueDriveEvent(ctx, { frame, pos, capturedAt: ctx.lastCapAt,
                            sourceOffsetMs: ctx.lastCapAt - ctx.startedAt,
                            captureSeq: ++ctx.captureSeq, gpsAccuracy: ctx.posAccuracy,
                            speed: ctx.posSpeed, heading: ctx.posHeading });
@@ -1369,10 +1696,37 @@ async function driveTick() {
 }
 
 function stopDrive() {
+  // ---------- Native Drive Mode stop ----------
+  if (window._nativeDriveActive) {
+    if (driveFinalizing) return driveFinalizing;
+    const plugin = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.DriveMode;
+    if (!plugin) return Promise.resolve();
+    $("driveStop").disabled = true;
+    $("driveStatus").textContent = t("finishing_analysis", { n: 0 });
+    const finalizing = plugin.stop()
+      .then(async () => {
+        window._nativeDriveActive = false;
+        window._nativeDriveSessionId = "";
+        await removeNativeDriveListener();
+        await loadReports().catch(() => {});
+        show("home");
+      })
+      .catch(async (error) => {
+        // Keep the drive screen honest if native shutdown could not be confirmed.
+        alert((error && error.message) || String(error));
+      })
+      .finally(() => {
+        $("driveStop").disabled = false;
+        if (driveFinalizing === finalizing) driveFinalizing = null;
+      });
+    driveFinalizing = finalizing;
+    return finalizing;
+  }
+  // ---------- End native stop ----------
   if (!drive) return driveFinalizing || Promise.resolve();
   const ctx = drive;
   ctx.stopping = true;
-  // Captured bursts already queued are still checked. The summary waits for the queue,
+  // Captured frames already queued are still checked. The summary waits for the queue,
   // so stopping the camera never turns the last stretch into silently dropped road.
   const tally = ctx.tally;
   const sessionId = ctx.sessionId, startedAt = ctx.startedAt;
@@ -1439,9 +1793,11 @@ function stopDrive() {
 $("driveBtn").onclick = startDrive;
 $("driveStop").onclick = stopDrive;
 
-// Camera and precise location are foreground-only. Leaving the app ends Drive Mode
-// instead of relying on WebView suspension timing while capture continues unseen.
+// Camera and precise location are foreground-only for the *web* path. The native
+// foreground service continues running when the Activity is hidden — that is its
+// purpose. Only the web path needs to tear down on visibility change.
 document.addEventListener("visibilitychange", () => {
+  if (window._nativeDriveActive) return;   // native service handles its own lifecycle
   if (drive && document.visibilityState === "hidden") stopDrive();
 });
 
@@ -1449,8 +1805,12 @@ document.addEventListener("visibilitychange", () => {
 // so the photo does not also pay for a TLS handshake.
 $("captureBtn").onclick = async () => {
   if (!(await ensureDataConsent())) return;
-  await requestNativeCapturePermissions();
+  if (!(await ensureVisionAvailable())) return;
+  await requestNativeCameraPermission();
   StandaloneAPI.prewarm();
+  // With permission already granted, acquire GPS while the external camera is open.
+  // Returning from capture normally has a ready fix instead of starting an 8 s wait.
+  primedManualPosition = prefetchManualPosition();
   $("fileInput").click();
 };
 
@@ -1690,6 +2050,11 @@ function vReset() { vState.scale = 1; vState.x = 0; vState.y = 0; vApply(); }
 function openViewer(r) {
   vState.rec = r;
   $("viewerImg").src = photoSrc(r);
+  const size = r && r.size ? ` · ${tSize(r.size)}` : "";
+  const description = r && r.description
+    ? `<span class="viewer-description">${escapeHtml(r.description)}</span>` : "";
+  $("viewerMeta").innerHTML = `${chip(r && r.status)} &nbsp;${escapeHtml(tAssessment(r))}`
+    + ` · ${escapeHtml(tDamage(r))}${escapeHtml(size)}${description}`;
   $("viewerHint").innerHTML = t("zoom_hint");
   vReset();
   $("viewer").classList.remove("hidden");
@@ -1709,6 +2074,7 @@ function viewerStep(delta) {
 (function wireViewer() {
   const v = $("viewer"), img = $("viewerImg");
   $("viewerClose").onclick = closeViewer;
+  v.addEventListener("click", (e) => { if (e.target === v) closeViewer(); });
   v.addEventListener("pointerdown", (e) => {
     vPointers.set(e.pointerId, e);
     if (vPointers.size === 1) {
@@ -1774,16 +2140,91 @@ function gpsAt(track, seconds) {
 function resolveDuration(v) {
   return new Promise((res) => {
     let settled = false;
-    const done = (d) => { if (!settled) { settled = true; v.ontimeupdate = null; res(d); } };
+    let timer;
+    const done = (d) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      v.ontimeupdate = null;
+      res(d);
+    };
     v.ontimeupdate = () => {
       if (isFinite(v.duration) && v.duration > 0) { const d = v.duration; v.currentTime = 0; done(d); }
     };
-    setTimeout(() => done(NaN), 10000);
+    timer = setTimeout(() => done(NaN), 10000);
     try { v.currentTime = 1e7; } catch (e) { done(NaN); }
   });
 }
 
+// Android WebView can exhaust its decoder slots when a MediaRecorder drive spans
+// several clips. Merely assigning src="" does not release those native resources,
+// and waiting on onloadedmetadata without a timeout then freezes the run forever at
+// the first clip boundary (typically 12–15 sampled frames).
+function waitForVideoMetadata(v, timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      v.removeEventListener("loadedmetadata", loaded);
+      v.removeEventListener("error", failed);
+    };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+    const loaded = () => finish({ dur: v.duration });
+    const failed = () => finish({ error: true });
+    v.addEventListener("loadedmetadata", loaded);
+    v.addEventListener("error", failed);
+    timer = setTimeout(failed, timeoutMs);
+    if (v.readyState >= 1) loaded();
+    else {
+      try { v.load(); } catch (e) { failed(); }
+    }
+  });
+}
+
+function releaseVideoDecoder(v) {
+  if (!v) return;
+  v.onseeked = null;
+  v.onerror = null;
+  v.ontimeupdate = null;
+  try { v.pause(); } catch (e) {}
+  try {
+    v.removeAttribute("src");
+    v.load();
+  } catch (e) {}
+}
+
+const footageAnalysisJobs = new Map();
+
 async function analyseFootage(driveId, driveRec) {
+  const jobKey = String(driveId);
+  const existingJob = footageAnalysisJobs.get(jobKey);
+  if (existingJob) {
+    // The first call owns every screen transition. Showing Progress here can cover the
+    // Settings screen opened by a failed preflight (for example, a missing personal
+    // key) and leave a spinner behind after both calls have returned.
+    return existingJob;
+  }
+  let releaseJob;
+  const jobToken = new Promise((resolve) => { releaseJob = resolve; });
+  footageAnalysisJobs.set(jobKey, jobToken);
+  const vodVideos = new Set();
+  const vodUrls = new Set();
+  const releaseVodVideo = (video) => {
+    releaseVideoDecoder(video);
+    vodVideos.delete(video);
+  };
+  const revokeVodUrl = (url) => {
+    try { URL.revokeObjectURL(url); } catch (e) {}
+    vodUrls.delete(url);
+  };
+  try {
+  if (!(await ensureVisionAvailable())) return;
   let footage;
   try { footage = await api(`/api/footage/${encodeURIComponent(driveId)}/blobs`); }
   catch (e) { alert(t("analyse_none")); return; }
@@ -1804,10 +2245,10 @@ async function analyseFootage(driveId, driveRec) {
   const recordedStart = Number(driveRec && driveRec.started_at);
   const idStart = /^\d{12,}$/.test(String(driveId)) ? Number(driveId) / 1000 : NaN;
   const sourceStartS = Number.isFinite(recordedStart) && recordedStart > 0 ? recordedStart : idStart;
-  const pending = [];
   const duplicateIds = new Set();
   let found = 0, done = 0, elapsed = 0;
-  let failed = 0, consecutive = 0, lastErr = "", aborted = false;
+  let failed = 0, lastErr = "";
+  let unreadableClips = 0;
   const manifest = [];
   let written = 0, writeFailed = false;
 
@@ -1821,30 +2262,46 @@ async function analyseFootage(driveId, driveRec) {
     const clip = storedClip.blob;
     const clipSeq = Number.isFinite(storedClip.seq) ? storedClip.seq : fallbackSeq;
     const url = URL.createObjectURL(clip);
+    vodUrls.add(url);
     const v = document.createElement("video");
+    vodVideos.add(v);
     v.muted = true; v.preload = "auto"; v.src = url;
-    const meta = await new Promise((res) => {
-      v.onloadedmetadata = () => res({ dur: v.duration });
-      v.onerror = () => res({ error: true });
-      setTimeout(() => res({ error: true }), 15000);
-    });
-    if (meta.error) { URL.revokeObjectURL(url); continue; }
+    const meta = await waitForVideoMetadata(v, 10000);
+    if (meta.error) {
+      releaseVodVideo(v);
+      revokeVodUrl(url);
+      unreadableClips++;
+      failed++;
+      done++;
+      lastErr = t("decoder_failed");
+      continue;
+    }
     // MediaRecorder writes WebM with no duration in the header, so the element reports
     // Infinity until something forces it to scan. Skipping those clips meant that on any
     // device whose WebView cannot record MP4, and the Android emulator is one, every
     // recording was stored and then declared missing. Seeking past the end resolves it.
     let dur = meta.dur;
     if (!isFinite(dur) || dur <= 0) dur = await resolveDuration(v);
-    if (!isFinite(dur) || dur <= 0) { URL.revokeObjectURL(url); continue; }
+    releaseVodVideo(v);
+    if (!isFinite(dur) || dur <= 0) {
+      revokeVodUrl(url);
+      unreadableClips++;
+      failed++;
+      done++;
+      lastErr = t("decoder_failed");
+      continue;
+    }
     const times = [];
     for (let at = Math.min(0.2, dur / 2); at < dur; at += VOD_STEP_S) times.push(at);
     clips.push({ url, dur, times, blob: clip, seq: clipSeq,
       sourceOffsetS: Number.isFinite(storedClip.source_offset_s) ? storedClip.source_offset_s : null,
       recordingStartedAtMs: Number.isFinite(storedClip.recording_started_at_ms)
         ? storedClip.recording_started_at_ms : null });
-    v.src = ""; // the pool opens its own elements; this one was only for the duration
   }
-  const total = clips.reduce((n, c) => n + c.times.length, 0);
+  // An unreadable clip contributes a sentinel failure. Its exact frame count is
+  // unknowable, but it must keep the entire recording and prevent a partial run from
+  // being presented as complete or deleting the source clips.
+  const total = clips.reduce((n, c) => n + c.times.length, 0) + unreadableClips;
   if (!total) { show("home"); alert(t("analyse_none")); return; }
   const paint = () => {
     $("progressText").innerHTML = t("analysing", { i: done, n: total, found })
@@ -1862,7 +2319,15 @@ async function analyseFootage(driveId, driveRec) {
   async function grabFrom(v, canvas, at) {
     return new Promise((res) => {
       let settled = false;
-      const finish = (b) => { if (!settled) { settled = true; res(b); } };
+      let timer;
+      const finish = (b) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        v.onseeked = null;
+        v.onerror = null;
+        res(b);
+      };
       v.onseeked = () => {
         const scale = Math.min(1, 2000 / Math.max(v.videoWidth, v.videoHeight));
         canvas.width = Math.round(v.videoWidth * scale);
@@ -1872,21 +2337,44 @@ async function analyseFootage(driveId, driveRec) {
       };
       v.onerror = () => finish(null);
       // A seek that never lands must not hang the whole run.
-      setTimeout(() => finish(null), 8000);
+      timer = setTimeout(() => finish(null), 8000);
       v.currentTime = at;
     });
   }
 
+  const retryableFrameError = (error) => !!(error && (error.timeout
+    || error.status === 408 || error.status === 425 || error.status === 429
+    || error.status >= 500));
+  async function checkVodFrame(fd) {
+    for (let attempt = 0; ; attempt++) {
+      try { return await api("/api/frame", { method: "POST", body: fd }); }
+      catch (error) {
+        if (attempt >= 1 || !retryableFrameError(error)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+  }
+
   let frameNo = -1;
   for (const clip of clips) {
-    if (aborted) break;
     // One element per seeker, all on the same clip, each taking every SEEKERS-th frame.
     const pool = [];
     for (let k = 0; k < SEEKERS; k++) {
       const v = document.createElement("video");
+      vodVideos.add(v);
       v.muted = true; v.preload = "auto"; v.src = clip.url;
-      await new Promise((res) => { v.onloadedmetadata = res; v.onerror = res; });
-      pool.push({ v, canvas: canvasFor() });
+      const meta = await waitForVideoMetadata(v, k === 0 ? 10000 : 4000);
+      if (meta.error) releaseVodVideo(v);
+      else pool.push({ v, canvas: canvasFor() });
+    }
+    if (!pool.length) {
+      failed += clip.times.length;
+      done += clip.times.length;
+      lastErr = t("decoder_failed");
+      frameNo += clip.times.length;
+      elapsed += clip.dur;
+      paint();
+      continue;
     }
 
     const base = frameNo + 1;
@@ -1904,20 +2392,19 @@ async function analyseFootage(driveId, driveRec) {
         staged.resolve();
       }
     });
+    const poolSize = pool.length;
     await Promise.all(pool.map(async (slot, k) => {
-      for (let idx = k; idx < clip.times.length; idx += SEEKERS) {
-        if (aborted) {
-          // Other seekers may already be waiting behind this index in the chronological
-          // submission gate. Mark this seeker's remaining slots as skipped so an aborted
-          // run cannot leave those promises hanging forever.
-          for (let skipped = idx; skipped < clip.times.length; skipped += SEEKERS) {
-            await submitInOrder(skipped, null);
-          }
-          return;
-        }
+      for (let idx = k; idx < clip.times.length; idx += poolSize) {
         const at = clip.times[idx];
         const blob = await grabFrom(slot.v, slot.canvas, at);
-        if (!blob) { await submitInOrder(idx, null); done++; paint(); continue; }
+        if (!blob) {
+          await submitInOrder(idx, null);
+          failed++;
+          done++;
+          lastErr = t("decoder_failed");
+          paint();
+          continue;
+        }
         // New recordings carry their real segment start, so recorder restart/write gaps
         // stay aligned with GPS and live detections. Summed duration is legacy fallback.
         const atAbs = Number.isFinite(clip.sourceOffsetS) ? clip.sourceOffsetS + at : elapsed + at;
@@ -1938,10 +2425,10 @@ async function analyseFootage(driveId, driveRec) {
         if (pos && pos.speed != null) fd.append("speed", String(pos.speed));
         if (pos && pos.heading != null) fd.append("heading", String(pos.heading));
         const myFrame = base + idx;
+        let request;
         await submitInOrder(idx, () => {
-          pending.push(api("/api/frame", { method: "POST", body: fd })
+          request = checkVodFrame(fd)
             .then(async (r) => {
-              consecutive = 0;
               if (r && r.found) found++;
               else if (r && r.duplicate && r.duplicate_of != null) {
                 duplicateIds.add(String(r.duplicate_of));
@@ -1956,11 +2443,11 @@ async function analyseFootage(driveId, driveRec) {
                 manifest.push({ file: file.split("/").pop(), at_seconds: +atAbs.toFixed(2),
                   lat: pos ? pos.lat : null, lng: pos ? pos.lng : null,
                   model_said: {
-                    is_reportable: !!observation.reportable || !!observation.is_reportable,
-                    damage_type: observation.damage_type || "none",
-                    assessment: observation.assessment || "absent",
                     image_quality: observation.image_quality || null,
+                    assessment: assessment(observation),
+                    damage_type: damageType(observation),
                     size: observation.size || null,
+                    description: observation.description || "",
                   },
                   storage: { stored: !!(r && r.stored), duplicate: !!(r && r.duplicate),
                              duplicate_of: (r && r.duplicate_of) || null },
@@ -1968,29 +2455,23 @@ async function analyseFootage(driveId, driveRec) {
               } catch (e) { writeFailed = true; }
             })
             .catch((e) => {
-              failed++; consecutive++;
+              failed++;
               lastErr = (e && e.message) || String(e);
             })
-            .finally(() => { done++; paint(); }));
+            .finally(() => { done++; paint(); });
         });
-        if (pending.length >= MAX_IN_FLIGHT) await Promise.race(pending.splice(0, 1));
-        if (consecutive >= 5) {
-          aborted = true;
-          for (let skipped = idx + SEEKERS; skipped < clip.times.length; skipped += SEEKERS) {
-            await submitInOrder(skipped, null);
-          }
-          return;
-        }
+        // Each seeker owns at most one request. Three decoder workers therefore stay
+        // below MAX_IN_FLIGHT without the old splice/race bug that reached 8–10 calls.
+        await request;
       }
     }));
 
-    for (const slot of pool) { slot.v.src = ""; }
+    for (const slot of pool) releaseVodVideo(slot.v);
     frameNo = base + clip.times.length - 1;
     elapsed += clip.dur;
   }
 
-  await Promise.allSettled(pending);
-  for (const c of clips) URL.revokeObjectURL(c.url);
+  for (const c of clips) revokeVodUrl(c.url);
   if (saveToDisk && written) {
     try { await writeManifest(driveId, manifest); } catch (e) { writeFailed = true; }
   }
@@ -2023,6 +2504,12 @@ async function analyseFootage(driveId, driveRec) {
         + (freed ? " " + t("footage_freed", { mb: freed.toFixed(0) })
                  : (isDebug() || failed ? " " + t("footage_kept") : ""))
         + diskNote);
+  } finally {
+    for (const video of [...vodVideos]) releaseVodVideo(video);
+    for (const url of [...vodUrls]) revokeVodUrl(url);
+    if (footageAnalysisJobs.get(jobKey) === jobToken) footageAnalysisJobs.delete(jobKey);
+    releaseJob();
+  }
 }
 
 // ---------- contribution dashboard ----------
@@ -2032,12 +2519,14 @@ async function analyseFootage(driveId, driveRec) {
 let mapObj = null;
 
 async function openDash() {
-  const [reports, drives, footage] = await Promise.all([
+  if (!(await ensureDataConsent())) return;
+  const [reports, drives, footage, sharedMap, impact] = await Promise.all([
     api("/api/reports"), api("/api/drives").catch(() => []), api("/api/footage").catch(() => []),
+    api("/api/map").catch(() => null), api("/api/impact").catch(() => null),
   ]);
-  const FOUND = ["draft", "queued", "sent", "unrouted"];
+  const FOUND = ["draft", "queued", "sent", "unrouted", "duplicate"];
   const holes = reports.filter((r) => FOUND.includes(r.status));
-  const sent = reports.filter((r) => r.status === "sent" || r.status === "queued").length;
+  const emailDrafts = reports.filter((r) => r.status === "sent" || r.status === "queued").length;
   const frames = drives.reduce((n, d) => n + (d.checked || 0), 0) || reports.length;
   const mb = footage.reduce((n, f) => n + f.bytes, 0) / 1048576;
   const km = drives.reduce((n, d) => n + trackKm(d.gps_track || []), 0);
@@ -2052,9 +2541,22 @@ async function openDash() {
       <div class="verdict" style="font-size:22px;margin:0">${n}</div>
       <div class="meta">${label}</div></div>`;
   $("dashStats").innerHTML =
-    tile(holes.length, t("stat_found")) + tile(sent, t("stat_reported")) +
+    tile(holes.length, t("stat_found")) + tile(emailDrafts, t("stat_reported")) +
     tile(frames, t("stat_frames")) + tile(drives.length, t("stat_drives")) +
     tile(km.toFixed(1), t("stat_km")) + tile(mb.toFixed(0), t("stat_footage"));
+
+  const community = $("communityCard");
+  if (impact && impact.potholes && impact.observations) {
+    community.classList.remove("hidden");
+    $("communityStats").innerHTML =
+      tile(impact.active_installations || 0, t("stat_installations"))
+      + tile(impact.requests_total || 0, t("stat_requests"))
+      + tile(impact.observations.total || 0, t("stat_observations"))
+      + tile(impact.potholes.total || 0, t("stat_mapped"));
+  } else {
+    community.classList.add("hidden");
+    $("communityStats").innerHTML = "";
+  }
 
   const bars = (title, counts) => {
     const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]);
@@ -2077,7 +2579,17 @@ async function openDash() {
     + bars(t("by_size"), bySize) + `<div style="height:14px"></div>` + bars(t("by_area"), byArea);
 
   show("dash");
-  drawMap(holes.filter((r) => r.lat != null && r.lng != null));
+  const hasSharedMap = sharedMap && Array.isArray(sharedMap.features);
+  const sharedPins = hasSharedMap ? sharedMap.features.map((feature) => {
+    const coordinates = feature && feature.geometry && feature.geometry.coordinates;
+    const properties = feature && feature.properties || {};
+    return Array.isArray(coordinates) && coordinates.length >= 2
+      && Number.isFinite(Number(coordinates[0])) && Number.isFinite(Number(coordinates[1]))
+      ? { ...properties, id: properties.id || null, lng: Number(coordinates[0]),
+          lat: Number(coordinates[1]), _shared: true } : null;
+  }).filter(Boolean) : [];
+  drawMap(hasSharedMap ? sharedPins : holes.filter((r) => r.lat != null && r.lng != null),
+    hasSharedMap);
 }
 
 function trackKm(track) {
@@ -2088,31 +2600,41 @@ function trackKm(track) {
   return m / 1000;
 }
 
-function drawMap(pins) {
+const mapColor = () => "#ff7a1a";
+
+function drawMap(pins, shared = false) {
   const host = $("map");
-  $("mapNote").innerHTML = t("map_pins", { n: pins.length });
+  $("mapNote").textContent = (shared
+    ? t("map_pins", { n: pins.length }) : t("map_local_pins", { n: pins.length }));
   if (mapObj) { mapObj.remove(); mapObj = null; }
   host.innerHTML = "";
   if (!pins.length) return;
-  if (typeof L === "undefined") return scatter(host, pins);
+  if (typeof L === "undefined") return scatter(host, pins, shared);
   try {
     mapObj = L.map(host, { attributionControl: true });
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
       { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" }).addTo(mapObj);
     const group = L.featureGroup(pins.map((r) => {
-      const m = L.circleMarker([r.lat, r.lng], { radius: 7, color: "#ff7a1a", weight: 2,
-        fillColor: "#ff7a1a", fillOpacity: .75 });
-      m.on("click", () => openDetail(r, pins));
+      const color = mapColor(r);
+      const m = L.circleMarker([r.lat, r.lng], { radius: 7, color, weight: 2,
+        fillColor: color, fillOpacity: .75 });
+      if (r._shared) {
+        m.bindPopup(`<strong>${escapeHtml(tDamage(r))}</strong>`
+          + `${r.town ? `<br>${escapeHtml(r.town)}` : ""}`
+          + `${r.seen_count ? `<br>${escapeHtml(t("seen_count", { n: r.seen_count }))}` : ""}`);
+      } else {
+        m.on("click", () => openDetail(r, pins));
+      }
       return m;
     })).addTo(mapObj);
     mapObj.fitBounds(group.getBounds().pad(0.25));
     setTimeout(() => mapObj && mapObj.invalidateSize(), 60);
-  } catch (e) { scatter(host, pins); }
+  } catch (e) { scatter(host, pins, shared); }
 }
 
 // No tiles, no dependency: latitude and longitude straight onto an SVG. Ugly next to a
 // real map, but it still answers "where have I been reporting".
-function scatter(host, pins) {
+function scatter(host, pins, shared = false) {
   const lats = pins.map((p) => p.lat), lngs = pins.map((p) => p.lng);
   const pad = 0.002;
   const minLat = Math.min(...lats) - pad, maxLat = Math.max(...lats) + pad;
@@ -2123,9 +2645,10 @@ function scatter(host, pins) {
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:100%">
       <rect width="${W}" height="${H}" fill="#0c0d0f"></rect>
       ${pins.map((p) => `<circle cx="${x(p.lng).toFixed(1)}" cy="${y(p.lat).toFixed(1)}" r="5"
-         fill="#ff7a1a" fill-opacity="0.8" stroke="#ff7a1a"></circle>`).join("")}
+         fill="${mapColor(p)}" fill-opacity="0.8" stroke="${mapColor(p)}"></circle>`).join("")}
     </svg>`;
-  $("mapNote").innerHTML = t("map_pins", { n: pins.length }) + " · " + t("map_offline");
+  $("mapNote").textContent = (shared ? t("map_pins", { n: pins.length })
+    : t("map_local_pins", { n: pins.length })) + " · " + t("map_offline");
 }
 
 $("dashBtn").onclick = openDash;
@@ -2137,7 +2660,7 @@ $("lblPothole").onclick = () => labelCurrent("pothole_cavity");
 $("lblPatch").onclick = () => labelCurrent("failed_patch");
 $("lblSurface").onclick = () => labelCurrent("surface_breakup");
 $("lblRut").onclick = () => labelCurrent("rut_or_depression");
-$("lblNo").onclick = () => labelCurrent("not_reportable");
+$("lblNo").onclick = () => labelCurrent("undamaged");
 $("lblSkip").onclick = () => labelCurrent(null);
 $("reviewBack").onclick = () => { show("home"); loadReports(); };
 
@@ -2189,47 +2712,70 @@ window.addEventListener("pipeline-verdict", (e) => {
 // Native Android back button: navigate inside the app instead of exiting.
 // Drive mode stops; any other screen returns home; home lets the app exit.
 window.handleAppBack = () => {
-  if (drive) { stopDrive(); return true; }
+  if (drive || window._nativeDriveActive) { stopDrive(); return true; }
   // Stop has already torn down the live camera, but its final MediaRecorder data and
   // queued detections may still be committing. Do not expose Home/Settings/Wipe until
   // that barrier completes or a late write could resurrect data after a user wipe.
   if (driveFinalizing) return true;
   if (!$("dataConsent").classList.contains("hidden")) { finishDataConsent(false); return true; }
   if (!$("viewer").classList.contains("hidden")) { closeViewer(); return true; }
+  if (manualAnalysisActive && !$("progress").classList.contains("hidden")) {
+    manualAnalysisSequence++; // the in-flight request may save, but cannot retake the UI
+    manualAnalysisActive = 0;
+    clearManualPreview();
+    show("home");
+    void loadReports().catch(() => {});
+    return true;
+  }
   for (const s of ["detail", "settings", "progress", "drive", "review", "dash"]) {
     if (!$(s).classList.contains("hidden")) { show("home"); loadReports(); return true; }
   }
   return false;
 };
 
-// Settings: OpenAI key and sender name. Stored on-device only.
+// Personal vision is the standalone default. Shared vision remains an explicit option
+// for deployments with a live project server.
+function updateProviderSettings() {
+  const personal = $("setProvider").value === "personal";
+  $("setKey").disabled = !personal;
+  $("setKey").style.opacity = personal ? "1" : ".55";
+  $("providerNote").textContent = personal ? t("provider_personal_note") : t("provider_shared_note");
+}
+
 window.openSettings = (firstRun) => {
   $("setKey").value = localStorage.getItem("openai_key") || "";
+  $("setProvider").value = visionProvider();
   $("setName").value = localStorage.getItem("sender_name") || "";
-  $("setModel").value = ["gpt-5-mini", "gpt-5.6"].includes(localStorage.getItem("detection_model"))
-    ? localStorage.getItem("detection_model") : "gpt-5-mini";
-  $("setDetail").value = ["high", "original"].includes(localStorage.getItem("image_detail"))
-    ? localStorage.getItem("image_detail") : "high";
+  $("setModel").value = selectedLlmModel(localStorage.getItem("detection_model"));
+  $("setDetail").value = selectedLlmDetail(
+    localStorage.getItem("image_detail"), $("setModel").value);
   $("setDebug").checked = localStorage.getItem("debug_mode") === "1";
   $("setKeepFrames").checked = localStorage.getItem("keep_frames") === "1";
   $("setRecord").checked = localStorage.getItem("record_video") === "1"; // explicit opt-in
+  $("setBackgroundDrive").checked = localStorage.getItem("native_background_drive") === "1";
   $("setLang").value = LANG;
   $("settingsHint").textContent = firstRun ? t("welcome_hint") : "";
+  updateProviderSettings();
   show("settings");
 };
 $("gearBtn").onclick = () => openSettings(false);
+$("setProvider").onchange = updateProviderSettings;
 $("setBack").onclick = () => show("home");
 $("setSave").onclick = async () => {
-  localStorage.setItem("openai_key", $("setKey").value.trim());
+  const provider = $("setProvider").value === "personal" ? "personal" : "shared";
+  const key = $("setKey").value.trim();
+  if (provider === "personal" && !key) { alert(t("key_required")); return; }
+  localStorage.setItem("vision_provider", provider);
+  localStorage.setItem("openai_key", key);
   localStorage.setItem("sender_name", $("setName").value.trim());
-  const selectedModel = $("setModel").value === "gpt-5.6" ? "gpt-5.6" : "gpt-5-mini";
-  const selectedDetail = $("setDetail").value === "original" && selectedModel === "gpt-5.6"
-    ? "original" : "high";
+  const selectedModel = selectedLlmModel($("setModel").value);
+  const selectedDetail = selectedLlmDetail($("setDetail").value, selectedModel);
   localStorage.setItem("detection_model", selectedModel);
   localStorage.setItem("image_detail", selectedDetail);
   localStorage.setItem("debug_mode", $("setDebug").checked ? "1" : "0");
   localStorage.setItem("keep_frames", $("setKeepFrames").checked ? "1" : "0");
   localStorage.setItem("record_video", $("setRecord").checked ? "1" : "0");
+  localStorage.setItem("native_background_drive", $("setBackgroundDrive").checked ? "1" : "0");
   const newLang = $("setLang").value;
   localStorage.setItem("app_lang", newLang);
   if (newLang !== LANG) { location.reload(); return; }
@@ -2239,8 +2785,13 @@ $("setSave").onclick = async () => {
 };
 $("wipeBtn").onclick = async () => {
   if (!confirm(t("confirm_wipe"))) return;
-  try { await api("/api/reports", { method: "DELETE" }); } catch (e) { alert(e.message); return; }
   const plugins = window.Capacitor && Capacitor.Plugins;
+  try {
+    if (plugins && plugins.DriveMode && typeof plugins.DriveMode.clearAllData === "function") {
+      await plugins.DriveMode.clearAllData();
+    }
+    await api("/api/reports", { method: "DELETE" });
+  } catch (e) { alert(e.message); return; }
   try {
     if (plugins && plugins.Filesystem && plugins.Filesystem.rmdir) {
       await plugins.Filesystem.rmdir({ path: FRAME_DIR, directory: "DOCUMENTS", recursive: true });
@@ -2254,8 +2805,8 @@ applyLang();
 
 // #report-<id> deep link opens that report's detail screen directly.
 (async () => {
-  await loadHealth();
-  await loadReports();
+  // Service health is remote in shared mode; it must not hold local history hostage.
+  await Promise.all([loadHealth(), loadReports()]);
   const m = location.hash.match(/^#report-(\d+)$/);
   if (m) {
     const r = (loadReports.latest || []).find((x) => x.id == m[1]);

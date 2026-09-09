@@ -66,7 +66,7 @@
   <header>
     <p class="meta">Pothole Reporter</p>
     <h1>Data sources and limits</h1>
-    <p class="meta">Current bundled-data snapshot: 19 August 2026 · Page updated: 21 August 2026</p>
+    <p class="meta">Current bundled-data snapshot: 19 August 2026 · Page updated: 6 September 2026</p>
     <nav aria-label="Related pages">
       <a href="privacy.html">Privacy policy</a>
       <a href="https://github.com/coding-parrot/pothole-reporter/blob/main/docs/SOURCES.md">Detailed source notes</a>
@@ -77,7 +77,7 @@
   <section>
     <h2>Provenance is not proof</h2>
     <div class="notice">
-      <p>The app combines a user's camera and phone location with public reference data, local rules, and AI judgments. A cited record does not prove that a photographed defect is reportable, that a particular authority owns the road, or that a contractor or warranty applies.</p>
+      <p>The app combines a user's camera and phone location with public reference data, local rules, and AI judgments. A cited record does not prove that a photograph shows road damage, that a particular authority owns the road, or that a contractor or warranty applies.</p>
       <p>Review the photo, recipient, wording, and any probable contract match before sending a complaint.</p>
     </div>
   </section>
@@ -96,9 +96,9 @@
             <td>Camera angle, motion, lighting, GPS accuracy, and stale fixes can all be wrong or incomplete.</td>
           </tr>
           <tr>
-            <td>Damage type, assessment, size, and description</td>
-            <td>An OpenAI vision model evaluates selected image views under the app's prompt and schema.</td>
-            <td>This is generated judgment, not ground truth. The current detector does not have a complete held-out, human-labelled field benchmark.</td>
+            <td>Image quality, damage assessment, damage type, size, and description</td>
+            <td>The selected vision backend evaluates exactly one road image under the app's five-field v4 prompt and schema.</td>
+            <td>This is generated judgment, not ground truth. Asphalt, concrete, gravel, dirt, mud, and road-edge damage are in scope. The current detector does not have a complete held-out, human-labelled field benchmark.</td>
           </tr>
           <tr>
             <td>Street address</td>
@@ -128,7 +128,7 @@
           <tr>
             <td>Probable contract match</td>
             <td>A deterministic local ranking selects up to 25 contracts indexed to the same supported body; an OpenAI model may then select one above the app's confidence threshold.</td>
-            <td>The match is generated and probabilistic. The complaint labels it probable and asks the officer to verify it against tender documents.</td>
+            <td>The match is generated and probabilistic. Footpath-, drain-, utility-, and other non-road-only works are excluded even for an exact locality match. The complaint labels an accepted match probable and asks the officer to verify it against tender documents.</td>
           </tr>
           <tr>
             <td>Possible defect-liability or maintenance wording</td>
@@ -165,6 +165,7 @@
       <li>Search KPPP by tender number and read the tender documents before relying on a probable match, bidder name, or warranty statement.</li>
       <li>Inspect the open-source build scripts and detailed provenance note for filtering and indexing logic.</li>
     </ol>
+    <p>Prompt and confidence-threshold changes are checked with the sealed, human-labelled tender harness at <code>eval/run_tender_eval.py</code>. It reports precision and recall on positive and verified-negative cases, so an all-null matcher cannot pass the release gate.</p>
     <p>Found stale or incorrect source data? <a href="https://github.com/coding-parrot/pothole-reporter/issues/new">Open a GitHub issue</a> with a public source link. Do not include an API key, private personal data, or an unredacted road photo.</p>
   </section>
 

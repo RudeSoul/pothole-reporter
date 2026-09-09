@@ -9,18 +9,21 @@ cd "$(dirname "$0")/.."
 ROOT=$PWD
 APK=android-app/android/app/build/outputs/apk/debug/app-debug.apk
 
-echo "1/4 mirroring static/ into www/"
-for f in standalone.js index.html; do cp "static/$f" "android-app/www/$f"; done
+echo "1/5 generating the cross-runtime LLM contract"
+node llm/generate.mjs
 
-echo "2/4 syncing www into the android assets gradle actually packages"
+echo "2/5 mirroring static/ into www/"
+for f in standalone.js index.html llm-contract.generated.js; do cp "static/$f" "android-app/www/$f"; done
+
+echo "3/5 syncing www into the android assets gradle actually packages"
 (cd android-app && npx cap copy android >/dev/null)
 
-echo "3/4 building"
+echo "4/5 building"
 rm -f "$APK"
 (cd android-app/android && ./gradlew --offline assembleDebug -q)
 [ -f "$APK" ] || { echo "FAIL: gradle produced no APK"; exit 1; }
 
-echo "4/4 verifying the APK contains this source"
+echo "5/5 verifying the APK contains this source"
 fail=0
 same() {  # a file inside the APK must be byte-identical to the source
   if diff -q <(unzip -p "$APK" "assets/public/$1") "android-app/www/$1" >/dev/null; then
@@ -31,6 +34,7 @@ same() {  # a file inside the APK must be byte-identical to the source
 }
 same standalone.js
 same index.html
+same llm-contract.generated.js
 same tenders.json
 same karnataka-bodies.json
 

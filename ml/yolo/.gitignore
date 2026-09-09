@@ -1,0 +1,7 @@
+build/
+runs/
+artifacts/*/
+weights/
+.rad-data/
+__pycache__/
+tests/__pycache__/

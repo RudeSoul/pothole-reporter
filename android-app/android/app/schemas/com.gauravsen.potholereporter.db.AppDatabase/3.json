@@ -1,0 +1,626 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 3,
+    "identityHash": "5e45ede6cad48030503422eaffd24ed2",
+    "entities": [
+      {
+        "tableName": "reports",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `reportable` INTEGER NOT NULL, `assessment` TEXT, `image_quality` TEXT, `damage_type` TEXT, `on_drivable_surface` INTEGER NOT NULL, `has_broken_edge_or_rim` INTEGER NOT NULL, `has_depth_or_surface_loss` INTEGER NOT NULL, `temporal_consistency` TEXT, `size` TEXT, `description` TEXT, `decision` TEXT NOT NULL, `status` TEXT NOT NULL, `lat` REAL, `lng` REAL, `gps_accuracy` REAL, `speed_mps` REAL, `heading` REAL, `address` TEXT, `photo` BLOB, `photo_full` BLOB, `drive_id` TEXT, `capture_source` TEXT NOT NULL, `source_event_key` TEXT, `source_event_keys` TEXT, `captured_at` REAL, `source_offset_s` REAL, `created_at` REAL NOT NULL, `last_seen_at` REAL, `seen_count` INTEGER NOT NULL, `server_pothole_id` INTEGER, `server_duplicate` INTEGER NOT NULL, `central_sync_eligible` INTEGER NOT NULL, `central_sync_error` TEXT, `condition_status` TEXT NOT NULL, `condition_updated_at` REAL, `condition_source` TEXT, `condition_client_event_id` TEXT, `condition_sync_pending` INTEGER NOT NULL, `repair_description` TEXT, `repair_photo` BLOB, `repair_observed_at` REAL, `repair_source_event_key` TEXT, `repair_same_location_visible` INTEGER, `repair_completed_repair_visible` INTEGER, `repair_current_condition` TEXT, `repair_assessment` TEXT, `repair_image_quality` TEXT, `repair_detection_model` TEXT, `repair_prompt_version` TEXT, `repair_schema_version` INTEGER, `dedupe_eligible` INTEGER NOT NULL, `sighting_drive_ids` TEXT, `event_sightings` TEXT, `detection_provider` TEXT, `detection_model` TEXT, `image_detail` TEXT, `prompt_version` TEXT, `schema_version` INTEGER NOT NULL, `evidence_count` INTEGER NOT NULL, `email_subject` TEXT, `email_body` TEXT, `email_to` TEXT, `officer_title` TEXT, `body_lgd` TEXT, `body_name` TEXT, `tender_number` TEXT, `contractor` TEXT, `tender_note` TEXT, `tender_resolution_reason` TEXT, `tender_resolution_checked_at` REAL, `unrouted_reason` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reportable",
+            "columnName": "reportable",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assessment",
+            "columnName": "assessment",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "image_quality",
+            "columnName": "image_quality",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "damage_type",
+            "columnName": "damage_type",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "on_drivable_surface",
+            "columnName": "on_drivable_surface",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "has_broken_edge_or_rim",
+            "columnName": "has_broken_edge_or_rim",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "has_depth_or_surface_loss",
+            "columnName": "has_depth_or_surface_loss",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "temporal_consistency",
+            "columnName": "temporal_consistency",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "size",
+            "columnName": "size",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "decision",
+            "columnName": "decision",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lat",
+            "columnName": "lat",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "lng",
+            "columnName": "lng",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "gps_accuracy",
+            "columnName": "gps_accuracy",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "speed_mps",
+            "columnName": "speed_mps",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "heading",
+            "columnName": "heading",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "address",
+            "columnName": "address",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "photo",
+            "columnName": "photo",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "photo_full",
+            "columnName": "photo_full",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "drive_id",
+            "columnName": "drive_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "capture_source",
+            "columnName": "capture_source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source_event_key",
+            "columnName": "source_event_key",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceEventKeys",
+            "columnName": "source_event_keys",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "captured_at",
+            "columnName": "captured_at",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "source_offset_s",
+            "columnName": "source_offset_s",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "created_at",
+            "columnName": "created_at",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "last_seen_at",
+            "columnName": "last_seen_at",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "seen_count",
+            "columnName": "seen_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "server_pothole_id",
+            "columnName": "server_pothole_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "server_duplicate",
+            "columnName": "server_duplicate",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "central_sync_eligible",
+            "columnName": "central_sync_eligible",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "central_sync_error",
+            "columnName": "central_sync_error",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "condition_status",
+            "columnName": "condition_status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "condition_updated_at",
+            "columnName": "condition_updated_at",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "condition_source",
+            "columnName": "condition_source",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "condition_client_event_id",
+            "columnName": "condition_client_event_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "condition_sync_pending",
+            "columnName": "condition_sync_pending",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "repair_description",
+            "columnName": "repair_description",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "repair_photo",
+            "columnName": "repair_photo",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "repair_observed_at",
+            "columnName": "repair_observed_at",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "repair_source_event_key",
+            "columnName": "repair_source_event_key",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "repair_same_location_visible",
+            "columnName": "repair_same_location_visible",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "repair_completed_repair_visible",
+            "columnName": "repair_completed_repair_visible",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "repair_current_condition",
+            "columnName": "repair_current_condition",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "repair_assessment",
+            "columnName": "repair_assessment",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "repair_image_quality",
+            "columnName": "repair_image_quality",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "repair_detection_model",
+            "columnName": "repair_detection_model",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "repair_prompt_version",
+            "columnName": "repair_prompt_version",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "repair_schema_version",
+            "columnName": "repair_schema_version",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "dedupe_eligible",
+            "columnName": "dedupe_eligible",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sightingDriveIds",
+            "columnName": "sighting_drive_ids",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "eventSightings",
+            "columnName": "event_sightings",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "detection_provider",
+            "columnName": "detection_provider",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "detection_model",
+            "columnName": "detection_model",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "image_detail",
+            "columnName": "image_detail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "prompt_version",
+            "columnName": "prompt_version",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "schema_version",
+            "columnName": "schema_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "evidence_count",
+            "columnName": "evidence_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "email_subject",
+            "columnName": "email_subject",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "email_body",
+            "columnName": "email_body",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "email_to",
+            "columnName": "email_to",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "officer_title",
+            "columnName": "officer_title",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "body_lgd",
+            "columnName": "body_lgd",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "body_name",
+            "columnName": "body_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tender_number",
+            "columnName": "tender_number",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "contractor",
+            "columnName": "contractor",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tender_note",
+            "columnName": "tender_note",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tender_resolution_reason",
+            "columnName": "tender_resolution_reason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tender_resolution_checked_at",
+            "columnName": "tender_resolution_checked_at",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "unrouted_reason",
+            "columnName": "unrouted_reason",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_reports_lat",
+            "unique": false,
+            "columnNames": [
+              "lat"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reports_lat` ON `${TABLE_NAME}` (`lat`)"
+          },
+          {
+            "name": "index_reports_drive_id",
+            "unique": false,
+            "columnNames": [
+              "drive_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reports_drive_id` ON `${TABLE_NAME}` (`drive_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "drive_sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `started_at` REAL, `ended_at` REAL, `checked` INTEGER NOT NULL, `found` INTEGER NOT NULL, `already` INTEGER NOT NULL, `already_ids` TEXT, `gps_track` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "started_at",
+            "columnName": "started_at",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "ended_at",
+            "columnName": "ended_at",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "checked",
+            "columnName": "checked",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "found",
+            "columnName": "found",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "already",
+            "columnName": "already",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "already_ids",
+            "columnName": "already_ids",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "gps_track",
+            "columnName": "gps_track",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "central_observation_outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`client_observation_id` TEXT NOT NULL, `report_id` INTEGER NOT NULL, `observed_at_ms` INTEGER NOT NULL, `lat` REAL NOT NULL, `lng` REAL NOT NULL, `gps_accuracy_m` REAL, `heading_deg` REAL, `speed_mps` REAL, `damage_type` TEXT NOT NULL, `size` TEXT, `image_hash` TEXT NOT NULL, `detector_provider` TEXT NOT NULL, `detector_model` TEXT NOT NULL, `image_detail` TEXT NOT NULL, `evidence_count` INTEGER NOT NULL, `drive_id` TEXT, `local_match_report_id` INTEGER, `local_match_kind` TEXT, `attempt_count` INTEGER NOT NULL, `last_error` TEXT, PRIMARY KEY(`client_observation_id`), FOREIGN KEY(`report_id`) REFERENCES `reports`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "client_observation_id",
+            "columnName": "client_observation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "report_id",
+            "columnName": "report_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "observed_at_ms",
+            "columnName": "observed_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lat",
+            "columnName": "lat",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lng",
+            "columnName": "lng",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gps_accuracy_m",
+            "columnName": "gps_accuracy_m",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "heading_deg",
+            "columnName": "heading_deg",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "speed_mps",
+            "columnName": "speed_mps",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "damage_type",
+            "columnName": "damage_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "size",
+            "columnName": "size",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "image_hash",
+            "columnName": "image_hash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "detector_provider",
+            "columnName": "detector_provider",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "detector_model",
+            "columnName": "detector_model",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "image_detail",
+            "columnName": "image_detail",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "evidence_count",
+            "columnName": "evidence_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "drive_id",
+            "columnName": "drive_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "local_match_report_id",
+            "columnName": "local_match_report_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "local_match_kind",
+            "columnName": "local_match_kind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "attempt_count",
+            "columnName": "attempt_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "last_error",
+            "columnName": "last_error",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "client_observation_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_central_observation_outbox_report_id",
+            "unique": false,
+            "columnNames": [
+              "report_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_central_observation_outbox_report_id` ON `${TABLE_NAME}` (`report_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "reports",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "report_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '5e45ede6cad48030503422eaffd24ed2')"
+    ]
+  }
+}

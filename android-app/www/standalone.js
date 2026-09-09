@@ -1,7 +1,18 @@
-// The app engine: the entire pipeline on-device, no server anywhere.
+// The app engine. Reports and evidence stay in the browser database; the project service
+// supplies shared vision, central tender/dedupe, aggregate impact, and the public map.
 // The page's api() delegates every call here.
 (() => {
   const NATIVE = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
+  const LLM = window.PotholeLlmContract;
+  if (!LLM || !LLM.prompts || !LLM.config) {
+    throw new Error("The generated LLM contract must load before standalone.js.");
+  }
+  const DETECTION_PROMPT_CONFIG = LLM.prompts.detection;
+  const TENDER_PROMPT_CONFIG = LLM.prompts.tender;
+  const MODEL_CONFIG = LLM.config.models;
+  const RUNTIME_CONFIG = LLM.config.runtime;
+  const IMAGING_CONFIG = LLM.config.imaging;
+  const TENDER_CONFIG = LLM.config.tender;
 
   // Browser-only development shortcut. A URL fragment never reaches HTTP access logs;
   // remove it immediately after seeding the local key. This never runs in the APK.
@@ -13,31 +24,43 @@
     }
   }
 
+  // v1.13.0 advertised an undeployed shared endpoint as the default. App data survives
+  // an APK upgrade, so changing the fallback alone would strand existing installations
+  // on that dead value. Migrate it once; a later explicit Shared choice is preserved.
+  const PROVIDER_DEFAULT_MIGRATION = "standalone-personal-v1";
+  if (NATIVE && localStorage.getItem("provider_default_migration") !== PROVIDER_DEFAULT_MIGRATION) {
+    localStorage.setItem("vision_provider", "personal");
+    localStorage.setItem("provider_default_migration", PROVIDER_DEFAULT_MIGRATION);
+  }
+
   const S = {
     get key() { return (localStorage.getItem("openai_key") || "").trim(); },
+    get provider() { return localStorage.getItem("vision_provider") === "shared" ? "shared" : "personal"; },
     get name() { return (localStorage.getItem("sender_name") || "").trim() || "A concerned citizen"; },
     get debug() { return localStorage.getItem("debug_mode") === "1"; },
     get model() { return normaliseModel(localStorage.getItem("detection_model")); },
     get detail() { return normaliseDetail(localStorage.getItem("image_detail"), this.model); },
   };
 
-  const LANG = () => (localStorage.getItem("app_lang") === "kn" ? "kn" : "en");
+  const LANG = () => MODEL_CONFIG.allowedLanguages.includes(localStorage.getItem("app_lang"))
+    ? localStorage.getItem("app_lang") : MODEL_CONFIG.defaultLanguage;
   const PROGRESS = {
-    en: { compress: "Preparing photo...", capture: "Preparing road views...",
-          detect: "AI checking for reportable road damage...", finalize: "Finalizing address and contract...",
+    en: { compress: "Preparing photo...", capture: "Preparing photo...",
+          detect: "AI checking for road damage...", finalize: "Finalizing address and contract...",
           write: "Writing the complaint...", email: "Opening your email app..." },
     kn: { compress: "ಫೋಟೋ ಸಂಕುಚಿಸಲಾಗುತ್ತಿದೆ...", capture: "ಫ್ರೇಮ್ ಸೆರೆಹಿಡಿಯಲಾಗುತ್ತಿದೆ...",
-          detect: "AI ವರದಿ ಮಾಡಬಹುದಾದ ರಸ್ತೆ ಹಾನಿ ಪರಿಶೀಲಿಸುತ್ತಿದೆ...", finalize: "ವಿಳಾಸ ಮತ್ತು ಗುತ್ತಿಗೆ ಖಚಿತಪಡಿಸಲಾಗುತ್ತಿದೆ...",
+          detect: "AI ರಸ್ತೆ ಹಾನಿ ಪರಿಶೀಲಿಸುತ್ತಿದೆ...", finalize: "ವಿಳಾಸ ಮತ್ತು ಗುತ್ತಿಗೆ ಖಚಿತಪಡಿಸಲಾಗುತ್ತಿದೆ...",
           write: "ದೂರು ಬರೆಯಲಾಗುತ್ತಿದೆ...", email: "ನಿಮ್ಮ ಇಮೇಲ್ ಆ್ಯಪ್ ತೆರೆಯಲಾಗುತ್ತಿದೆ..." },
   };
   const pmsg = (k) => (PROGRESS[LANG()] && PROGRESS[LANG()][k]) || PROGRESS.en[k];
 
-  const DEFAULT_MODEL = "gpt-5-mini";
-  const ALLOWED_MODELS = new Set([DEFAULT_MODEL, "gpt-5.6"]);
-  const ALLOWED_DETAILS = new Set(["high", "original"]);
-  const PROMPT_VERSION = "road-damage-v3";
-  const SCHEMA_VERSION = 3;
-  const MAX_DETECTION_IMAGES = 4;
+  const DEFAULT_MODEL = MODEL_CONFIG.defaultModel;
+  const ALLOWED_MODELS = new Set(MODEL_CONFIG.allowedModels);
+  const ALLOWED_DETAILS = new Set(MODEL_CONFIG.allowedImageDetails);
+  const ORIGINAL_DETAIL_MODELS = new Set(MODEL_CONFIG.originalDetailModels);
+  const PROMPT_VERSION = DETECTION_PROMPT_CONFIG.version;
+  const SCHEMA_VERSION = DETECTION_PROMPT_CONFIG.schemaVersion;
+  const MAX_DETECTION_IMAGES = IMAGING_CONFIG.maxDetectionImages;
   // Detection still examines every burst. Only after a burst is accepted do we group it
   // with a road-damage event already saved at the same place. This preserves capture
   // recall while stopping adjacent bursts and later drives from creating repeat drafts.
@@ -47,16 +70,21 @@
   const DEDUPE_SAME_DRIVE_S = 4;
   const DEDUPE_POOR_GPS_S = 2;
   const DEDUPE_HISTORY_S = 30 * 24 * 60 * 60;
-  const ACCEPTED_REPORT_STATUSES = new Set(["draft", "queued", "sent", "unrouted"]);
+  const ACCEPTED_REPORT_STATUSES = new Set(["draft", "queued", "sent", "unrouted", "duplicate"]);
+  const SERVICE_URL = (localStorage.getItem("service_url")
+    || "https://pothole-detect.gauravsen.workers.dev").replace(/\/+$/, "");
+  const usingSharedVision = () => S.provider === "shared";
+  const INSTALLATION_KEY = "central_installation";
 
   function normaliseModel(value) {
     return ALLOWED_MODELS.has(value) ? value : DEFAULT_MODEL;
   }
   function normaliseDetail(value, model) {
-    const picked = ALLOWED_DETAILS.has(value) ? value : "high";
+    const picked = ALLOWED_DETAILS.has(value) ? value : MODEL_CONFIG.defaultImageDetail;
     // `original` is intentionally an experiment arm for the newest model. Older
     // vision models do not support it, so fail safely to their highest valid setting.
-    return picked === "original" && model !== "gpt-5.6" ? "high" : picked;
+    return picked === MODEL_CONFIG.originalImageDetail && !ORIGINAL_DETAIL_MODELS.has(model)
+      ? MODEL_CONFIG.defaultImageDetail : picked;
   }
 
   const OFFICERS = {
@@ -114,61 +142,16 @@
     return false; // no location at all: we cannot claim to know who is responsible
   }
 
-  const DETECT_PROMPT = `You are inspecting one or more chronologically ordered road views for a civic complaint app.
-
-Decide whether they show reportable damage on the paved surface used by moving traffic. Classify the condition precisely:
-- pothole_cavity: a localized open cavity with a broken rim, missing material, or visible depth.
-- failed_patch: a previous repair that has broken, sunk, opened, or shed aggregate. A level intact patch is not damage.
-- surface_breakup: asphalt/concrete has materially disintegrated or stripped across an area, even if there is no single cavity.
-- rut_or_depression: a materially sunken wheel path or road depression with a genuine level change.
-- other_road_damage: another serious defect in the travelled paved surface that needs repair.
-- none: no reportable road damage is visible.
-
-Choose one primary type consistently. Use failed_patch when the failed material or repair boundary is visibly a previous repair. Otherwise, a distinct localized open cavity takes precedence as pothole_cavity. Use surface_breakup only for broad disintegration without one dominant cavity or identifiable failed repair, and rut_or_depression for a smooth/continuous level change rather than missing broken material.
-
-Evidence rules:
-- A shadow, stain, water, glare, dust, loose roadside debris, lane marking, intact patch, manhole, drain, road edge, shoulder erosion, or speed breaker is not reportable damage by itself.
-- The defect must be on the drivable paved surface, not merely beside it.
-- Look for a defined broken edge/rim, missing material, displaced aggregate, or a depth/level-change cue. Use agreement and parallax across views when several are supplied.
-- image_quality is unusable when blur, darkness, glare, obstruction, or distance prevents a defensible judgment.
-- assessment is clear only when the defect and structural evidence are unambiguous; probable when strong evidence remains despite modest quality limits; uncertain when a confounder cannot be ruled out; absent when no reportable defect is visible.
-- Set reportable true only when the most likely damage_type is not none. Do not convert uncertainty into confidence percentages.
-- Classify size as small (below 30 cm wide), medium (30 to 60 cm), or large (above 60 cm or a damaged cluster). Use null when scale is not defensible.
-- description: one or two factual sentences naming the condition, its position, the visible evidence, and the road-user hazard. Do not call failed surface or a failed repair a pothole.`;
+  const DETECT_PROMPT = DETECTION_PROMPT_CONFIG.base;
 
   // Key order is the streaming order. The decision fields arrive before the factual
   // description, so the UI can update without using a made-up confidence percentage.
-  const ASSESS_SCHEMA = {
-    type: "object", additionalProperties: false,
-    required: ["reportable", "assessment", "image_quality", "damage_type",
-      "on_drivable_surface", "has_broken_edge_or_rim", "has_depth_or_surface_loss",
-      "temporal_consistency", "size", "description"],
-    properties: {
-      reportable: { type: "boolean" },
-      assessment: { type: "string", enum: ["clear", "probable", "uncertain", "absent"] },
-      image_quality: { type: "string", enum: ["usable", "degraded", "unusable"] },
-      damage_type: { type: "string", enum: ["pothole_cavity", "failed_patch", "surface_breakup",
-        "rut_or_depression", "other_road_damage", "none"] },
-      on_drivable_surface: { type: "boolean" },
-      has_broken_edge_or_rim: { type: "boolean" },
-      has_depth_or_surface_loss: { type: "boolean" },
-      temporal_consistency: { type: "string", enum: ["consistent", "single_view", "inconsistent", "not_applicable"] },
-      size: { type: ["string", "null"], enum: ["small", "medium", "large", null] },
-      description: { type: "string" },
-    },
-  };
-  const TENDER_SCHEMA = {
-    type: "object", additionalProperties: false,
-    required: ["match_index", "confidence", "reason"],
-    properties: {
-      match_index: { type: ["integer", "null"] },
-      confidence: { type: "number" },
-      reason: { type: "string" },
-    },
-  };
+  const ASSESS_SCHEMA = DETECTION_PROMPT_CONFIG.schema;
+  const TENDER_SCHEMA = TENDER_PROMPT_CONFIG.schema;
+  const TENDER_MATCH_INSTRUCTIONS = TENDER_PROMPT_CONFIG.instructions;
 
   // ---------- OpenAI ----------
-  const OAI_URL = "https://api.openai.com/v1/responses";
+  const OAI_URL = RUNTIME_CONFIG.responsesUrl;
   const authHeaders = () => ({ "Content-Type": "application/json", "Authorization": `Bearer ${S.key}` });
 
   // Detection is a classification job, not an essay: left at its default the model
@@ -179,16 +162,20 @@ Evidence rules:
     // Detection inputs can contain precise road imagery and addresses. Do not retain
     // response application state beyond the request; provider abuse-monitoring rules
     // remain governed by OpenAI's published policy and are disclosed in our policy.
-    store: false,
+    store: RUNTIME_CONFIG.storeResponses,
     reasoning: (body && body.reasoning)
-      || { effort: body && body.model === "gpt-5.6" ? "none" : "minimal" },
+      || { effort: MODEL_CONFIG.reasoningEffortByModel[body && body.model]
+        || MODEL_CONFIG.defaultReasoningEffort },
   });
 
   // Fatal means "fails the same way without streaming", so retrying plain is pointless.
   const fatal = (e) => { e.fatal = true; return e; };
   // A stalled request is worse than a failed one: without this a lost connection
   // leaves the UI on a spinner with no end, and a drive quietly stops forever.
-  const REQUEST_TIMEOUT_MS = 30000;
+  const REQUEST_TIMEOUT_MS = RUNTIME_CONFIG.timeoutsMs.personalOpenAI;
+  // Fallback mode can spend up to 55s on OpenAI and then 30s on the project YOLO
+  // gateway. Shared calls allow 15s more for Worker and network overhead.
+  const SHARED_VISION_TIMEOUT_MS = RUNTIME_CONFIG.timeoutsMs.sharedVisionClient;
 
   // The timeout used to be cleared the moment the headers arrived, so it only ever covered
   // the handshake. A response that sent headers and then stalled was never aborted, and a
@@ -216,9 +203,10 @@ Evidence rules:
         to.timeout = true;
         throw to;
       }
-      // Platform network errors read like `Unable to resolve host "api.openai.com"`.
-      // Nobody watching a demo should be shown that.
-      throw new Error("Could not reach OpenAI. Check the connection and try again.");
+      // Platform network errors often expose transport internals. Keep the provider in
+      // the message accurate now that this helper also serves the project service.
+      const destination = String(url).startsWith(SERVICE_URL) ? "the reporting service" : "OpenAI";
+      throw new Error(`Could not reach ${destination}. Check the connection and try again.`);
     }
     res.__disarm = disarm;
     res.__rearm = rearm;
@@ -229,6 +217,208 @@ Evidence rules:
   async function readJson(res) {
     try { return await res.json(); }
     finally { if (res.__disarm) res.__disarm(); }
+  }
+
+  // ---------- central service identity and transport ----------
+  // The install key is pseudonymous and non-extractable. It is used only to sign writes
+  // to the project service; a personal OpenAI key stays on this device and continues to
+  // go directly to OpenAI.
+  const bytesToBase64 = (bytes) => {
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  };
+  const randomId = () => (globalThis.crypto && crypto.randomUUID ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`);
+  const sha256HexBytes = async (bytes) => [...new Uint8Array(
+    await crypto.subtle.digest("SHA-256", bytes))]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  const sha256HexText = async (text) => sha256HexBytes(new TextEncoder().encode(text));
+  async function canonicalServiceRequest(method, urlOrPath, timestamp, idempotencyKey, exactBody) {
+    const pathname = new URL(String(urlOrPath), `${SERVICE_URL}/`).pathname;
+    const body = typeof exactBody === "string" ? exactBody : "";
+    return `${String(method || "GET").toUpperCase()}\n${pathname}\n${String(timestamp || "")}\n`
+      + `${String(idempotencyKey || "")}\n${await sha256HexText(body)}`;
+  }
+
+  let installationCache = null, installationPromise = null;
+  async function loadInstallationIdentity() {
+    if (installationCache) return installationCache;
+    const nativeSigner = NATIVE && window.Capacitor && Capacitor.Plugins
+      && Capacitor.Plugins.DriveMode
+      && typeof Capacitor.Plugins.DriveMode.getCentralIdentity === "function"
+      ? Capacitor.Plugins.DriveMode : null;
+    if (nativeSigner) {
+      const nativeIdentity = await nativeSigner.getCentralIdentity({ serviceUrl: SERVICE_URL });
+      if (!nativeIdentity || !nativeIdentity.installId) {
+        throw new Error("The reporting service could not register this installation.");
+      }
+      installationCache = {
+        installId: String(nativeIdentity.installId), nativeSigner: true,
+      };
+      return installationCache;
+    }
+    if (typeof crypto === "undefined" || !crypto.subtle) {
+      throw new Error("Secure device identity is unavailable on this phone.");
+    }
+    const cached = await op("readonly", (store) => store.get(INSTALLATION_KEY), "identity")
+      .catch(() => null);
+    if (cached && cached.installId && cached.privateKey) {
+      installationCache = cached;
+      return cached;
+    }
+    const pair = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+    const publicRaw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+    const body = JSON.stringify({ public_key: bytesToBase64(publicRaw) });
+    const response = await fetchWithTimeout(`${SERVICE_URL}/v1/installations`, {
+      method: "POST", headers: { "content-type": "application/json" }, body,
+    }, 15000);
+    const payload = await readJson(response).catch(() => ({}));
+    if (!response.ok || !payload.install_id) {
+      throw new Error(payload.message || "The reporting service could not register this installation.");
+    }
+    installationCache = {
+      key: INSTALLATION_KEY, installId: String(payload.install_id),
+      privateKey: pair.privateKey, publicKey: bytesToBase64(publicRaw),
+    };
+    await op("readwrite", (store) => store.put(installationCache), "identity");
+    return installationCache;
+  }
+
+  function installationIdentity() {
+    if (installationCache) return Promise.resolve(installationCache);
+    if (!installationPromise) {
+      installationPromise = loadInstallationIdentity().finally(() => { installationPromise = null; });
+    }
+    return installationPromise;
+  }
+
+  function serviceError(response, payload, fallback) {
+    const message = payload && payload.message ? String(payload.message) : fallback;
+    const err = new Error(message || "The reporting service could not complete the request.");
+    err.code = payload && payload.error ? String(payload.error) : `service_${response.status}`;
+    err.status = response.status;
+    err.requestId = (payload && payload.request_id) || response.headers.get("x-request-id") || null;
+    err.details = payload && payload.details && typeof payload.details === "object"
+      ? payload.details : null;
+    err.sharedService = true;
+    if (/credit|budget|quota/i.test(err.code) || response.status === 402
+        || response.status === 429 || response.status === 503) {
+      err.fatal = true;
+    }
+    return err;
+  }
+
+  async function signedServicePost(path, value, options = {}) {
+    let identity;
+    try { identity = await installationIdentity(); }
+    catch (error) { markProjectServiceUnavailable(); throw error; }
+    // Durable retries sign and resend the original byte string. Re-stringifying a saved
+    // object would normally be equivalent, but signing exact bytes makes that guarantee
+    // explicit and keeps the server's idempotency record tied to one immutable request.
+    const body = typeof options.exactBody === "string"
+      ? options.exactBody : JSON.stringify(value == null ? {} : value);
+    const timestamp = String(Date.now());
+    const idempotencyKey = String(options.idempotencyKey || randomId());
+    const pathname = new URL(`${SERVICE_URL}${path}`).pathname;
+    const canonical = await canonicalServiceRequest("POST", pathname, timestamp, idempotencyKey, body);
+    let installId = identity.installId;
+    let signedTimestamp = timestamp;
+    let signedIdempotencyKey = idempotencyKey;
+    let signatureBase64;
+    if (identity.nativeSigner) {
+      const signer = Capacitor.Plugins.DriveMode;
+      const signed = await signer.signCentralRequest({
+        serviceUrl: SERVICE_URL, method: "POST", path: pathname,
+        timestamp, idempotencyKey, body,
+      });
+      if (!signed || !signed.signature || !signed.installId) {
+        throw new Error("The phone could not sign this reporting request.");
+      }
+      installId = String(signed.installId);
+      signedTimestamp = String(signed.timestamp || timestamp);
+      signedIdempotencyKey = String(signed.idempotencyKey || idempotencyKey);
+      signatureBase64 = String(signed.signature);
+    } else {
+      const signature = new Uint8Array(await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" }, identity.privateKey,
+        new TextEncoder().encode(canonical)));
+      signatureBase64 = bytesToBase64(signature);
+    }
+    let response;
+    try {
+      response = await fetchWithTimeout(`${SERVICE_URL}${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Install-ID": installId,
+          "X-Timestamp": signedTimestamp,
+          "X-Signature": signatureBase64,
+          "Idempotency-Key": signedIdempotencyKey,
+        },
+        body,
+      }, options.timeout || REQUEST_TIMEOUT_MS);
+    } catch (error) {
+      markProjectServiceUnavailable();
+      throw error;
+    }
+    const payload = await readJson(response).catch(() => ({}));
+    if (!response.ok) {
+      const error = serviceError(response, payload, options.fallback);
+      if (response.status === 408 || response.status === 425 || response.status === 429
+          || response.status >= 500) markProjectServiceUnavailable();
+      throw error;
+    }
+    markProjectServiceAvailable();
+    return payload;
+  }
+
+  async function serviceGet(path, timeout = 20000) {
+    const response = await fetchWithTimeout(`${SERVICE_URL}${path}`, {
+      headers: { "accept": "application/json" },
+    }, timeout);
+    const payload = await readJson(response).catch(() => ({}));
+    if (!response.ok) throw serviceError(response, payload, "The reporting service is unavailable.");
+    return payload;
+  }
+
+  // Personal mode can use the project service when it exists, but may never require it
+  // to show a detector result. Probe once in the background at startup; captures read
+  // this completed circuit state and skip central critical-path calls when it is offline.
+  let projectServiceState = "unknown", projectServiceProbe = null, projectServiceCheckedAt = 0;
+  const PROJECT_SERVICE_POSITIVE_TTL_MS = 30000;
+  const projectServiceAvailable = () => projectServiceState === "available";
+  function markProjectServiceAvailable() {
+    projectServiceState = "available";
+    projectServiceCheckedAt = Date.now();
+  }
+  function markProjectServiceUnavailable() {
+    projectServiceState = "unavailable";
+    projectServiceCheckedAt = Date.now();
+  }
+  function probeProjectService(timeout = 1500) {
+    if (projectServiceAvailable()
+        && Date.now() - projectServiceCheckedAt < PROJECT_SERVICE_POSITIVE_TTL_MS) {
+      return Promise.resolve(true);
+    }
+    if (projectServiceAvailable()) projectServiceState = "unknown";
+    if (projectServiceState === "unavailable" && Date.now() - projectServiceCheckedAt < 60000) {
+      return Promise.resolve(false);
+    }
+    if (projectServiceProbe) return projectServiceProbe;
+    projectServiceProbe = serviceGet("/v1/health", timeout)
+      .then((result) => {
+        if (result && result.ok) markProjectServiceAvailable();
+        else markProjectServiceUnavailable();
+        return projectServiceAvailable();
+      })
+      .catch(() => {
+        markProjectServiceUnavailable();
+        return false;
+      })
+      .finally(() => { projectServiceProbe = null; });
+    return projectServiceProbe;
   }
 
   // Never surface a provider's response body: it is JSON, it is long, and on a
@@ -268,56 +458,44 @@ Evidence rules:
   // a partial `"pothole_cav` must never become a decision. The same semantic helper is
   // used for the streamed and final paths so the UI cannot announce a result that the
   // pipeline later reverses.
-  const REPORTABLE_RE = /"reportable"\s*:\s*(true|false)/;
-  const ASSESSMENT_RE = /"assessment"\s*:\s*"(clear|probable|uncertain|absent)"/;
-  const QUALITY_RE = /"image_quality"\s*:\s*"(usable|degraded|unusable)"/;
-  const DAMAGE_RE = /"damage_type"\s*:\s*"(pothole_cavity|failed_patch|surface_breakup|rut_or_depression|other_road_damage|none)"/;
+  const QUALITY_RE = /"image_quality"\s*:\s*"(acceptable|rejected)"/;
+  const ASSESSMENT_RE = /"assessment"\s*:\s*"(damaged|undamaged)"/;
+  const DAMAGE_RE = /"damage_type"\s*:\s*(null|"(?:pothole_cavity|failed_patch|surface_breakup|rut_or_depression|other_road_damage)")/;
+  const SIZE_RE = /"size"\s*:\s*(null|"(?:small|medium|large)")/;
+  const schemaStrings = (field) => new Set(
+    ASSESS_SCHEMA.properties[field].enum.filter((value) => typeof value === "string"));
+  const DAMAGE_TYPES = schemaStrings("damage_type");
+  const SIZES = schemaStrings("size");
 
   function decisionFor(a) {
-    if (!a || a.reportable !== true || a.damage_type === "none" || !a.on_drivable_surface) return "reject";
-    if (a.assessment === "absent") return "reject";
-    if (a.image_quality === "unusable" || a.assessment === "uncertain" ||
-        a.temporal_consistency === "inconsistent") return "review";
-    if (a.assessment !== "clear" && a.assessment !== "probable") return "review";
-    // Structural damage needs at least one visible physical cue. Failed patches and
-    // broad surface breakup do not need a cavity-shaped rim, but they do need either a
-    // broken edge or actual material/depth loss.
-    if (!a.has_broken_edge_or_rim && !a.has_depth_or_surface_loss) return "review";
-    return "accept";
+    if (!a || a.image_quality !== "acceptable") return "review";
+    const hasDamageType = DAMAGE_TYPES.has(a.damage_type);
+    const validSize = a.size === null || SIZES.has(a.size);
+    if (a.assessment === "damaged") {
+      return hasDamageType && validSize ? "accept" : "review";
+    }
+    if (a.assessment === "undamaged") {
+      // Non-null damage details contradict an undamaged result.
+      if (a.damage_type !== null || a.size !== null) return "review";
+      return "reject";
+    }
+    return "review";
   }
 
   function partialAssessment(text) {
-    const r = REPORTABLE_RE.exec(text);
-    if (!r) return null;
-    if (r[1] === "false") return {
-      reportable: false, assessment: "absent", image_quality: "usable", damage_type: "none",
-      on_drivable_surface: false, has_broken_edge_or_rim: false,
-      has_depth_or_surface_loss: false, temporal_consistency: "not_applicable",
-    };
-    const a = ASSESSMENT_RE.exec(text), q = QUALITY_RE.exec(text), d = DAMAGE_RE.exec(text);
-    if (!a || !q || !d) return null;
+    const q = QUALITY_RE.exec(text), a = ASSESSMENT_RE.exec(text);
+    const d = DAMAGE_RE.exec(text), s = SIZE_RE.exec(text);
+    if (!a || !q || !d || !s) return null;
     return {
-      reportable: true, assessment: a[1], image_quality: q[1], damage_type: d[1],
-      // The later evidence fields are deliberately left unknown. peekVerdict only
-      // announces a positive once the complete semantic decision can be evaluated.
+      image_quality: q[1], assessment: a[1],
+      damage_type: d[1] === "null" ? null : d[1].slice(1, -1),
+      size: s[1] === "null" ? null : s[1].slice(1, -1),
     };
   }
 
   const peekVerdict = (partial) => {
     const a = partialAssessment(partial);
     if (!a) return null;
-    if (!a.reportable) return { accepted: false, review: false, damage_type: "none", assessment: "absent" };
-    const road = /"on_drivable_surface"\s*:\s*(true|false)/.exec(partial);
-    const edge = /"has_broken_edge_or_rim"\s*:\s*(true|false)/.exec(partial);
-    const depth = /"has_depth_or_surface_loss"\s*:\s*(true|false)/.exec(partial);
-    const temporal = /"temporal_consistency"\s*:\s*"(consistent|single_view|inconsistent|not_applicable)"/.exec(partial);
-    if (!road || !edge || !depth || !temporal) return null;
-    Object.assign(a, {
-      on_drivable_surface: road[1] === "true",
-      has_broken_edge_or_rim: edge[1] === "true",
-      has_depth_or_surface_loss: depth[1] === "true",
-      temporal_consistency: temporal[1],
-    });
     const decision = decisionFor(a);
     return { accepted: decision === "accept", review: decision === "review",
              damage_type: a.damage_type, assessment: a.assessment };
@@ -327,11 +505,10 @@ Evidence rules:
   // Debug/evaluation calls do not enable cancellation because they need the exact full
   // verdict, including the reason for a miss.
   const peekReject = (partial) => {
-    const r = REPORTABLE_RE.exec(partial);
-    if (!r) return false;
-    if (r[1] === "false") return true;
+    const quality = QUALITY_RE.exec(partial);
+    if (quality && quality[1] === "rejected") return true;
     const a = peekVerdict(partial);
-    return !!a && !a.accepted;
+    return !!a && !a.accepted && !a.review;
   };
 
   function drainSSE(chunk, state, onEarly, stopWhenRejected) {
@@ -360,7 +537,9 @@ Evidence rules:
     if (!S.key) throw new Error("OpenAI API key missing. Tap the gear icon and paste it.");
     const res = await fetchWithTimeout(OAI_URL, {
       method: "POST", headers: authHeaders(),
-      body: JSON.stringify(withSpeedDefaults({ ...body, stream: true })),
+      body: JSON.stringify(withSpeedDefaults({
+        ...body, stream: RUNTIME_CONFIG.personalDetectionStream,
+      })),
     });
     if (!res.ok) throw await statusError(res);
 
@@ -391,31 +570,24 @@ Evidence rules:
     return JSON.parse(state.text);
   }
 
-  // Reconstructed from the closed fields that arrived before Drive Mode cancelled the
-  // remaining description. It deliberately has the complete new schema shape.
+  // Reconstructed after the streamed fields prove an acceptable, undamaged image. The
+  // remaining nullable fields have only one schema-consistent value for that verdict.
   function rejectedVerdict(text) {
-    const r = REPORTABLE_RE.exec(text), a = ASSESSMENT_RE.exec(text), q = QUALITY_RE.exec(text), d = DAMAGE_RE.exec(text);
-    const road = /"on_drivable_surface"\s*:\s*(true|false)/.exec(text);
-    const edge = /"has_broken_edge_or_rim"\s*:\s*(true|false)/.exec(text);
-    const depth = /"has_depth_or_surface_loss"\s*:\s*(true|false)/.exec(text);
-    const temporal = /"temporal_consistency"\s*:\s*"(consistent|single_view|inconsistent|not_applicable)"/.exec(text);
+    const a = ASSESSMENT_RE.exec(text), q = QUALITY_RE.exec(text);
+    const d = DAMAGE_RE.exec(text), s = SIZE_RE.exec(text);
     return {
-      reportable: !!r && r[1] === "true",
-      assessment: a ? a[1] : "absent",
-      image_quality: q ? q[1] : "usable",
-      damage_type: d ? d[1] : "none",
-      on_drivable_surface: !!road && road[1] === "true",
-      has_broken_edge_or_rim: !!edge && edge[1] === "true",
-      has_depth_or_surface_loss: !!depth && depth[1] === "true",
-      temporal_consistency: temporal ? temporal[1] : "not_applicable",
-      size: null,
+      image_quality: q ? q[1] : "acceptable",
+      assessment: a ? a[1] : "undamaged",
+      damage_type: d && d[1] !== "null" ? d[1].slice(1, -1) : null,
+      size: s && s[1] !== "null" ? s[1].slice(1, -1) : null,
       description: "",
     };
   }
 
   const fmt = (name, schema) => ({
-    format: { type: "json_schema", name, schema, strict: true },
-    verbosity: "low",
+    format: { type: "json_schema", name, schema,
+      strict: RUNTIME_CONFIG.strictStructuredOutputs },
+    verbosity: RUNTIME_CONFIG.textVerbosity,
   });
   const progress = (m) => { try { window.dispatchEvent(new CustomEvent("pipeline-progress", { detail: m })); } catch (e) {} };
   const emitVerdict = (v) => { try { window.dispatchEvent(new CustomEvent("pipeline-verdict", { detail: v })); } catch (e) {} };
@@ -423,37 +595,79 @@ Evidence rules:
   function buildDetectionRequest(imageInputs, prompt, model = S.model, detail = S.detail) {
     const selectedModel = normaliseModel(model);
     const selectedDetail = normaliseDetail(detail, selectedModel);
-    const images = (Array.isArray(imageInputs) ? imageInputs : [imageInputs])
-      .filter((x) => x && (typeof x === "string" ? x : x.url))
-      .slice(0, MAX_DETECTION_IMAGES);
-    if (!images.length) throw new Error("No usable image supplied for detection.");
-    const content = [];
-    for (let i = 0; i < images.length; i++) {
-      const item = typeof images[i] === "string" ? { url: images[i] } : images[i];
-      content.push({ type: "input_image", image_url: item.url,
-                     detail: normaliseDetail(item.detail || selectedDetail, selectedModel) });
-    }
-    // The prompt appears exactly once and follows the ordered evidence views.
-    content.push({ type: "input_text", text: `${prompt}\n\nThe ${images.length} supplied image(s) are ordered exactly as labelled by the capture pipeline.` });
+    const supplied = (Array.isArray(imageInputs) ? imageInputs : [imageInputs])
+      .find((x) => x && (typeof x === "string" ? x : x.url));
+    if (!supplied) throw new Error("No usable image supplied for detection.");
+    const image = typeof supplied === "string" ? { url: supplied } : supplied;
+    const content = [
+      { type: "input_image", image_url: image.url,
+        detail: normaliseDetail(image.detail || selectedDetail, selectedModel) },
+      { type: "input_text", text: prompt },
+    ];
     return {
       model: selectedModel,
-      input: [{ role: "user", content }],
-      text: fmt("road_damage_assessment", ASSESS_SCHEMA),
+      input: [{ role: DETECTION_PROMPT_CONFIG.role, content }],
+      text: fmt(DETECTION_PROMPT_CONFIG.schemaName, ASSESS_SCHEMA),
     };
   }
 
+  async function analyzeViaService(imageInputs, model, detail, captureMode, idempotencyKey) {
+    const selectedModel = normaliseModel(model);
+    const selectedDetail = normaliseDetail(detail, selectedModel);
+    const supplied = (Array.isArray(imageInputs) ? imageInputs : [imageInputs])
+      .find((item) => item && (typeof item === "string" ? item : item.url));
+    if (!supplied) throw new Error("No usable image supplied for detection.");
+    const images = [{
+      data_url: typeof supplied === "string" ? supplied : supplied.url,
+    }];
+    const payload = await signedServicePost("/v1/vision/detect", {
+      images,
+      capture_mode: captureMode === "drive" ? "drive" : "manual",
+      language: LANG(),
+      model: selectedModel,
+      image_detail: selectedDetail,
+      prompt_version: PROMPT_VERSION,
+    }, {
+      idempotencyKey: idempotencyKey || randomId(),
+      fallback: "The shared vision service could not check that image.",
+      timeout: SHARED_VISION_TIMEOUT_MS,
+    });
+    // Never manufacture a negative verdict from an error or malformed success. A full
+    // Complete schema output is required before the normal local decision gate can run.
+    for (const field of ASSESS_SCHEMA.required) {
+      if (!Object.prototype.hasOwnProperty.call(payload, field)) {
+        const err = new Error("The shared vision service returned an incomplete result. Try again.");
+        err.sharedService = true;
+        throw err;
+      }
+    }
+    return payload;
+  }
+
   let streamBroken = false;
-  async function analyzeImage(imageInputs, prompt, name, schema, model, onEarly, stopWhenRejected, detail) {
-    const body = (schema === ASSESS_SCHEMA)
-      ? buildDetectionRequest(imageInputs, prompt, model, detail)
-      : {
-          model,
-          input: [{ role: "user", content: [
-            { type: "input_image", image_url: Array.isArray(imageInputs) ? imageInputs[0] : imageInputs },
-            { type: "input_text", text: prompt },
-          ] }],
-          text: fmt(name, schema),
-        };
+  async function analyzeImage(imageInputs, prompt, name, schema, model, onEarly, stopWhenRejected, detail,
+                              captureMode = "manual", idempotencyKey = null) {
+    if (schema === ASSESS_SCHEMA) {
+      if (usingSharedVision()) {
+        return analyzeViaService(imageInputs, model, detail, captureMode, idempotencyKey);
+      }
+      // Personal-key images and verdicts stay between this device and OpenAI. This small,
+      // signed counter lets the project measure usage even when no pothole is accepted.
+      // It intentionally runs in parallel and cannot change or delay the vision verdict.
+      void probeProjectService().then((available) => {
+        if (!available) return;
+        return signedServicePost("/v1/activity", {
+          event: "vision_check",
+          vision_provider: "personal_openai",
+          capture_mode: captureMode === "drive" ? "drive" : "manual",
+        }, {
+          idempotencyKey: randomId(), timeout: 15000,
+          fallback: "The anonymous activity count could not be recorded.",
+        });
+      }).catch(() => {});
+    }
+    if (schema !== ASSESS_SCHEMA) throw new Error("Unsupported vision request.");
+    const body = buildDetectionRequest(imageInputs, prompt, model, detail);
     if ((!onEarly && !stopWhenRejected) || streamBroken) return oai(body);
     try {
       return await oaiStream(body, onEarly, stopWhenRejected);
@@ -483,10 +697,10 @@ Evidence rules:
   // One warm TLS connection ahead of the first real call. Costs no tokens.
   let warmedAt = 0;
   async function prewarm() {
-    if (!S.key || Date.now() - warmedAt < 60000) return;
+    if (usingSharedVision() || !S.key || Date.now() - warmedAt < 60000) return;
     warmedAt = Date.now();
     try {
-      await fetch("https://api.openai.com/v1/models?limit=1", { headers: authHeaders() });
+      await fetch(RUNTIME_CONFIG.modelsUrl, { headers: authHeaders() });
     } catch (e) {}
   }
 
@@ -654,6 +868,26 @@ Evidence rules:
     return [`${title}, ${entry.name}${entry.short ? ` (${entry.short})` : ""}`, entry.email, null];
   }
 
+  function unroutedComplaintMessage(reason) {
+    return {
+      no_location: "This report has no location, so there is no way to tell which office is responsible. Retake it with location switched on.",
+      road_class_unknown: "The app could not check whether this road is a national highway, and it will not name a city officer for a road that may not be theirs. Try again when you have a signal.",
+      national_highway: "This stretch is a national highway. It is maintained by NHAI or the state PWD National Highways division, not by the city or town body, so there is no municipal officer to address.",
+      rural_road: "This road is outside every town boundary, so it belongs to the state PWD or a panchayat rather than a city body. The app will not guess an office.",
+      no_address_for_body: "This town's body is known, but no official email address for it has been published, so there is no verified recipient to address.",
+      outside_area: "This road damage is outside Karnataka, which is the area this app covers, so there is no authority to address.",
+    }[reason] || "This report could not be routed to a responsible office, so there is no verified email recipient.";
+  }
+
+  function complaintRouteError(reason, body, details = {}) {
+    const error = new Error(unroutedComplaintMessage(reason));
+    error.code = "complaint_unrouted";
+    error.unroutedReason = reason;
+    error.unroutedBody = body || null;
+    Object.assign(error, details);
+    return error;
+  }
+
   function distMeters(lat1, lng1, lat2, lng2) {
     const rad = Math.PI / 180;
     const dLat = (lat2 - lat1) * rad, dLng = (lng2 - lng1) * rad;
@@ -662,7 +896,8 @@ Evidence rules:
   }
 
   const finiteCoord = (v) => typeof v === "number" && Number.isFinite(v);
-  const acceptedReport = (r) => !!r && (r.decision === "accept" || ACCEPTED_REPORT_STATUSES.has(r.status));
+  const acceptedReport = (r) => !!r
+    && (r.decision === "accept" || ACCEPTED_REPORT_STATUSES.has(r.status));
   const storedDamageType = (r) => r && (r.damage_type || (r.is_pothole ? "pothole_cavity" : null));
   const localDamageFamily = new Set(["pothole_cavity", "failed_patch"]);
   const compatibleDamage = (a, b) => {
@@ -909,10 +1144,68 @@ Evidence rules:
     };
     scored.sort((a, b) =>
       (b.score - a.score) || (stamp(b.t) - stamp(a.t)) || String(a.t.tn).localeCompare(String(b.t.tn)));
-    return scored.slice(0, 25).map((x) => ({ score: x.score, tn: x.t.tn, t: x.t }));
+    return scored.slice(0, TENDER_CONFIG.maxCandidates)
+      .map((x) => ({ score: x.score, tn: x.t.tn, t: x.t }));
   }
 
-  async function matchTender(address, lgd) {
+  const centralResolutionCache = new Map();
+  const centralResolutionKey = (lat, lng) => `${Number(lat).toFixed(6)},${Number(lng).toFixed(6)}`;
+  const centralResolutionAt = (lat, lng) => finiteCoord(lat) && finiteCoord(lng)
+    ? centralResolutionCache.get(centralResolutionKey(lat, lng)) || null : null;
+
+  async function tenderFromService(lat, lng, address, lgd, clientObservationId) {
+    if (!finiteCoord(lat) || !finiteCoord(lng)) return { reached: false, tender: null };
+    try {
+      const request = { lat, lng };
+      if (address) request.address_hint = address;
+      if (lgd) request.lgd_hint = String(lgd);
+      // Terminal resolutions are cached by the service, while a retryable 503 is not.
+      // Scope the stable retry key to this observation: a future report at identical
+      // coordinates must still be able to receive newer tender data.
+      const logicalOperation = String(clientObservationId || randomId());
+      const tenderIdempotencyKey = `tender-${await sha256HexText(logicalOperation)}`;
+      const result = await signedServicePost("/v1/tenders/resolve", request,
+        { idempotencyKey: tenderIdempotencyKey,
+          fallback: "The central tender service is unavailable." });
+      centralResolutionCache.set(centralResolutionKey(lat, lng), {
+        jurisdiction: result.jurisdiction || null,
+        request_id: result.request_id || null,
+        reason: result.reason || null,
+      });
+      if (!result.tender) return { reached: true, tender: null, reason: result.reason || null,
+                                   jurisdiction: result.jurisdiction || null };
+      const t = result.tender;
+      const inferredWarranty = warrantyFor(t.published);
+      return {
+        reached: true,
+        jurisdiction: result.jurisdiction || null,
+        tender: {
+          tender_number: t.tender_number,
+          contractor: t.contractor || null,
+          title: t.title || "",
+          published: t.published || "",
+          warranty: inferredWarranty.warranty,
+          warranty_code: inferredWarranty.warranty_code,
+          confidence: t.confidence,
+          match_method: t.match_method || "model_adjudicated",
+          note: t.contractor
+            ? `Probable contract: ${t.tender_number}, ${t.contractor}, published ${t.published || "date unavailable"}`
+            : `Probable contract: ${t.tender_number}, contractor not listed, published ${t.published || "date unavailable"}`,
+        },
+      };
+    } catch (error) {
+      return { reached: false, tender: null, error };
+    }
+  }
+
+  async function matchTender(address, lgd, lat, lng, clientObservationId) {
+    // Shared mode uses the central resolver. Personal standalone mode keeps the
+    // body-scoped local matcher so email preparation does not depend on that server.
+    if (usingSharedVision() && finiteCoord(lat) && finiteCoord(lng)) {
+      const central = await tenderFromService(lat, lng, address, lgd, clientObservationId);
+      if (central.reached) return central.tender;
+      if (usingSharedVision()) return null;
+    }
     if (!address || !S.key || !lgd) return null;
     // Only this body's own contracts are candidates. That is what makes naming one safe:
     // the officer receiving the letter awarded the work. It also rules out a contract from
@@ -921,36 +1214,16 @@ Evidence rules:
     const ranked = await shortlistFor(address, lgd);
     if (!ranked.length) return null;
     const candidates = ranked.map((x) => x.t);
-    const listing = candidates.map((t, i) =>
-      `${i}: ${t.t.slice(0, 150)} | ${t.loc} | contractor: ${t.c || "not named"} | published: ${t.d}`).join("\n");
-    const prompt = `You match a reported road defect's location to road-work contracts awarded by the
-local body that owns this road. Every candidate below was awarded by that same body, so
-the town is already correct and your only job is whether the work covers this stretch.
-The road defect's reverse-geocoded address is:
-${address}
-
-Candidate contracts (index: work description | division | contractor | published):
-${listing}
-
-Pick the single contract whose work description covers this exact road stretch or
-its immediate locality (same layout, ward or named road). Road names repeat across
-localities within a town, so the locality or ward context must agree, not just the
-road name. A ward-wide maintenance or pothole-filling contract for the pothole's own
-locality or ward is a valid match. A ward-wide maintenance or pothole-filling contract for the pothole's
-own layout or ward is a valid match. If no candidate clearly covers this location,
-match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     let m;
     try {
       // Minimal effort suits a verdict on one photo. Picking one contract out of 25
       // near-identical road-works descriptions is the opposite job, and it names a
       // real contractor in a complaint, so this call keeps room to think.
-      m = await oai({
-        model: DEFAULT_MODEL, input: prompt,
-        reasoning: { effort: "medium" },
-        text: fmt("tender_match", TENDER_SCHEMA),
-      });
+      m = await oai(buildTenderMatchRequest(address, candidates));
     } catch (e) { return null; }
-    if (!m || m.match_index === null || m.match_index < 0 || m.match_index >= candidates.length || m.confidence < 0.6) return null;
+    if (!m || m.match_index === null || m.match_index < 0
+        || m.match_index >= candidates.length
+        || m.confidence < TENDER_CONFIG.minimumConfidence) return null;
     const t = candidates[m.match_index];
     const { warranty, warranty_code } = warrantyFor(t.d);
     // Records without a winner are common in this dataset. Naming nobody is correct;
@@ -964,16 +1237,44 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     };
   }
 
+  function buildTenderMatchRequest(address, candidates) {
+    const limits = TENDER_CONFIG.stringLimits;
+    const data = {
+      reverse_geocoded_address: String(address || "").slice(0, limits.address),
+      candidates: (Array.isArray(candidates) ? candidates : [])
+        .slice(0, TENDER_CONFIG.maxCandidates).map((t, index) => ({
+        match_index: index,
+        work_description: String(t && t.t || "").slice(0, limits.workDescription),
+        division_or_location: String(t && t.loc || "").slice(0, limits.divisionOrLocation),
+        contractor: String(t && t.c || "not named").slice(0, limits.contractor),
+        published: String(t && t.d || "").slice(0, limits.published),
+      })),
+    };
+    const envelope = `${TENDER_PROMPT_CONFIG.dataEnvelope.begin}\n${JSON.stringify(data)}\n${TENDER_PROMPT_CONFIG.dataEnvelope.end}`;
+    return {
+      model: TENDER_CONFIG.model,
+      instructions: TENDER_MATCH_INSTRUCTIONS,
+      input: [{
+        role: TENDER_PROMPT_CONFIG.dataRole,
+        content: [{ type: "input_text", text: envelope }],
+      }],
+      reasoning: { effort: TENDER_CONFIG.reasoningEffort },
+      text: fmt(TENDER_PROMPT_CONFIG.schemaName, TENDER_SCHEMA),
+    };
+  }
+
   // ---------- drafting (English / Kannada) ----------
   function damageTypeOf(value) {
     if (value && value.damage_type) return value.damage_type;
-    return value && value.is_pothole ? "pothole_cavity" : "none";
+    return value && value.is_pothole ? "pothole_cavity" : null;
   }
 
   function assessmentOf(value) {
-    if (value && value.assessment) return value.assessment;
-    if (value && value.is_pothole) return "clear";
-    return "absent";
+    const assessment = value && value.assessment;
+    if (assessment === "damaged" || assessment === "undamaged") return assessment;
+    if (assessment === "clear" || assessment === "probable") return "damaged";
+    if (assessment === "absent") return "undamaged";
+    return value && (value.decision === "accept" || value.is_pothole) ? "damaged" : "undamaged";
   }
 
   function draftEmail(a, lat, lng, address, officerName, tender) {
@@ -1013,37 +1314,36 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
           : type === "rut_or_depression" ? "Road depression complaint"
           : "Road damage complaint"}` + (road ? ` near ${road}` : "");
 
-    // The AI's own description of the photo used to be pasted in as a "Details:" line.
-    // The photo is attached and the officer can see it, so the sentence added length
-    // without adding information. Same reasoning for dropping the mention of filing on
-    // Sahaaya: an officer reading this does not need to be told about a parallel filing.
+    const observedDetails = String(a.description || "").replace(/\s+/g, " ").trim().slice(0, 500);
     const paras = kn
       ? [
           `ಮಾನ್ಯ ${officerName || "ಅಧಿಕಾರಿಗಳೇ"} ಅವರಿಗೆ,`,
           `ದುರಸ್ತಿ ಅಗತ್ಯವಿರುವ ${typeName} ಬಗ್ಗೆ ದೂರು ಸಲ್ಲಿಸುತ್ತಿದ್ದೇನೆ.`,
-          `${locLines}\nಹಾನಿಯ ಪ್ರಕಾರ: ${typeName}${a.size ? `\nಅಂದಾಜು ಗಾತ್ರ: ${size}` : ""}`,
-          "ಫೋಟೋ ಲಗತ್ತಿಸಲಾಗಿದೆ. ಈ ರಸ್ತೆ ಹಾನಿ ದ್ವಿಚಕ್ರ ವಾಹನ ಸವಾರರಿಗೆ ಮತ್ತು ಇತರ ರಸ್ತೆ ಬಳಕೆದಾರರಿಗೆ ಅಪಾಯಕಾರಿ. ಇದನ್ನು ಶೀಘ್ರ ಪರಿಶೀಲಿಸಿ ದುರಸ್ತಿ ಮಾಡಬೇಕೆಂದು, ಮತ್ತು ಈ ರಸ್ತೆ ಭಾಗ ನಿರ್ವಹಣಾ ವಾರಂಟಿ ಅಡಿಯಲ್ಲಿದ್ದರೆ ಜವಾಬ್ದಾರ ಗುತ್ತಿಗೆದಾರರಿಗೆ ವರ್ಗಾಯಿಸಬೇಕೆಂದು ವಿನಂತಿಸುತ್ತೇನೆ.",
+          `${locLines}\nಹಾನಿಯ ಪ್ರಕಾರ: ${typeName}${a.size ? `\nಅಂದಾಜು ಗಾತ್ರ: ${size}` : ""}${observedDetails ? `\nಗಮನಿಸಿದ ವಿವರಗಳು: ${observedDetails}` : ""}`,
+          "ಫೋಟೋ ಲಗತ್ತಿಸಲಾಗಿದೆ. ಈ ರಸ್ತೆ ಹಾನಿ ದ್ವಿಚಕ್ರ ವಾಹನ ಸವಾರರಿಗೆ ಮತ್ತು ಇತರ ರಸ್ತೆ ಬಳಕೆದಾರರಿಗೆ ಅಪಾಯಕಾರಿ. ಇದನ್ನು ಶೀಘ್ರ ಪರಿಶೀಲಿಸಿ ದುರಸ್ತಿ ಮಾಡಬೇಕೆಂದು ವಿನಂತಿಸುತ್ತೇನೆ.",
         ]
       : [
           `Dear ${officerName || "Sir or Madam"},`,
           `I would like to report a ${typeName} that needs repair.`,
-          `${locLines}\nDamage type: ${typeName}${a.size ? `\nApproximate size: ${size}` : ""}`,
-          "PFA image. This road damage poses a danger to two wheeler riders and other road users. I request your office to inspect and repair it at the earliest, and to route it to the contractor responsible if this road section is still under a maintenance warranty.",
+          `${locLines}\nDamage type: ${typeName}${a.size ? `\nApproximate size: ${size}` : ""}${observedDetails ? `\nObserved details: ${observedDetails}` : ""}`,
+          "PFA image. This road damage poses a danger to two wheeler riders and other road users. I request your office to inspect and repair it at the earliest.",
         ];
 
-    if (tender) {
+    const tenderNumber = String(tender && tender.tender_number || "").trim();
+    if (tenderNumber) {
       const warrantyKn = ({ dlp: "ದೋಷ ಹೊಣೆಗಾರಿಕೆ ಅವಧಿಯಲ್ಲಿ ಇನ್ನೂ ಇರುವ ಸಾಧ್ಯತೆ ಇದೆ",
                             maint: "ನಿರ್ವಹಣಾ ಅವಧಿಯಲ್ಲಿ ಇನ್ನೂ ಇರುವ ಸಾಧ್ಯತೆ ಇದೆ",
                             record: "ಈ ಭಾಗದ ದಾಖಲೆಯಲ್ಲಿದೆ" })[tender.warranty_code || "record"];
-      const title = tender.title.slice(0, 140).trim();
+      const title = String(tender.title || "").slice(0, 140).trim();
+      const published = String(tender.published || "").trim();
       // Two paragraphs, not one: the first states what the records say, the second makes
       // the request. Published, never "awarded": the bundled field is the publication
       // date, and this letter names a real company to a government officer.
       if (kn) {
-        paras.push(`ಸಾರ್ವಜನಿಕ ಖರೀದಿ ದಾಖಲೆಗಳ ಪ್ರಕಾರ ಈ ರಸ್ತೆ ಭಾಗ ಟೆಂಡರ್ ${tender.tender_number} ("${title}") ಅಡಿಯಲ್ಲಿ ಬರುವ ಸಾಧ್ಯತೆ ಇದೆ. ಇದು ${tender.published} ರಂದು ಪ್ರಕಟವಾಗಿದೆ${tender.contractor ? `, ಗೆದ್ದ ಬಿಡ್‌ದಾರರಾಗಿ ${tender.contractor} ಎಂದು ದಾಖಲಾಗಿದೆ` : ", ಗೆದ್ದ ಬಿಡ್‌ದಾರರ ಹೆಸರು ದಾಖಲೆಯಲ್ಲಿ ಇಲ್ಲ"}, ಮತ್ತು ${warrantyKn}.`);
+        paras.push(`ಸಾರ್ವಜನಿಕ ಖರೀದಿ ದಾಖಲೆಗಳ ಪ್ರಕಾರ ಈ ರಸ್ತೆ ಭಾಗ ಟೆಂಡರ್ ${tenderNumber}${title ? ` ("${title}")` : ""} ಅಡಿಯಲ್ಲಿ ಬರುವ ಸಾಧ್ಯತೆ ಇದೆ.${published ? ` ಇದು ${published} ರಂದು ಪ್ರಕಟವಾಗಿದೆ` : ""}${tender.contractor ? `${published ? "," : ""} ಗೆದ್ದ ಬಿಡ್‌ದಾರರಾಗಿ ${tender.contractor} ಎಂದು ದಾಖಲಾಗಿದೆ` : ""}, ಮತ್ತು ${warrantyKn}.`);
         paras.push("ದೋಷ ಹೊಣೆಗಾರಿಕೆ ಅಥವಾ ನಿರ್ವಹಣಾ ಅವಧಿ ಜಾರಿಯಲ್ಲಿದ್ದರೆ, ಸಂಸ್ಥೆಗೆ ಹೆಚ್ಚುವರಿ ವೆಚ್ಚವಿಲ್ಲದೆ ಗುತ್ತಿಗೆದಾರರಿಂದಲೇ ದುರಸ್ತಿ ಮಾಡಿಸಬೇಕೆಂದು ವಿನಂತಿಸುತ್ತೇನೆ. ಇದು ಸಂಭಾವ್ಯ ದಾಖಲೆ ಹೊಂದಾಣಿಕೆ; ದಯವಿಟ್ಟು ಟೆಂಡರ್ ದಾಖಲೆಗಳೊಂದಿಗೆ ಪರಿಶೀಲಿಸಿ.");
       } else {
-        paras.push(`Public procurement records indicate this road stretch probably falls under tender ${tender.tender_number} ("${title}"), published on ${tender.published}${tender.contractor ? `, with ${tender.contractor} recorded as the winning bidder` : ", with no winning bidder recorded"}, and it may still be ${tender.warranty}.`);
+        paras.push(`Public procurement records indicate this road stretch probably falls under tender ${tenderNumber}${title ? ` ("${title}")` : ""}${published ? `, published on ${published}` : ""}${tender.contractor ? `, with ${tender.contractor} recorded as the winning bidder` : ""}, and it may still be ${tender.warranty || "recorded for this stretch"}.`);
         paras.push("If the defect liability or maintenance period is in force, I request that the repair be carried out by the contractor at no additional cost to the corporation. This is a probable record match; kindly verify against the tender documents.");
       }
     }
@@ -1058,7 +1358,7 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
   function idb() {
     return new Promise((resolve, reject) => {
       if (_db) return resolve(_db);
-      const req = indexedDB.open("potholes", 5);
+      const req = indexedDB.open("potholes", 7);
       req.onupgradeneeded = () => {
         const d = req.result;
         const reports = d.objectStoreNames.contains("reports")
@@ -1084,6 +1384,18 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
         if (!d.objectStoreNames.contains("footage")) {
           const f = d.createObjectStore("footage", { keyPath: "key" });
           f.createIndex("by_drive", "drive_id");
+        }
+        if (!d.objectStoreNames.contains("identity")) {
+          d.createObjectStore("identity", { keyPath: "key" });
+        }
+        // Only the small central observation body is queued--never a photo, complaint,
+        // name, or API key. The observation ID is both its key and the server's stable
+        // idempotency key, so reconnecting cannot create a second sighting.
+        const centralOutbox = d.objectStoreNames.contains("central_outbox")
+          ? req.transaction.objectStore("central_outbox")
+          : d.createObjectStore("central_outbox", { keyPath: "client_observation_id" });
+        if (!centralOutbox.indexNames.contains("by_report")) {
+          centralOutbox.createIndex("by_report", "report_id");
         }
       };
       req.onsuccess = () => { _db = req.result; resolve(_db); };
@@ -1127,7 +1439,8 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
   const getReport = (id) => op("readonly", (s) => s.get(Number(id)));
   const putReport = (r) => op("readwrite", (s) => s.put(r));
   const addReport = (r) => op("readwrite", (s) => s.add(r));
-  const delReport = (id) => op("readwrite", (s) => s.delete(Number(id)));
+  const allCentralOutbox = () => op("readonly", (s) => s.getAll(), "central_outbox");
+  const delCentralOutbox = (id) => op("readwrite", (s) => s.delete(String(id)), "central_outbox");
   const allDrives = () => op("readonly", (s) => s.getAll(), "drives");
   const getDrive = (id) => op("readonly", (s) => s.get(String(id)), "drives");
   const putFootage = (seg) => op("readwrite", (s) => s.put(seg), "footage");
@@ -1139,15 +1452,28 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
   // lets two nearby jobs both observe "none" and both write. Keep the final check and
   // insert in one read-write transaction; IndexedDB serialises these transactions on the
   // reports store, so exactly one concurrent detection becomes the saved event.
-  function addReportUnlessDuplicate(rec, dedupe) {
-    if (!dedupe) return addReport(rec).then((id) => ({ id, duplicate: null }));
+  function addReportUnlessDuplicate(rec, dedupe, centralOutboxRow = null) {
     return idb().then((d) => new Promise((resolve, reject) => {
-      const tx = d.transaction("reports", "readwrite");
+      const tx = d.transaction(centralOutboxRow
+        ? ["reports", "central_outbox"] : ["reports"], "readwrite");
       const store = tx.objectStore("reports");
+      const outbox = centralOutboxRow ? tx.objectStore("central_outbox") : null;
       let result = null, failure = null;
+      const queueCentral = (reportId, mergedIntoExisting) => {
+        if (!outbox) return;
+        const queued = outbox.put({
+          ...centralOutboxRow,
+          report_id: Number(reportId),
+          merged_into_existing: !!mergedIntoExisting,
+        });
+        queued.onerror = () => { failure = queued.error; };
+      };
       const addNew = () => {
         const add = store.add(rec);
-        add.onsuccess = () => { result = { id: add.result, duplicate: null }; };
+        add.onsuccess = () => {
+          result = { id: add.result, duplicate: null };
+          queueCentral(add.result, false);
+        };
         add.onerror = () => { failure = add.error; };
       };
       const scan = (request, next) => {
@@ -1190,8 +1516,16 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
               seen_count: exactReplay ? (prior.seen_count || 1) : (prior.seen_count || 1) + 1,
               last_seen_at: Math.max(eventTime(prior) || 0, eventTime(rec) || 0),
             };
+            if (centralOutboxRow) {
+              updated.central_sync_pending = true;
+              updated.server_sync_error = rec.server_sync_error || updated.server_sync_error || null;
+              updated.server_request_id = rec.server_request_id || updated.server_request_id || null;
+            }
             const write = cursor.update(updated);
-            write.onsuccess = () => { result = { id: null, duplicate: updated, match: match.kind }; };
+            write.onsuccess = () => {
+              result = { id: null, duplicate: updated, match: match.kind };
+              queueCentral(prior.id, true);
+            };
             write.onerror = () => { failure = write.error; };
             return;
           }
@@ -1206,7 +1540,8 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
           IDBKeyRange.bound(rec.lat - latitudeBand, rec.lat + latitudeBand)), addNew);
       };
       try {
-        if (rec.drive_id != null) {
+        if (!dedupe) addNew();
+        else if (rec.drive_id != null) {
           const driveKey = String(rec.drive_id);
           const scanOriginalDrive = () => scan(
             store.index("by_drive").openCursor(IDBKeyRange.only(driveKey)), scanLocation);
@@ -1224,6 +1559,29 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     }));
   }
 
+  // Delete the evidence and every not-yet-delivered central observation that belongs to
+  // it in one transaction. A reconnect racing this action can finish before it or after
+  // it, but it cannot resurrect a report the user deleted.
+  function deleteReportAndCentralOutbox(id) {
+    const reportId = Number(id);
+    return idb().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction(["reports", "central_outbox"], "readwrite");
+      tx.objectStore("reports").delete(reportId);
+      const cursorRequest = tx.objectStore("central_outbox").index("by_report")
+        .openCursor(IDBKeyRange.only(reportId));
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (!cursor) return;
+        cursor.delete();
+        cursor.continue();
+      };
+      tx.oncomplete = () => resolve();
+      const died = () => reject(storageError(tx.error));
+      tx.onabort = died;
+      tx.onerror = () => {};
+    }));
+  }
+
   // Photos are stored as blobs, not base64. Measured on a device with a hundred 1024px
   // thumbnails: reading them back took 177 ms as base64 strings and 3 ms as blobs, writing
   // took 253 ms against 90 ms, and each one is 88 KB as text against 66 KB binary. Every
@@ -1236,6 +1594,24 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     if (!u || typeof u !== "string") return u || null;
     try { return await (await fetch(u)).blob(); } catch (e) { return u; }
   };
+  async function imageHash(dataUrl) {
+    const value = String(dataUrl || "");
+    const comma = value.indexOf(",");
+    if (comma < 0) return sha256HexText(value);
+    const meta = value.slice(0, comma);
+    const payload = value.slice(comma + 1);
+    try {
+      if (/;base64$/i.test(meta)) {
+        const binary = atob(payload);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return sha256HexBytes(bytes);
+      }
+      return sha256HexBytes(new TextEncoder().encode(decodeURIComponent(payload)));
+    } catch (_) {
+      return sha256HexText(value);
+    }
+  }
   const photoToBase64 = async (v) => {
     if (!v) return null;
     if (typeof v === "string") return v.split(",")[1];
@@ -1247,31 +1623,226 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     });
   };
 
-  const toDict = (r) => ({ ...r, photo_url: r.photo });
+  // Older builds used "sent" after merely opening the mail composer. Preserve those
+  // records, but never present that unverified state as successful delivery.
+  const publicEmailStatus = (status) => status === "sent" ? "queued" : status;
+  const toDict = (r) => ({ ...r, status: publicEmailStatus(r.status), photo_url: r.photo });
   // The list never renders the evidence copy, so it never receives it.
   const listDict = (r) => { const d = toDict(r); delete d.photo_full; return d; };
 
+  function applyCentralPothole(rec, response) {
+    const pothole = response && response.pothole;
+    if (!pothole || !pothole.id) return rec;
+    rec.server_pothole_id = String(pothole.id);
+    rec.server_request_id = response.request_id || rec.server_request_id || null;
+    rec.server_seen_count = Number.isFinite(pothole.seen_count) ? pothole.seen_count
+      : (rec.server_seen_count || null);
+    rec.seen_count = Math.max(rec.seen_count || 1, pothole.seen_count || 1);
+    rec.server_first_seen_at = pothole.first_seen_at || rec.server_first_seen_at || null;
+    rec.server_last_seen_at = pothole.last_seen_at || rec.server_last_seen_at || null;
+    rec.canonical_lat = finiteCoord(pothole.lat) ? pothole.lat : rec.canonical_lat;
+    rec.canonical_lng = finiteCoord(pothole.lng) ? pothole.lng : rec.canonical_lng;
+    rec.body_lgd = pothole.lgd || rec.body_lgd || null;
+    rec.body_name = pothole.town || rec.body_name || null;
+    return rec;
+  }
+
+  async function centralPotholeRequest(rec, workingDataUrl, detector) {
+    if (!finiteCoord(rec.lat) || !finiteCoord(rec.lng)) return null;
+    const resolution = centralResolutionAt(rec.lat, rec.lng);
+    const jurisdiction = resolution && resolution.jurisdiction;
+    const observedAt = Math.round((Number.isFinite(rec.captured_at)
+      ? rec.captured_at : rec.created_at) * 1000);
+    const request = {
+      client_observation_id: rec.client_observation_id,
+      observed_at: observedAt,
+      lat: rec.lat,
+      lng: rec.lng,
+      gps_accuracy_m: Number.isFinite(rec.gps_accuracy) ? rec.gps_accuracy : null,
+      heading_deg: Number.isFinite(rec.heading) ? rec.heading : null,
+      speed_mps: Number.isFinite(rec.speed_mps) ? rec.speed_mps : null,
+      damage_type: rec.damage_type,
+      size: rec.size || null,
+      image_hash: await imageHash(workingDataUrl),
+      detector: detector || {},
+    };
+    const lgd = jurisdiction && jurisdiction.lgd;
+    const town = jurisdiction && jurisdiction.town;
+    if (lgd) request.lgd_hint = String(lgd);
+    if (town) request.town_hint = String(town);
+    return request;
+  }
+
+  async function registerCentralPothole(request, exactBody) {
+    if (!request) return null;
+    return signedServicePost("/v1/potholes/report", request, {
+      idempotencyKey: request.client_observation_id,
+      exactBody,
+      fallback: "The pothole could not be added to the shared map.",
+    });
+  }
+
+  function recordCentralRetryFailure(queued, error) {
+    const key = String(queued.client_observation_id);
+    return idb().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction(["reports", "central_outbox"], "readwrite");
+      const reports = tx.objectStore("reports");
+      const outbox = tx.objectStore("central_outbox");
+      const getQueued = outbox.get(key);
+      getQueued.onsuccess = () => {
+        const current = getQueued.result;
+        // Deletion may have removed this operation while its network request was in
+        // flight. Never put an obsolete queue row (or its report) back.
+        if (!current) return;
+        current.attempt_count = (current.attempt_count || 0) + 1;
+        current.last_attempt_at = Date.now();
+        current.last_error = error && error.message || "Shared-map sync failed.";
+        current.last_request_id = error && error.requestId || null;
+        outbox.put(current);
+        const getReportRequest = reports.get(Number(current.report_id));
+        getReportRequest.onsuccess = () => {
+          const rec = getReportRequest.result;
+          if (!rec) return;
+          rec.central_sync_pending = true;
+          rec.server_sync_error = current.last_error;
+          rec.server_request_id = current.last_request_id || rec.server_request_id || null;
+          reports.put(rec);
+        };
+      };
+      tx.oncomplete = () => resolve();
+      const died = () => reject(storageError(tx.error));
+      tx.onabort = died;
+      tx.onerror = () => {};
+    }));
+  }
+
+  function completeCentralRetry(queued, response) {
+    const key = String(queued.client_observation_id);
+    return idb().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction(["reports", "central_outbox"], "readwrite");
+      const reports = tx.objectStore("reports");
+      const outbox = tx.objectStore("central_outbox");
+      const getQueued = outbox.get(key);
+      getQueued.onsuccess = () => {
+        const current = getQueued.result;
+        if (!current) return;
+        const reportId = Number(current.report_id);
+        const getReportRequest = reports.get(reportId);
+        getReportRequest.onsuccess = () => {
+          const rec = getReportRequest.result;
+          if (!rec) {
+            outbox.delete(key);
+            return;
+          }
+          const serverId = response && response.pothole && response.pothole.id;
+          const sameCanonical = !rec.server_pothole_id || !serverId
+            || String(rec.server_pothole_id) === String(serverId);
+          // An automatic frame can be merged into an already-saved local canonical.
+          // Its retry is another sighting, not evidence that the canonical complaint
+          // itself was a duplicate. Only copy server state when both identify the same
+          // canonical (or the local record had not yet been linked).
+          if (!current.merged_into_existing || sameCanonical) {
+            applyCentralPothole(rec, response);
+          } else {
+            rec.server_request_id = response.request_id || rec.server_request_id || null;
+          }
+          if (!current.merged_into_existing) {
+            rec.server_duplicate = !!response.duplicate;
+            rec.server_dedupe_distance_m = response.dedupe
+              && Number.isFinite(response.dedupe.distance_m) ? response.dedupe.distance_m : null;
+            if (response.duplicate) {
+              rec.duplicate = true;
+              rec.duplicate_of = rec.server_pothole_id || (serverId && String(serverId)) || null;
+              // A user might have opened the draft before connectivity returned.
+              // Preserve that history, but do not claim the email was delivered.
+              if (rec.status === "sent") rec.status = "queued";
+              if (rec.status !== "queued") {
+                rec.status = "duplicate";
+                rec.email_subject = null;
+                rec.email_body = null;
+              }
+            }
+          }
+          outbox.delete(key);
+          const remaining = outbox.index("by_report").count(IDBKeyRange.only(reportId));
+          remaining.onsuccess = () => {
+            rec.central_sync_pending = remaining.result > 0;
+            if (!rec.central_sync_pending) {
+              rec.server_sync_error = null;
+            }
+            reports.put(rec);
+          };
+        };
+      };
+      tx.oncomplete = () => resolve();
+      const died = () => reject(storageError(tx.error));
+      tx.onabort = died;
+      tx.onerror = () => {};
+    }));
+  }
+
+  let centralRetryPromise = null;
+  function retryCentralOutbox() {
+    if (centralRetryPromise) return centralRetryPromise;
+    centralRetryPromise = (async () => {
+      const queuedRows = (await allCentralOutbox())
+        .sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+      for (const queued of queuedRows) {
+        // Orphans should only arise from an interrupted migration. Clearing one here is
+        // safe and also preserves the rule that deleting evidence cancels pending sync.
+        if (!await getReport(queued.report_id)) {
+          await delCentralOutbox(queued.client_observation_id);
+          continue;
+        }
+        let response;
+        try {
+          const request = JSON.parse(queued.body);
+          response = await signedServicePost(queued.path || "/v1/potholes/report", request, {
+            idempotencyKey: queued.client_observation_id,
+            exactBody: queued.body,
+            fallback: "The pothole could not be added to the shared map.",
+          });
+          if (!response || !response.pothole || !response.pothole.id) {
+            throw new Error("The reporting service returned an incomplete pothole record.");
+          }
+          await completeCentralRetry(queued, response);
+        } catch (error) {
+          await recordCentralRetryFailure(queued, error);
+          // One unreachable or overloaded service would fail every queued row. Leave the
+          // remainder durable for the next startup/reconnect instead of hammering it.
+          if (!error || !Number.isFinite(error.status) || error.status === 408
+              || error.status === 429 || error.status >= 500) break;
+        }
+      }
+    })().finally(() => { centralRetryPromise = null; });
+    return centralRetryPromise;
+  }
+
+  async function flushCentralOutbox() {
+    // A startup flush can race a report committed one tick later. Joining that empty
+    // pass and then starting a fresh one guarantees the new row is not stranded.
+    const prior = centralRetryPromise;
+    if (prior) await prior;
+    return retryCentralOutbox();
+  }
+
   // ---------- image ----------
 
-  // The fraction of a dashcam frame kept for detection. A phone mounted in a car points at
-  // the horizon, so the top of the frame is sky, trees and parked cars and the road worth
-  // inspecting is underneath. Measured on frames from a real drive: keeping the lower 60%
-  // took detection from 18% of frames to 27%, and every dashcam pothole in the eval set
-  // still passed. Keeping less than half loses the damage itself, and this must not be
-  // applied to a single shot, where the photographer has already aimed at the defect.
-  const ROAD_BAND = 0.6;
+  const ROAD_BAND = IMAGING_CONFIG.drive.roadBand;
 
   function averageLuminance(ctx, width, height) {
     const data = ctx.getImageData(0, 0, width, height).data;
-    const step = Math.max(1, Math.floor(Math.sqrt((width * height) / 12000)));
+    const lightConfig = IMAGING_CONFIG.adaptiveLuminance;
+    const step = Math.max(1, Math.floor(Math.sqrt(
+      (width * height) / lightConfig.targetSamples)));
     let total = 0, count = 0, clippedDark = 0, clippedBright = 0;
     for (let y = 0; y < height; y += step) {
       for (let x = 0; x < width; x += step) {
         const i = (y * width + x) * 4;
         const lum = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
         total += lum; count++;
-        if (lum < 12) clippedDark++;
-        if (lum > 245) clippedBright++;
+        if (lum < lightConfig.darkPixelThreshold) clippedDark++;
+        if (lum > lightConfig.brightPixelThreshold) clippedBright++;
       }
     }
     return { mean: count ? total / count : 0,
@@ -1294,9 +1865,12 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     // bright street-lit frames and amplified noise. Preserve the original evidence copy;
     // this is only the small image used for detection.
     const light = boost ? averageLuminance(ctx, c.width, c.height) : null;
-    if (boost && light.mean < 72 && light.bright < 0.08) {
-      const lift = Math.min(1.65, Math.max(1.15, 85 / Math.max(35, light.mean)));
-      ctx.filter = `brightness(${lift.toFixed(2)}) contrast(1.10)`;
+    const lightConfig = IMAGING_CONFIG.adaptiveLuminance;
+    if (boost && light.mean < lightConfig.meanThreshold
+        && light.bright < lightConfig.brightFractionThreshold) {
+      const lift = Math.min(lightConfig.maximumLift, Math.max(lightConfig.minimumLift,
+        lightConfig.targetMean / Math.max(lightConfig.meanFloor, light.mean)));
+      ctx.filter = `brightness(${lift.toFixed(2)}) contrast(${lightConfig.contrast})`;
       ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
       ctx.filter = "none";
     }
@@ -1333,13 +1907,8 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
   }
 
   async function createReport(fd, driveMode) {
-    const photos = (fd.getAll ? fd.getAll("photo") : [fd.get("photo")])
-      .filter((p) => p && p.size).slice(0, 3);
-    if (!photos.length) throw new Error("Empty photo.");
-    const requestedPrimary = parseInt(fd.get("primary_index"), 10);
-    const primaryIndex = Number.isInteger(requestedPrimary) && requestedPrimary >= 0 && requestedPrimary < photos.length
-      ? requestedPrimary : 0;
-    const photo = photos[primaryIndex];
+    const photo = fd.get("photo");
+    if (!photo || !photo.size) throw new Error("Empty photo.");
     const latRaw = fd.get("lat"), lngRaw = fd.get("lng");
     const lat = latRaw != null && latRaw !== "" ? parseFloat(latRaw) : null;
     const lng = lngRaw != null && lngRaw !== "" ? parseFloat(lngRaw) : null;
@@ -1359,8 +1928,10 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     // Bind the request to the mode in which it began. A Settings change while a slow
     // request is finishing must not unpredictably change whether that observation saves.
     const dedupe = !S.debug;
-    let frameQuality = null;
-    try { frameQuality = JSON.parse(fd.get("frame_quality") || "null"); } catch (e) {}
+    const normalizedHeading = Number.isFinite(headingRaw)
+      ? ((headingRaw % 360) + 360) % 360 : null;
+    const clientObservationId = sourceEventKey
+      ? `capture-${await sha256HexText(sourceEventKey)}` : randomId();
 
     progress(driveMode ? pmsg("capture") : pmsg("compress"));
     // Measured on a real device: a 2000px frame is ~1.1 MB of base64 and every request
@@ -1369,47 +1940,36 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     // smaller frame; the recorded footage keeps full quality, so a pothole missed live
     // is still recoverable by re-analysing the video. Single shots stay at full size:
     // one photo, someone waiting, and no footage behind it.
-    // Drive Mode supplies one short burst. The model sees a full context view of the
-    // sharpest frame plus three road-band crops in chronological order. Context keeps
-    // lane/edge geometry; the crops give a distant defect enough pixels to judge. A
-    // manual photo remains one full-resolution view because the user already aimed it.
+    // Both capture modes acquire and send exactly one full-frame image.
     let imageInputs, dataUrl;
     if (driveMode) {
-      const roadViews = await Promise.all(photos.map((p) => toDataUrl(p, 1024, 0.85, true, ROAD_BAND)));
-      const context = await toDataUrl(photo, 768, 0.82, false, 1);
-      imageInputs = [{ url: context }, ...roadViews.map((url) => ({ url }))];
-      dataUrl = roadViews[primaryIndex];
+      const driveInput = IMAGING_CONFIG.drive;
+      dataUrl = await toDataUrl(photo, driveInput.maxDimension, driveInput.jpegQuality,
+        driveInput.adaptiveBrightness, driveInput.roadBand);
+      imageInputs = [{ url: dataUrl }];
     } else {
-      dataUrl = await toDataUrl(photo, 2000, 0.85, true, 1);
+      const manualInput = IMAGING_CONFIG.manual;
+      dataUrl = await toDataUrl(photo, manualInput.maxDimension, manualInput.jpegQuality,
+        manualInput.adaptiveBrightness, manualInput.roadBand);
       imageInputs = [{ url: dataUrl }];
     }
     // A waiting single-shot user benefits from speculative geocoding. Drive Mode rejects
     // most bursts, so starting a location lookup for every road sample would hammer the
     // public geocoder; it starts only after a burst is accepted.
-    const geoP = !driveMode && lat != null
+    const geoP = !driveMode && usingSharedVision() && lat != null
       ? reverseGeocode(lat, lng).catch(() => null) : null;
     const shortOf = (g) => (g && g.short) || null;
     progress(pmsg("detect"));
-    // Single shot: contract adjudication runs speculatively alongside confirmation,
-    // so the wait is the max of the two rather than their sum, and one watching user
-    // feels it. Drive Mode rejects most frames and reports through the HUD, so
-    // speculating there would buy nothing and bill a text call per frame.
-    // Coordinates settle coverage on their own; only a missing fix has to wait for the
-    // address. The contract shortlist needs the owning body, so the GIS lookup starts
-    // here rather than after detection: it is one short request and it runs while the
-    // photo is being analysed, so it costs nothing on the clock. routeOfficer shares
-    // this same answer instead of asking again.
-    const coordCoverage = (lat != null && lng != null) ? inCoverage(lat, lng, null) : null;
-    const tenderP = (driveMode || coordCoverage === false) ? null
-      : Promise.all([geoP, jurisdictionOf(lat, lng)])
-          .then(([g, w]) => (w && w.kind === "town" && w.lgd ? matchTender(shortOf(g), w.lgd) : null))
-          .catch(() => null);
-    const sequenceNote = driveMode
-      ? `\n- Capture layout: image 1 is full-frame context from the sharpest burst frame. Images 2-${imageInputs.length} are lower-road crops in chronological order; the sharpest crop is chronological frame ${primaryIndex + 1}.`
-      : "\n- Capture layout: one user-framed full image.";
-    const detectPrompt = DETECT_PROMPT + sequenceNote + (LANG() === "kn"
-      ? "\n- Write the description field in formal Kannada (ಕನ್ನಡ ಭಾಷೆಯಲ್ಲಿ ಬರೆಯಿರಿ)."
-      : "");
+    // Tender resolution can send exact coordinates to the project service and may use
+    // shared model quota. It therefore begins only after the vision verdict accepts this
+    // observation. The local reverse-geocode lookup above remains useful preparation for
+    // a waiting manual user and is disclosed separately in the data notice.
+    const detectPrompt = DETECT_PROMPT
+      + (driveMode
+        ? DETECTION_PROMPT_CONFIG.captureLayouts.drive
+        : DETECTION_PROMPT_CONFIG.captureLayouts.manual)
+      + (DETECTION_PROMPT_CONFIG.languageSuffixes[LANG()]
+        || DETECTION_PROMPT_CONFIG.languageSuffixes.en);
     const detectionModel = S.model, detectionDetail = S.detail;
     // Single shot has one verdict on screen, so show it the moment it streams in.
     // Drive Mode analyses run concurrently and report through the HUD instead.
@@ -1417,11 +1977,17 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     // the unstreamed path, waiting for a description it discards on every rejected frame.
     // It streams now purely to stop as soon as the frame is known to be rejected.
     const a = await analyzeImage(imageInputs, detectPrompt, "assessment", ASSESS_SCHEMA, detectionModel,
-      driveMode ? null : emitVerdict, driveMode && !S.debug, detectionDetail);
+      driveMode ? null : emitVerdict, driveMode && !S.debug,
+      detectionDetail, driveMode ? "drive" : "manual", `vision:${clientObservationId}`);
     const decision = decisionFor(a);
     const accepted = decision === "accept";
-    const detector = { model: detectionModel, detail: detectionDetail, prompt_version: PROMPT_VERSION,
-                       schema_version: SCHEMA_VERSION, evidence_count: imageInputs.length };
+    const detector = {
+      model: detectionModel, detail: detectionDetail, prompt_version: PROMPT_VERSION,
+      schema_version: SCHEMA_VERSION, evidence_count: imageInputs.length,
+      provider: usingSharedVision() ? "shared_server" : "personal_openai",
+      ...(a && a.detector && typeof a.detector === "object" ? a.detector : {}),
+    };
+    if (a && a.request_id) detector.request_id = a.request_id;
     if (driveMode && !accepted) {
       return { analyzed: true, accepted: false, stored: false, found: false,
                duplicate: false, duplicate_of: null, decision, review: decision === "review",
@@ -1436,43 +2002,48 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
       : { ...toDict(existing), duplicate: true, duplicate_of: existing.id };
 
     if (accepted) progress(pmsg("finalize"));
-    const geo = accepted
+    // In personal mode the detector result is the critical path. Address, authority and
+    // tender enrichment happen only when Email is tapped, so an unavailable GIS or
+    // project server cannot make a completed vision verdict look frozen.
+    const synchronousCentral = usingSharedVision();
+    const deferEnrichment = accepted && !synchronousCentral
+      && finiteCoord(lat) && finiteCoord(lng);
+    const geo = accepted && !deferEnrichment
       ? await (geoP || (lat != null ? reverseGeocode(lat, lng).catch(() => null) : Promise.resolve(null)))
       : null;
-    const address = shortOf(geo);
-    const [officerName, officerEmail, unroutedReason, bodyName] = accepted
-      ? await routeOfficer((geo && geo.full) || address, lat, lng) : [null, null, null, null];
-    const covered = accepted && !!officerEmail;
-    // Drive Mode does not speculate (it would bill a text call for every frame, and most
-    // frames are rejected), so an accepted drive pothole matches its contract here, once
-    // it is known to be worth a complaint. The GIS answer is already memoised, so this
-    // costs no extra network call.
-    const tender = accepted && covered
-      ? await (tenderP || jurisdictionOf(lat, lng)
-          .then((w) => (w && w.kind === "town" && w.lgd ? matchTender(address, w.lgd) : null))
-          .catch(() => null))
+    const localAddress = shortOf(geo);
+    // All capture modes reach the project tender endpoint only here, after acceptance.
+    // The GIS answer is memoised and is also reused by routeOfficer below.
+    const tender = accepted && !deferEnrichment && finiteCoord(lat) && finiteCoord(lng)
+      ? await jurisdictionOf(lat, lng).catch(() => null)
+          .then((w) => matchTender(localAddress, w && w.kind === "town" ? w.lgd : null,
+            lat, lng, clientObservationId))
+          .catch(() => null)
       : null;
+    const centralResolution = centralResolutionAt(lat, lng);
+    const centralJurisdiction = centralResolution && centralResolution.jurisdiction;
+    const address = localAddress || centralJurisdiction && centralJurisdiction.address || null;
+    const [officerName, officerEmail, unroutedReason, bodyName] = accepted && !deferEnrichment
+      ? await routeOfficer((geo && geo.full) || address, lat, lng) : [null, null, null, null];
+    const covered = accepted && (deferEnrichment || !!officerEmail);
     if (accepted) progress(pmsg("write"));
     // No authority means no complaint. The photo, verdict and location are still kept,
     // so nothing is lost if coverage later extends to this place.
     const [subject, body] = accepted && covered
       ? draftEmail(a, lat, lng, address, officerName, tender)
       : [null, null];
-    // The evidence copy: what the officer receives. Detection works on a small
-    // frame for speed and token cost, but the complaint deserves the full capture,
-    // unmodified. Only kept for reports that can actually be emailed.
-    const photoFull = accepted && covered ? await toDataUrl(photo, 4000, 0.92, false) : null;
+    // Keep the full accepted evidence even when another device reported the same place.
+    // Cross-device dedupe suppresses a second complaint, never the observer's evidence.
+    const evidenceInput = IMAGING_CONFIG.acceptedEvidence;
+    const photoFull = accepted
+      ? (driveMode ? dataUrl : await toDataUrl(photo, evidenceInput.maxDimension,
+          evidenceInput.jpegQuality, false)) : null;
 
     const rec = {
       created_at: Date.now() / 1000, lat, lng, address,
+      client_observation_id: clientObservationId,
       photo: await dataUrlToBlob(dataUrl), photo_full: await dataUrlToBlob(photoFull),
-      is_reportable: a.reportable ? 1 : 0,
-      is_pothole: a.damage_type === "pothole_cavity" ? 1 : 0,
       damage_type: a.damage_type, assessment: a.assessment, image_quality: a.image_quality,
-      on_drivable_surface: !!a.on_drivable_surface,
-      has_broken_edge_or_rim: !!a.has_broken_edge_or_rim,
-      has_depth_or_surface_loss: !!a.has_depth_or_surface_loss,
-      temporal_consistency: a.temporal_consistency,
       size: a.size,
       decision,
       description: a.description, email_subject: subject, email_body: body,
@@ -1487,6 +2058,14 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
       tender_number: tender ? tender.tender_number : null,
       contractor: tender ? tender.contractor : null,
       tender_note: tender ? tender.note : null,
+      tender_title: tender ? tender.title : null,
+      tender_published: tender ? tender.published : null,
+      tender_confidence: tender && Number.isFinite(tender.confidence) ? tender.confidence : null,
+      tender_match_method: tender ? tender.match_method : null,
+      tender_request_id: centralResolution ? centralResolution.request_id : null,
+      body_lgd: centralJurisdiction && centralJurisdiction.lgd || null,
+      body_name: centralJurisdiction && centralJurisdiction.town || bodyName || null,
+      email_opened_at: null,
       sent_at: null,
       drive_id: driveId,
       capture_source: captureSource,
@@ -1496,9 +2075,7 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
       source_offset_s: Number.isFinite(sourceOffsetRaw) ? sourceOffsetRaw / 1000 : null,
       gps_accuracy: Number.isFinite(gpsAccuracyRaw) ? gpsAccuracyRaw : null,
       speed_mps: Number.isFinite(speedRaw) ? speedRaw : null,
-      heading: Number.isFinite(headingRaw) ? ((headingRaw % 360) + 360) % 360 : null,
-      frame_quality: Array.isArray(frameQuality) ? frameQuality : null,
-      primary_frame_index: primaryIndex,
+      heading: normalizedHeading,
       debug_capture: !dedupe,
       dedupe_eligible: accepted && dedupe,
       event_sightings: accepted ? [eventSighting({
@@ -1512,20 +2089,91 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
       })] : [],
       sighting_drive_ids: accepted && driveId != null ? [String(driveId)] : [],
       seen_count: accepted ? 1 : 0,
+      vision_provider: usingSharedVision() ? "shared_server" : "personal_openai",
+      vision_request_id: a && a.request_id || null,
       last_seen_at: accepted
         ? (Number.isFinite(capturedAtRaw) ? capturedAtRaw / 1000 : Date.now() / 1000) : null,
     };
     if (accepted) {
+      let centralReport = null;
+      let centralRequestBody = null;
+      let centralFailure = null;
+      try {
+        const centralRequest = await centralPotholeRequest(rec, dataUrl, detector);
+        centralRequestBody = centralRequest ? JSON.stringify(centralRequest) : null;
+        // Shared mode already proved the project service during preflight and needs its
+        // cross-device duplicate answer now. Personal mode persists an outbox row and
+        // returns the local result immediately; lifecycle retries deliver it later.
+        const central = synchronousCentral
+          ? (centralReport = await registerCentralPothole(centralRequest, centralRequestBody))
+          : null;
+        if (!synchronousCentral && centralRequestBody) {
+          centralFailure = new Error("Shared-map sync queued until the project server is available.");
+          rec.central_sync_pending = true;
+          rec.server_sync_error = centralFailure.message;
+        }
+        if (central) {
+          applyCentralPothole(rec, central);
+          rec.server_duplicate = !!central.duplicate;
+          rec.server_dedupe_distance_m = central.dedupe
+            && Number.isFinite(central.dedupe.distance_m) ? central.dedupe.distance_m : null;
+          if (central.duplicate) {
+            rec.status = "duplicate";
+            rec.duplicate = true;
+            rec.duplicate_of = rec.server_pothole_id;
+            // A central duplicate is impact evidence, but it must not create another
+            // complaint for the same physical defect.
+            rec.email_subject = null;
+            rec.email_body = null;
+          }
+        }
+      } catch (error) {
+        // Detection and the local evidence stay useful during a service outage. Preserve
+        // the request ID so support can locate the failed central attempt in logs. When
+        // the exact observation body exists, commit it beside the report for retry.
+        centralFailure = error;
+        rec.central_sync_pending = !!centralRequestBody;
+        rec.server_sync_error = error && error.message || "Shared-map sync failed.";
+        rec.server_request_id = error && error.requestId || rec.server_request_id || null;
+      }
       if (commitTurn) await commitTurn.wait;
-      const committed = await addReportUnlessDuplicate(rec, dedupe);
-      if (committed.duplicate) return duplicateResult(committed.duplicate);
+      const centralOutboxRow = centralFailure && centralRequestBody ? {
+        client_observation_id: rec.client_observation_id,
+        path: "/v1/potholes/report",
+        body: centralRequestBody,
+        created_at: Date.now(),
+        last_attempt_at: Date.now(),
+        attempt_count: 1,
+        last_error: rec.server_sync_error,
+        last_request_id: rec.server_request_id || null,
+      } : null;
+      const committed = await addReportUnlessDuplicate(rec, dedupe, centralOutboxRow);
+      if (committed.duplicate) {
+        if (centralReport && committed.duplicate.server_pothole_id
+            && String(committed.duplicate.server_pothole_id)
+              === String(centralReport.pothole && centralReport.pothole.id)) {
+          applyCentralPothole(committed.duplicate, centralReport);
+          await putReport(committed.duplicate);
+        }
+        return duplicateResult(committed.duplicate);
+      }
       rec.id = committed.id;
+      if (!synchronousCentral) {
+        // Delivery starts now when possible but never holds the detector result or
+        // report screen. The shared probe is itself bounded and de-duplicated.
+        void probeProjectService().then((available) => {
+          if (available) return flushCentralOutbox();
+        }).catch(() => {});
+      }
     } else {
       rec.id = await addReport(rec);
     }
     return driveMode
-      ? { analyzed: true, accepted: true, stored: true, found: true,
-          duplicate: false, duplicate_of: null, decision, review: false,
+      ? { analyzed: true, accepted: true, stored: true, found: !rec.server_duplicate,
+          duplicate: !!rec.server_duplicate,
+          duplicate_of: rec.server_duplicate ? rec.server_pothole_id : null,
+          existing_report_id: rec.server_duplicate ? rec.server_pothole_id : null,
+          decision, review: false,
           ...a, observation: { ...a }, detector, report: toDict(rec) }
       : toDict(rec);
     } finally {
@@ -1534,13 +2182,102 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
   }
 
 
-  async function openInGmail(rec) {
+  async function prepareComplaint(rec) {
+    const lat = finiteCoord(rec && rec.lat) ? rec.lat : null;
+    const lng = finiteCoord(rec && rec.lng) ? rec.lng : null;
+    let address = rec && rec.address || null;
+    let jurisdiction = null;
+    if (lat != null && lng != null) {
+      const [geo, where] = await Promise.all([
+        address ? Promise.resolve(null) : reverseGeocode(lat, lng).catch(() => null),
+        jurisdictionOf(lat, lng).catch(() => null),
+      ]);
+      address = address || geo && geo.short || null;
+      jurisdiction = where;
+    }
+    let officerName = rec && (rec.officer_name || rec.officer_title) || null;
+    let officerEmail = rec && (rec.officer_email || rec.email_to) || null;
+    let unroutedReason = null, unroutedBody = null;
+    if (!officerEmail) {
+      [officerName, officerEmail, unroutedReason, unroutedBody] =
+        await routeOfficer(address, lat, lng);
+    }
+    if (!officerEmail) {
+      throw complaintRouteError(unroutedReason || "road_class_unknown", unroutedBody, {
+        address,
+        bodyLgd: rec && rec.body_lgd || jurisdiction && jurisdiction.lgd || null,
+        bodyName: rec && rec.body_name || jurisdiction && jurisdiction.name || null,
+      });
+    }
+
+    let tender = null;
+    if (rec && rec.tender_number) {
+      tender = {
+        tender_number: rec.tender_number,
+        contractor: rec.contractor || null,
+        title: rec.tender_title || "",
+        published: rec.tender_published || "",
+        warranty: rec.tender_warranty || "recorded for this stretch",
+        warranty_code: rec.tender_warranty_code || "record",
+      };
+    } else if (rec && rec.tender_resolution_checked_at == null && lat != null && lng != null) {
+      const lgd = rec.body_lgd || jurisdiction && jurisdiction.kind === "town" && jurisdiction.lgd || null;
+      tender = await matchTender(address, lgd, lat, lng,
+        rec.client_observation_id || rec.source_event_key || `native-${rec.id}`).catch(() => null);
+    }
+    const [subject, body] = draftEmail(
+      rec || {}, lat, lng, address, officerName, tender);
+    return { to: officerEmail, officer_name: officerName, subject, body,
+      address, body_lgd: rec.body_lgd || jurisdiction && jurisdiction.lgd || null,
+      body_name: rec.body_name || jurisdiction && jurisdiction.name || null,
+      tender, tender_number: tender && tender.tender_number || null };
+  }
+
+  async function openEmailDraft(rec) {
     // Always the routed officer. The app never sends; the user does, in their email app.
     // No fallback recipient: an unrouted report must not borrow Bengaluru's address.
-    if (!rec.officer_email) {
-      throw new Error("No responsible authority is known for this location, so there is nobody to address.");
+    let prepared;
+    try {
+      prepared = rec.officer_email && rec.email_subject && rec.email_body
+          && rec.tender_resolution_checked_at != null
+        ? { to: rec.officer_email, subject: rec.email_subject, body: rec.email_body }
+        : await prepareComplaint(rec);
+    } catch (error) {
+      if (error && error.code === "complaint_unrouted") {
+        // Personal-key detection returns before the slower GIS lookup. If that lookup
+        // cannot name an authority, convert the optimistic local draft into the same
+        // durable unrouted state produced by synchronous/shared capture. A later history
+        // render must not keep offering an Email button that can never have a recipient.
+        rec.status = "unrouted";
+        rec.unrouted_reason = error.unroutedReason || "road_class_unknown";
+        rec.unrouted_body = error.unroutedBody || null;
+        rec.address = error.address || rec.address || null;
+        rec.body_lgd = error.bodyLgd || rec.body_lgd || null;
+        rec.body_name = error.bodyName || rec.body_name || null;
+        rec.officer_name = null;
+        rec.officer_email = null;
+        rec.email_subject = null;
+        rec.email_body = null;
+        await putReport(rec);
+        error.report = toDict(rec);
+      }
+      throw error;
     }
-    const to = rec.officer_email;
+    rec.officer_email = prepared.to;
+    rec.officer_name = prepared.officer_name || rec.officer_name || null;
+    rec.address = prepared.address || rec.address || null;
+    rec.body_lgd = prepared.body_lgd || rec.body_lgd || null;
+    rec.body_name = prepared.body_name || rec.body_name || null;
+    rec.email_subject = prepared.subject;
+    rec.email_body = prepared.body;
+    rec.tender_resolution_checked_at = rec.tender_resolution_checked_at || Date.now() / 1000;
+    if (prepared.tender) {
+      rec.tender_number = prepared.tender.tender_number || null;
+      rec.contractor = prepared.tender.contractor || null;
+      rec.tender_note = prepared.tender.note || null;
+      rec.tender_title = prepared.tender.title || null;
+      rec.tender_published = prepared.tender.published || null;
+    }
     progress(pmsg("email"));
     if (NATIVE) {
       // Vanilla-JS WebView: the injected runtime exposes plugins via Capacitor.Plugins
@@ -1549,18 +2286,19 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
         ? Capacitor.registerPlugin("EmailComposer")
         : Capacitor.Plugins.EmailComposer;
       await EmailComposer.open({
-        to: [to],
-        subject: rec.email_subject || "",
-        body: rec.email_body || "",
+        to: [prepared.to],
+        subject: prepared.subject,
+        body: prepared.body,
         // Full capture where we kept one; the working copy is only a fallback.
         attachments: [{ type: "base64", name: "road-damage.jpg",
                         path: await photoToBase64(rec.photo_full || rec.photo) }],
       });
     } else {
-      console.log("[harness] would open native compose to:", to);
+      console.log("[harness] would open native compose to:", prepared.to);
     }
     rec.status = "queued";
-    rec.sent_at = Date.now() / 1000;
+    rec.email_opened_at = rec.email_opened_at || rec.sent_at || Date.now() / 1000;
+    rec.sent_at = null;
     await putReport(rec);
     return toDict(rec);
   }
@@ -1639,13 +2377,8 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
         label: r.human_label,
         labelled_by: "owner",
         model_said: {
-          is_reportable: r.is_reportable == null ? !!r.is_pothole : !!r.is_reportable,
           damage_type: damageTypeOf(r), assessment: assessmentOf(r),
           image_quality: r.image_quality || null,
-          on_drivable_surface: r.on_drivable_surface == null ? null : !!r.on_drivable_surface,
-          has_broken_edge_or_rim: r.has_broken_edge_or_rim == null ? null : !!r.has_broken_edge_or_rim,
-          has_depth_or_surface_loss: r.has_depth_or_surface_loss == null ? null : !!r.has_depth_or_surface_loss,
-          temporal_consistency: r.temporal_consistency || null,
           decision: r.decision || (r.status === "rejected" ? "reject" : "accept"),
           size: r.size, description: r.description,
         },
@@ -1653,6 +2386,7 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
                     prompt_version: r.prompt_version || "legacy", schema_version: r.schema_version || 1,
                     evidence_count: r.evidence_count || 1 },
         lat: r.lat, lng: r.lng, address: r.address,
+        server_pothole_id: r.server_pothole_id || null,
         drive_id: r.drive_id, captured_at: new Date(r.created_at * 1000).toISOString(),
       });
     }
@@ -1668,8 +2402,41 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     const method = ((opts && opts.method) || "GET").toUpperCase();
     let m;
     if (path === "/api/health") {
-      return { ai_configured: !!S.key, provider: "openai", delivery: "gmail_compose", email_configured: true,
-               detection_model: S.model, image_detail: S.detail, prompt_version: PROMPT_VERSION };
+      const base = {
+        provider: usingSharedVision() ? "shared_server" : "personal_openai",
+        service_url: SERVICE_URL, delivery: "email_compose", email_configured: true,
+        detection_model: S.model, image_detail: S.detail, prompt_version: PROMPT_VERSION,
+      };
+      if (!usingSharedVision()) return { ...base, ai_configured: !!S.key };
+      try {
+        const remote = await serviceGet("/v1/health", 4000);
+        projectServiceState = remote && remote.ok ? "available" : "unavailable";
+        projectServiceCheckedAt = Date.now();
+        return {
+          ...base,
+          ai_configured: !!(remote && remote.ok && remote.shared_vision_configured === true),
+          shared_backend_provider: remote && remote.shared_vision_provider || null,
+          detection_model: remote && remote.shared_vision_provider === "http_yolo"
+            ? remote.shared_vision_model || base.detection_model : base.detection_model,
+          service_error: remote && remote.shared_vision_configured === false
+            ? "The shared vision detector is not configured." : null,
+          service_request_id: remote && remote.request_id || null,
+        };
+      } catch (error) {
+        projectServiceState = "unavailable";
+        projectServiceCheckedAt = Date.now();
+        return {
+          ...base,
+          ai_configured: false,
+          service_error: error && error.message || "The shared vision service is unavailable.",
+          service_request_id: error && error.requestId || null,
+        };
+      }
+    }
+    if (path === "/api/map" && method === "GET") return serviceGet("/v1/map");
+    if (path.startsWith("/api/impact") && method === "GET") {
+      const suffix = path.slice("/api/impact".length);
+      return serviceGet(`/v1/impact${suffix}`);
     }
     if (path === "/api/reports" && method === "GET") {
       // Without photo_full. The evidence copy is a 4000px JPEG and the list only shows a
@@ -1680,8 +2447,11 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     }
     if (path === "/api/reports" && method === "DELETE") {
       await op("readwrite", (s) => s.clear());
+      await op("readwrite", (s) => s.clear(), "central_outbox");
       await op("readwrite", (s) => s.clear(), "drives");
       await op("readwrite", (s) => s.clear(), "footage");
+      await op("readwrite", (s) => s.clear(), "identity");
+      installationCache = null;
       return { ok: true };
     }
     if (path === "/api/drives" && method === "GET") return allDrives();
@@ -1775,7 +2545,7 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
       if (!rec) throw new Error("Report not found.");
       const want = JSON.parse(opts.body).label;
       if (!["pothole_cavity", "failed_patch", "surface_breakup", "rut_or_depression",
-            "other_road_damage", "not_reportable", "pothole", "not_pothole", null].includes(want)) {
+            "other_road_damage", "undamaged", "pothole", "not_pothole", null].includes(want)) {
         throw new Error("Bad label.");
       }
       rec.human_label = want;
@@ -1787,21 +2557,20 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
     if ((m = path.match(/^\/api\/reports\/(\d+)\/send$/)) && method === "POST") {
       const rec = await getReport(m[1]);
       if (!rec) throw new Error("Report not found.");
+      if (rec.status === "duplicate" || rec.server_duplicate) {
+        throw new Error("This pothole was already reported nearby, so a duplicate complaint was not created.");
+      }
       if (rec.status === "unrouted") {
         // Say which of the four reasons it was. "Outside the area" is wrong and
         // confusing when the real problem is that the phone never got a GPS fix.
-        throw new Error({
-          no_location: "This report has no location, so there is no way to tell which office is responsible. Retake it with location switched on.",
-          road_class_unknown: "The app could not check whether this road is a national highway, and it will not name a city officer for a road that may not be theirs. Try again when you have a signal.",
-          national_highway: "This stretch is a national highway. It is maintained by NHAI or the state PWD National Highways division, not by the city or town body, so there is no municipal officer to address.",
-          rural_road: "This road is outside every town boundary, so it belongs to the state PWD or a panchayat rather than a city body. The app will not guess an office.",
-          no_address: "This town's body is known, but no official email address for it has been published, so there is no verified recipient to address.",
-          outside_area: "This road damage is outside Karnataka, which is the area this app covers, so there is no authority to address.",
-        }[rec.unrouted_reason] || "This report could not be routed to a responsible office, so there is nothing to send.");
+        throw complaintRouteError(rec.unrouted_reason, rec.unrouted_body, {
+          report: toDict(rec),
+        });
       }
-      // "queued" stays reopenable: canceling the Gmail composer must not strand the report.
+      // "queued" stays reopenable: canceling the email composer must not strand the report.
+      if (rec.status === "sent") rec.status = "queued";
       if (rec.status !== "draft" && rec.status !== "queued") throw new Error("This report is not a sendable draft.");
-      return openInGmail(rec);
+      return openEmailDraft(rec);
     }
     if ((m = path.match(/^\/api\/reports\/(\d+)$/))) {
       const rec = await getReport(m[1]);
@@ -1815,8 +2584,7 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
         return toDict(rec);
       }
       if (method === "DELETE") {
-        if (rec.status === "sent") throw new Error("Sent reports cannot be discarded.");
-        await delReport(rec.id);
+        await deleteReportAndCentralOutbox(rec.id);
         return { ok: true };
       }
     }
@@ -1839,16 +2607,38 @@ match_index must be null. confidence is your 0 to 1 confidence in the match.`;
   // exactly the code that runs in production. Nothing here holds state or a secret.
   const __pure = { inCoverage, peekVerdict, peekReject, rejectedVerdict, decisionFor,
                    damageTypeOf, assessmentOf, normaliseModel, normaliseDetail,
-                   buildDetectionRequest, ASSESS_SCHEMA, DETECT_PROMPT, PROMPT_VERSION,
+                   buildDetectionRequest,
+                   ASSESS_SCHEMA, DETECT_PROMPT, PROMPT_VERSION,
+                   buildTenderMatchRequest,
                    SCHEMA_VERSION, MAX_DETECTION_IMAGES, ROAD_BAND, averageLuminance,
                    distMeters, roadEventMatch, sameRoadEvent, findDuplicateReport,
                    draftEmail, dataUrlToBlob, photoToBase64, toDict, listDict,
-                   warrantyFor, shortlistFor, matchTenderFor: matchTender };
+                   warrantyFor, shortlistFor, matchTenderFor: matchTender,
+                   canonicalServiceRequest };
 
-  window.StandaloneAPI = { __pure, handle, prewarm };
+  window.StandaloneAPI = { __pure, handle, prewarm, prepareComplaint };
+
+  // Pending accepted observations contain no image or complaint text. Retry them only
+  // at bounded lifecycle signals; the stable body/idempotency key prevents double count.
+  window.addEventListener("online", () => {
+    if (projectServiceAvailable()) {
+      void flushCentralOutbox().catch(() => {});
+      return;
+    }
+    projectServiceState = "unknown";
+    projectServiceCheckedAt = 0;
+    void probeProjectService().then((available) => {
+      if (available) return flushCentralOutbox();
+    }).catch(() => {});
+  });
 
   // First run: open settings if no key yet (after the main script wires the UI).
   window.addEventListener("load", () => {
-    if (!S.key && typeof window.openSettings === "function") window.openSettings(true);
+    void probeProjectService().then((available) => {
+      if (available) return flushCentralOutbox();
+    }).catch(() => {});
+    if (!usingSharedVision() && !S.key && typeof window.openSettings === "function") {
+      window.openSettings(true);
+    }
   });
 })();

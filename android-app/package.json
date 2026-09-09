@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "postinstall": "patch-package --error-on-fail",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -20,5 +21,8 @@
     "@capacitor/geolocation": "^8.2.2",
     "@capacitor/share": "^8.0.1",
     "capacitor-email-composer": "^8.0.0"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.1"
   }
 }

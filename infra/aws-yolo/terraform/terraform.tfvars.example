@@ -1,0 +1,26 @@
+aws_region = "ap-south-1"
+
+# First apply: leave empty to create only ECR and the monthly counter. After pushing
+# an evaluated image, use its immutable digest URI and apply again.
+container_image_uri = ""
+
+api_key_sha256 = "replace-with-lowercase-sha256-of-a-random-bearer-token"
+model_version  = "pothole-yolo-v1"
+
+# Deliberate example limits; review against a measured Lambda duration before use.
+monthly_request_cap             = 5000
+monthly_estimated_budget_usd    = 25
+estimated_cost_per_request_usd  = 0.005
+# Copy this value exactly from model-manifest.json's evaluated decision object.
+detection_confidence_threshold  = 0.50
+reserved_concurrency            = 2
+api_throttle_rate               = 2
+api_throttle_burst              = 4
+
+# Keep API Gateway strictly above Lambda so Lambda can return a controlled response
+# before the integration closes. HTTP API integrations cannot exceed 30 seconds.
+lambda_timeout_seconds          = 27
+api_integration_timeout_seconds = 29
+
+# Optional and delayed; this observes account spend and is not the hard cutoff.
+budget_alert_email = null

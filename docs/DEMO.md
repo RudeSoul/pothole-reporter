@@ -1,7 +1,7 @@
 # Before a demo
 
 Routing and cold-start figures were measured on a device on 20 August 2026 with v1.6.2.
-The v3 accuracy pipeline now uses bursts and multi-image requests, so its detection
+The v4 accuracy pipeline selects exactly one image for each request, so its detection
 latency must be re-measured on the target phone before quoting it in a demo.
 
 ## Set up, in this order
@@ -21,12 +21,13 @@ latency must be re-measured on the target phone before quoting it in a demo.
 |---|---|
 | Single shot, photo to finished draft | about 12 to 13 seconds on a device |
 | Verdict on screen | about 2 seconds, before the rest |
-| Drive Mode, one three-frame event | depends on model/network, six requests at a time |
+| Drive Mode, one selected-frame event | depends on model/network; events queue while a request is active |
 | Capture spacing | target 6 m; captured events queue while requests are busy |
 
 The HSR Layout example in the README is historical evidence, not an accuracy benchmark.
-The current UI reports subtype plus clear/probable/uncertain/absent and does not display
-an uncalibrated model percentage.
+The current UI reports `damaged` or `undamaged`, the subtype and size when applicable,
+and whether the image was acceptable or rejected. It does not display an uncalibrated
+model percentage.
 
 ## What needs the network, and what happens without it
 
@@ -59,7 +60,8 @@ want on stage.
 
 - Not that it covers all of Karnataka: 182 of 319 bodies have a published address, and
   rural and PWD roads are refused.
-- Not that it produces a ticket number. It opens an email draft. For a tracked complaint
-  the citizen also files on Sahaaya 2.0.
+- Not that it produces a ticket number or files through another government channel. Its
+  only complaint action opens a pre-addressed email draft; the citizen decides whether
+  to press Send in the email app.
 - Not that the contract match is certain. Every complaint says "probable record match,
   kindly verify", and that wording should stay.

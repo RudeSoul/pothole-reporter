@@ -1,0 +1,11 @@
+# Training is intentionally isolated from the application/server dependency sets.
+kaggle==1.7.4.5
+ultralytics==8.4.139
+torch==2.8.0
+torchvision==0.23.0
+opencv-python==4.10.0.84
+onnx==1.19.1
+numpy==1.26.4
+onnxruntime==1.19.2
+Pillow==11.3.0
+onnxslim==0.1.96

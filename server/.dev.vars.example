@@ -1,0 +1,13 @@
+# Copy this file to .dev.vars for local development. Never commit the real key.
+OPENAI_API_KEY=REPLACE_WITH_OPENAI_PROJECT_API_KEY
+
+# Optional shared-detection gateway. Set SHARED_DETECTOR_PROVIDER=http_yolo or
+# openai_then_http_yolo in local Worker configuration before using these values.
+# The gateway must be the exact regional execute-api /v1/detect URL and must
+# normalize raw detections to the road-damage v3 verdict.
+# YOLO_API_URL=https://abc123.execute-api.ap-south-1.amazonaws.com/v1/detect
+# YOLO_API_KEY=REPLACE_WITH_PRIVATE_GATEWAY_TOKEN
+# YOLO_AWS_ACCESS_KEY_ID=REPLACE_WITH_EXTERNAL_CALLER_ACCESS_KEY_ID
+# YOLO_AWS_SECRET_ACCESS_KEY=REPLACE_WITH_EXTERNAL_CALLER_SECRET_ACCESS_KEY
+# YOLO_AWS_SESSION_TOKEN=REPLACE_IF_USING_TEMPORARY_CREDENTIALS
+# YOLO_AWS_REGION=ap-south-1

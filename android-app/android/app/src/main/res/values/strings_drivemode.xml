@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Drive Mode notification -->
+    <string name="drive_notification_channel">Drive Mode</string>
+    <string name="drive_notification_channel_desc">Ongoing notification while Drive Mode is detecting road damage</string>
+    <string name="drive_notification_title">Drive Mode active</string>
+    <string name="drive_notification_scanning">Scanning for road damage…</string>
+    <string name="drive_notification_paused">Paused</string>
+    <string name="drive_notification_paused_camera">Paused — camera in use by another app</string>
+    <string name="drive_notification_waiting_gps">Waiting for GPS…</string>
+    <string name="drive_notification_found">%1$d road damage event(s) found</string>
+    <string name="drive_notification_checked">%1$d checked · %2$d found</string>
+    <string name="drive_action_pause">Pause</string>
+    <string name="drive_action_resume">Resume</string>
+    <string name="drive_action_stop">Stop</string>
+    <string name="drive_action_open">Open App</string>
+</resources>

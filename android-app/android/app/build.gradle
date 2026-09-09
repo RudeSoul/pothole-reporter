@@ -1,4 +1,7 @@
 apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
+apply plugin: 'com.google.devtools.ksp'
+
 
 def releasePropertiesFile = rootProject.file('keystore.properties')
 def releaseProperties = new Properties()
@@ -53,8 +56,8 @@ android {
         applicationId "com.gauravsen.potholereporter"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 28
-        versionName "1.13.0"
+        versionCode 29
+        versionName "1.13.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -82,6 +85,54 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    kotlinOptions {
+        jvmTarget = '21'
+    }
+    sourceSets {
+        androidTest.assets.srcDirs += files("$projectDir/schemas")
+    }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+def repositoryRootDir = rootProject.projectDir.parentFile.parentFile
+def verifyGeneratedLlmContract = tasks.register('verifyGeneratedLlmContract', Exec) {
+    workingDir repositoryRootDir
+    commandLine 'node', 'llm/generate.mjs', '--check'
+}
+def verifyWebAssetParity = tasks.register('verifyWebAssetParity') {
+    doLast {
+        ['index.html', 'standalone.js'].each { assetName ->
+            def canonicalAsset = new File(repositoryRootDir, "static/${assetName}")
+            if (!canonicalAsset.isFile()) {
+                throw new GradleException("Missing canonical web asset: ${canonicalAsset}")
+            }
+            [
+                new File(repositoryRootDir, "android-app/www/${assetName}"),
+                new File(projectDir, "src/main/assets/public/${assetName}"),
+            ].each { shippedAsset ->
+                if (!shippedAsset.isFile()) {
+                    throw new GradleException("Missing shipped web asset: ${shippedAsset}")
+                }
+                if (!java.util.Arrays.equals(canonicalAsset.bytes, shippedAsset.bytes)) {
+                    throw new GradleException(
+                        "Stale shipped web asset: ${shippedAsset}. " +
+                        "Run tools/build-apk.sh (or sync static/ through Capacitor) first."
+                    )
+                }
+            }
+        }
+    }
+}
+tasks.named('preBuild').configure {
+    dependsOn verifyGeneratedLlmContract
+    dependsOn verifyWebAssetParity
 }
 
 repositories {
@@ -99,7 +150,36 @@ dependencies {
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    androidTestImplementation "androidx.room:room-testing:$roomVersion"
     implementation project(':capacitor-cordova-android-plugins')
+
+    // Kotlin
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion"
+
+    // CameraX
+    implementation "androidx.camera:camera-core:$cameraxVersion"
+    implementation "androidx.camera:camera-camera2:$cameraxVersion"
+    implementation "androidx.camera:camera-lifecycle:$cameraxVersion"
+
+    // Location
+    implementation "com.google.android.gms:play-services-location:$playServicesLocationVersion"
+
+    // Room
+    implementation "androidx.room:room-runtime:$roomVersion"
+    implementation "androidx.room:room-ktx:$roomVersion"
+    ksp "androidx.room:room-compiler:$roomVersion"
+
+    // WorkManager
+    implementation "androidx.work:work-runtime-ktx:$workVersion"
+
+    // Coroutines
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutinesVersion"
+
+    // Lifecycle
+    implementation "androidx.lifecycle:lifecycle-service:$lifecycleVersion"
+
+    // OkHttp (for SSE streaming to OpenAI)
+    implementation "com.squareup.okhttp3:okhttp:$okhttpVersion"
 }
 
 apply from: 'capacitor.build.gradle'

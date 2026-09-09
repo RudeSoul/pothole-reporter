@@ -1,67 +1,54 @@
 # -*- coding: utf-8 -*-
-"""The same pothole must name the same contract every time.
+"""Release gate for deterministic tender selection, precision, and recall.
 
-A complaint names a real company. Naming a different one on each run is not a cosmetic
-issue: it means the app cannot justify the one it printed.
-
-Two things are checked separately, because they have different fixes:
-  1. The shortlist. Given the same address and body, the ranked candidate list must be
-     byte-identical every time. This is entirely local and must be deterministic.
-  2. The final pick, over repeated live runs.
+The evaluator shuffles candidate order, executes the production prompt/schema, and
+fails if either exact-selection precision or recall drops below the configured gate.
+Consequently an all-null model cannot pass merely by being deterministic.
 """
-import os, sys, json, base64, collections, pathlib
-from dotenv import load_dotenv
+
+import importlib.util
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env")
-from playwright.sync_api import sync_playwright
-from browser_test_utils import open_app
+RUNS = max(1, int(os.environ.get("TENDER_RUNS", "3")))
 
-KEY = os.environ["OPENAI_API_KEY"]
-RUNS = int(os.environ.get("TENDER_RUNS", "6"))
-ADDR = "17th Main Road, Sector 3, HSR Layout, Bengaluru, 560102"
-LGD = "305852"   # Bengaluru South, which draws on the legacy BBMP pool
+# Keep a deterministic negative control in the release gate. A model returning null
+# for every case may look stable and have no false positives, but it has zero recall
+# and must never pass merely because the live arm happened to be deterministic.
+spec = importlib.util.spec_from_file_location(
+    "tender_eval", ROOT / "eval" / "run_tender_eval.py")
+tender_eval = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tender_eval)
+cases = json.loads((ROOT / "eval" / "tender_cases.json").read_text())["cases"]
+all_null = tender_eval.metrics([
+    (case.get("expected_tender_number"), None) for case in cases
+])
+if all_null["recall"] != 0 or all_null["precision"] is not None:
+    raise SystemExit("all-null tender negative control did not produce zero recall")
+print("ALL-NULL NEGATIVE CONTROL PASS (recall 0; release gate would fail)")
 
-fails = []
-with sync_playwright() as p:
-    b = p.chromium.launch(args=["--disable-web-security", "--allow-running-insecure-content"])
-    pg = b.new_context(viewport={"width": 390, "height": 844}).new_page()
-    open_app(pg, KEY)
-    pg.wait_for_function("typeof StandaloneAPI !== 'undefined' && StandaloneAPI.__pure", timeout=30000)
+completed = subprocess.run(
+    [
+        sys.executable,
+        str(ROOT / "eval" / "run_tender_eval.py"),
+        "--trials", str(RUNS),
+        "--out", str(ROOT / "eval" / "results" / "tender"),
+    ],
+    cwd=ROOT,
+    text=True,
+    capture_output=True,
+    check=False,
+)
 
-    # 1. The shortlist must be identical across repeated builds.
-    lists = pg.evaluate("""async ([addr, lgd, n]) => {
-      const out = [];
-      for (let i = 0; i < n; i++) out.push(await StandaloneAPI.__pure.shortlistFor(addr, lgd));
-      return out;
-    }""", [ADDR, LGD, 5])
-    sigs = {json.dumps(l) for l in lists}
-    print(f"  shortlist built 5 times: {len(sigs)} distinct result(s)")
-    if len(sigs) != 1:
-        fails.append(f"the shortlist is not deterministic: {len(sigs)} different orderings")
-    if lists and lists[0]:
-        top = lists[0][0]
-        tied = sum(1 for x in lists[0] if abs(x["score"] - top["score"]) < 1e-9)
-        print(f"  {len(lists[0])} candidates, {tied} tied at the top score {top['score']:.3f}")
-        print(f"  first three: {[x['tn'] for x in lists[0][:3]]}")
+if completed.stdout:
+    print(completed.stdout.rstrip())
+if completed.returncode:
+    if completed.stderr:
+        print(completed.stderr.rstrip(), file=sys.stderr)
+    raise SystemExit(completed.returncode)
 
-    # 2. The end-to-end pick over live runs.
-    picks = []
-    for i in range(RUNS):
-        r = pg.evaluate("""async ([addr, lgd]) => {
-          const t = await StandaloneAPI.__pure.matchTenderFor(addr, lgd);
-          return t ? t.tender_number : null;
-        }""", [ADDR, LGD])
-        picks.append(r)
-    b.close()
-
-counts = collections.Counter(picks)
-print(f"\n  {RUNS} live runs -> {len(counts)} distinct contract(s):")
-for tn, n in counts.most_common():
-    print(f"    {n}x  {tn}")
-if len(counts) > 1:
-    fails.append(f"the same pothole named {len(counts)} different contracts across {RUNS} runs")
-
-print()
-if fails:
-    print("FAIL"); [print("  -", f) for f in fails]; sys.exit(1)
-print("TENDER DETERMINISM TEST PASS")
+print("TENDER DETERMINISM + PRECISION/RECALL TEST PASS")

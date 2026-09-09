@@ -1,0 +1,20 @@
+{
+  "schema_version": "rad-pothole-box-audit-v1",
+  "dataset_ref": "rohitsuresh15/radroad-anomaly-detection",
+  "dataset_version": 3,
+  "source_sha256": "REPLACE_WITH_EXACT_CONSUMED_RAD_TREE_SHA256",
+  "review": {
+    "human_verified": true,
+    "reviewer": "REPLACE_WITH_REVIEWER",
+    "reviewed_at": "YYYY-MM-DDTHH:MM:SSZ",
+    "method": "Full-frame review with pothole-only boxes on every road material and at road edges; off-road damage, cracks without cavities, protrusions, manholes and speed bumps were not boxed."
+  },
+  "frames": [
+    {
+      "frame_id": "145_10-07-2023_mp4:4",
+      "image_sha256": "REPLACE_WITH_SELECTED_FULL_FRAME_SHA256",
+      "complete_frame_review": true,
+      "pothole_boxes": [[0.5, 0.7, 0.25, 0.2]]
+    }
+  ]
+}

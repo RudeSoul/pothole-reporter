@@ -32,15 +32,14 @@ JS = r"""
 async ([mode, withSpeed, seconds]) => {
   localStorage.setItem("data_notice_version", DATA_NOTICE_VERSION);
   // Drive the app with a synthetic geolocation source and count what it captures.
-  let captures = 0, invalidBursts = 0;
+  let captures = 0, invalidCaptures = 0;
   const realFetchFrame = StandaloneAPI.handle;
   StandaloneAPI.handle = async (path, opts) => {
     if (path === "/api/frame") {
       captures++;
       const photos = opts.body.getAll("photo");
-      const primary = Number(opts.body.get("primary_index"));
-      if (photos.length !== 3 || !photos.every((p) => p && p.size) ||
-          !Number.isInteger(primary) || primary < 0 || primary >= photos.length) invalidBursts++;
+      if (photos.length !== 1 || !photos[0] || !photos[0].size ||
+          opts.body.has("primary_index") || opts.body.has("frame_quality")) invalidCaptures++;
       return { found: false };
     }
     return realFetchFrame(path, opts);
@@ -66,7 +65,7 @@ async ([mode, withSpeed, seconds]) => {
   try { await stopDrive(); } catch (e) {}
   StandaloneAPI.handle = realFetchFrame;
   navigator.geolocation.watchPosition = realWatch;
-  return { captures, invalidBursts };
+  return { captures, invalidCaptures };
 }
 """
 
@@ -83,7 +82,7 @@ with sync_playwright() as p:
         pg = ctx.new_page()
         open_app(pg, KEY)
         pg.wait_for_function("typeof startDrive === 'function'", timeout=30000)
-        # Decline the post-drive footage offer: this test counts live three-frame bursts,
+        # Decline the post-drive footage offer: this test counts live one-frame samples,
         # not the separate one-frame video reanalysis that Stop now correctly awaits.
         pg.evaluate("window.alert = () => {}; window.confirm = () => false;")
         result = pg.evaluate(JS, [mode, withSpeed, SECONDS])
@@ -105,8 +104,8 @@ with sync_playwright() as p:
             fails.append(f"{name}: {n} frames in {SECONDS}s, "
                          + ("faster than one every 5 s while parked" if mode == "parked"
                             else "wider than 9 m/event at representative city speed"))
-        if result["invalidBursts"]:
-            fails.append(f"{name}: {result['invalidBursts']} requests did not contain exactly three valid ordered burst frames")
+        if result["invalidCaptures"]:
+            fails.append(f"{name}: {result['invalidCaptures']} requests did not contain exactly one frame without burst-selection metadata")
     b.close()
 
 print()

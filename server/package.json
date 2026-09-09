@@ -1,0 +1,19 @@
+{
+  "name": "pothole-reporter-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "predeploy": "node ../llm/generate.mjs --check",
+    "deploy": "wrangler deploy",
+    "pretest": "node ../llm/generate.mjs --check",
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.33.0"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": "owned-training-rights-v1",
+  "sources": [
+    {
+      "source_sha256": "REPLACE_WITH_ZIP_OR_SEALED_DIRECTORY_SOURCE_SHA256",
+      "rights_holder": "REPLACE_WITH_RIGHTS_HOLDER",
+      "authorized_for_model_training": true,
+      "note": "The rights holder confirms that these images may be used to train and deploy the pothole model."
+    }
+  ]
+}

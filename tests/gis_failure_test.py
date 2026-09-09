@@ -23,14 +23,21 @@ CASES = [
 
 POST = """async ([b64, lat, lng]) => {
   await StandaloneAPI.handle('/api/reports', {method:'DELETE'});
+  const alerts = [];
+  window.alert = (message) => alerts.push(String(message));
   const bin=atob(b64); const a=new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);
   const fd=new FormData();
   fd.append('photo', new Blob([a],{type:'image/jpeg'}),'p.jpg');
   fd.append('lat',String(lat)); fd.append('lng',String(lng));
-  const r=await StandaloneAPI.handle('/api/report',{method:'POST',body:fd});
-  return { status:r.status, reason:r.unrouted_reason, email:r.officer_email,
-           subject:r.email_subject };
+  const initial=await StandaloneAPI.handle('/api/report',{method:'POST',body:fd});
+  openDetail(initial, [initial]);
+  await sendReport(initial);
+  const r=(await StandaloneAPI.handle('/api/reports')).find(row => row.id === initial.id);
+  return { initial_status:initial.status, status:r.status, reason:r.unrouted_reason,
+           email:r.officer_email, subject:r.email_subject, alert:alerts.at(-1) || '',
+           detail_text:document.getElementById('detail').innerText,
+           send_buttons:document.querySelectorAll('#detail #sendBtn').length };
 }"""
 
 fails = []
@@ -49,8 +56,18 @@ with sync_playwright() as p:
             fails.append(f"{name}: named {r['email']} with the GIS unreachable, so the highway check never ran")
         if r["subject"]:
             fails.append(f"{name}: drafted a sendable complaint with no verified jurisdiction")
+        if r["initial_status"] != "draft":
+            fails.append(f"{name}: personal detection did not return its initial draft immediately")
         if r["status"] != "unrouted":
             fails.append(f"{name}: status {r['status']}, expected unrouted")
+        if r["reason"] != "road_class_unknown":
+            fails.append(f"{name}: persisted reason {r['reason']!r}, expected road_class_unknown")
+        if "could not check whether this road is a national highway" not in r["alert"].lower():
+            fails.append(f"{name}: Email tap did not show the road-class refusal: {r['alert']!r}")
+        if "could not check who owns this road" not in r["detail_text"].lower():
+            fails.append(f"{name}: detail did not reopen on the reason-specific unrouted state")
+        if r["send_buttons"]:
+            fails.append(f"{name}: unrouted detail still offered an Email button")
     b.close()
 
 # ArcGIS reports failures as HTTP 200 with an error body and no features array. Defaulting
@@ -71,8 +88,18 @@ with sync_playwright() as p:
         print(f"    {name:22} status={r['status']:9} reason={str(r['reason'] or '-'):20} email={r['email'] or '-'}")
         if r["email"]:
             fails.append(f"{name}: named {r['email']} when the GIS returned an error body, so the highway check failed open")
+        if r["subject"]:
+            fails.append(f"{name}: retained a sendable subject on an error body")
         if r["status"] != "unrouted":
             fails.append(f"{name}: status {r['status']} on an error body, expected unrouted")
+        if r["reason"] != "road_class_unknown":
+            fails.append(f"{name}: error body persisted reason {r['reason']!r}, expected road_class_unknown")
+        if "could not check whether this road is a national highway" not in r["alert"].lower():
+            fails.append(f"{name}: error-body refusal was not reason-specific: {r['alert']!r}")
+        if "could not check who owns this road" not in r["detail_text"].lower():
+            fails.append(f"{name}: error-body detail did not reopen as unrouted")
+        if r["send_buttons"]:
+            fails.append(f"{name}: error-body unrouted detail still offered Email")
     b.close()
 
 if fails:

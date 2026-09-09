@@ -11,6 +11,7 @@ INIT_NATIVE_PROBE = r"""
 (() => {
   // Keep the test on Home instead of the unrelated first-run API-key Settings screen.
   // No request is made: prewarm and the capture picker are replaced below.
+  localStorage.setItem("vision_provider", "personal");
   localStorage.setItem("openai_key", "test-key-never-sent");
   const probe = window.__privacyProbe = {
     events: [],
@@ -140,14 +141,14 @@ with sync_playwright() as playwright:
     if camera_held["events"] != ["camera"] or camera_held["fileClicks"]:
         failures.append(f"capture: permission/file ordering is wrong before camera resolves: {camera_held}")
 
+    # Manual capture needs camera permission to open the picker. Location is requested
+    # only after a real photo comes back, so it cannot add seconds to camera startup or
+    # ask for precise location when the user cancels the picker.
     release_permission(page, "camera")
-    wait_for_event(page, "location")
-    location_held = snapshot(page)
-    if location_held["events"] != ["camera", "location"] or location_held["fileClicks"]:
-        failures.append(f"capture: file picker opened before both permissions resolved: {location_held}")
-    release_permission(page, "location")
     wait_for_event(page, "file")
     accepted = snapshot(page)
+    if accepted["events"] != ["camera", "prewarm", "file"]:
+        failures.append(f"capture: work after camera permission is in the wrong order: {accepted}")
     if accepted["fileClicks"] != 1 or accepted["consentVisible"]:
         failures.append(f"capture: accepted action did not resume exactly once: {accepted}")
 
@@ -159,9 +160,10 @@ with sync_playwright() as playwright:
     if repeated["consentVisible"]:
         failures.append("capture: current accepted notice was shown again")
     release_permission(page, "camera")
-    wait_for_event(page, "location", 2)
-    release_permission(page, "location")
     wait_for_event(page, "file", 2)
+    repeated_done = snapshot(page)
+    if "location" in repeated_done["events"]:
+        failures.append(f"capture: location was requested before a photo existed: {repeated_done}")
 
     # A stale notice version must disclose again. Android Back is a decline: it must not
     # upgrade the stored version or continue the interrupted capture action.
@@ -196,14 +198,13 @@ with sync_playwright() as playwright:
     page.locator("#privacyAccept").click()
     wait_for_event(page, "camera")
     release_permission(page, "camera")
-    wait_for_event(page, "location")
-    release_permission(page, "location")
     wait_for_event(page, "media")
     page.wait_for_function("driveStarting === false")
     drive_accepted = snapshot(page)
-    expected_prefix = ["camera", "location", "media"]
+    expected_prefix = ["camera", "media"]
     capture_order = [event for event in drive_accepted["events"] if event in expected_prefix]
-    if capture_order != expected_prefix or drive_accepted["drivePresent"]:
+    if (capture_order != expected_prefix or "location" in drive_accepted["events"]
+            or drive_accepted["drivePresent"]):
         failures.append(f"drive: accepted action did not preserve permission/camera order: {drive_accepted}")
     context.close()
 

@@ -1,0 +1,18 @@
+{
+  "schema_version": "owned-pothole-box-audit-v1",
+  "source_sha256": "REPLACE_WITH_ZIP_OR_SEALED_DIRECTORY_SOURCE_SHA256",
+  "review": {
+    "human_verified": true,
+    "reviewer": "REPLACE_WITH_REVIEWER",
+    "reviewed_at": "YYYY-MM-DDTHH:MM:SSZ",
+    "method": "Full-frame box annotation; every visible pothole on asphalt, concrete, gravel, dirt or mud was reviewed and boxed, including road-edge cavities. Damage wholly outside the road or track was not boxed."
+  },
+  "frames": [
+    {
+      "path": "images/frame-123.jpg",
+      "image_sha256": "REPLACE_WITH_IMAGE_SHA256",
+      "complete_frame_review": true,
+      "pothole_boxes": [[0.5, 0.7, 0.25, 0.2]]
+    }
+  ]
+}

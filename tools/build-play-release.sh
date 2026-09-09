@@ -37,13 +37,18 @@ require_tool diff
 require_tool find
 require_tool grep
 require_tool jarsigner
+require_tool keytool
+require_tool node
 require_tool sed
 require_tool shasum
 require_tool sort
 require_tool stat
 require_tool unzip
 
-echo "1/6 checking web-source mirrors (read only)"
+echo "1/7 checking the generated LLM contract (read only)"
+node llm/generate.mjs --check
+
+echo "2/7 checking web-source mirrors (read only)"
 [ -d static ] || fail "static source directory is missing"
 [ -d "$WWW_ROOT" ] || fail "Android www source directory is missing"
 [ -d "$PACKAGED_ASSETS_ROOT" ] || fail "packaged Android assets directory is missing"
@@ -66,16 +71,16 @@ while IFS= read -r packaged_file; do
   [ -f "$WWW_ROOT/$relative_path" ] || fail "stale Android public asset is not present in www: $relative_path"
 done < <(find "$PACKAGED_ASSETS_ROOT" -type f -print | sort)
 
-echo "2/6 building signed release bundle"
+echo "3/7 building signed release bundle"
 rm -f "$AAB_PATH"
 (cd "$ANDROID_ROOT" && ./gradlew --no-daemon --offline :app:bundleRelease -q)
 [ -s "$AAB_PATH" ] || fail "Gradle produced no non-empty AAB"
 [ -f "$BUNDLE_MANIFEST" ] || fail "Gradle produced no release bundle manifest"
 
-echo "3/6 validating release identity and manifest policy"
+echo "4/7 validating release identity and manifest policy"
 grep -Fq 'package="com.gauravsen.potholereporter"' "$BUNDLE_MANIFEST" || fail "unexpected application ID"
-grep -Fq 'android:versionCode="28"' "$BUNDLE_MANIFEST" || fail "expected versionCode 28"
-grep -Fq 'android:versionName="1.13.0"' "$BUNDLE_MANIFEST" || fail "expected versionName 1.13.0"
+grep -Fq 'android:versionCode="29"' "$BUNDLE_MANIFEST" || fail "expected versionCode 29"
+grep -Fq 'android:versionName="1.13.1"' "$BUNDLE_MANIFEST" || fail "expected versionName 1.13.1"
 grep -Fq 'android:allowBackup="false"' "$BUNDLE_MANIFEST" || fail "allowBackup must remain false"
 
 if grep -Eq 'android:(debuggable|testOnly)="true"' "$BUNDLE_MANIFEST"; then
@@ -86,7 +91,7 @@ if grep -Fq 'android:requestLegacyExternalStorage=' "$BUNDLE_MANIFEST"; then
 fi
 
 actual_permissions=$(sed -n 's/.*<uses-permission android:name="\([^"]*\)".*/\1/p' "$BUNDLE_MANIFEST" | sort -u)
-expected_permissions=$'android.permission.ACCESS_COARSE_LOCATION\nandroid.permission.ACCESS_FINE_LOCATION\nandroid.permission.ACCESS_NETWORK_STATE\nandroid.permission.CAMERA\nandroid.permission.INTERNET\ncom.gauravsen.potholereporter.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'
+expected_permissions=$'android.permission.ACCESS_COARSE_LOCATION\nandroid.permission.ACCESS_FINE_LOCATION\nandroid.permission.ACCESS_NETWORK_STATE\nandroid.permission.CAMERA\nandroid.permission.FOREGROUND_SERVICE\nandroid.permission.FOREGROUND_SERVICE_CAMERA\nandroid.permission.FOREGROUND_SERVICE_LOCATION\nandroid.permission.INTERNET\nandroid.permission.POST_NOTIFICATIONS\nandroid.permission.RECEIVE_BOOT_COMPLETED\nandroid.permission.WAKE_LOCK\ncom.gauravsen.potholereporter.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'
 if [ "$actual_permissions" != "$expected_permissions" ]; then
   echo "Expected permissions:" >&2
   printf '%s\n' "$expected_permissions" >&2
@@ -95,7 +100,7 @@ if [ "$actual_permissions" != "$expected_permissions" ]; then
   fail "release permission set changed; review it before publishing"
 fi
 
-echo "4/6 validating the AAB signature"
+echo "5/7 validating the AAB signature"
 signature_report=$(jarsigner -verify "$AAB_PATH" 2>&1 || true)
 if ! grep -Fq 'jar verified.' <<<"$signature_report" || grep -Fqi 'jar is unsigned' <<<"$signature_report"; then
   fail "AAB is not signed with a verifiable JAR signature"
@@ -107,8 +112,15 @@ fi
 if grep -Eqi 'unsigned entries|certificate (has expired|is not yet valid)|disabled algorithm' <<<"$certificate_report"; then
   fail "AAB signature has unsigned entries, an invalid validity period, or a disabled algorithm"
 fi
+# Do not accept an arbitrary non-debug key. Android treats a different signer as a
+# different application and reports the sideloaded update as invalid/incompatible.
+expected_upload_cert_sha256=296f947f8412aca3925cf5169c195ae097c6856d5751eedd789dd4bfba7bac8c
+actual_upload_cert_sha256=$(keytool -printcert -jarfile "$AAB_PATH" 2>/dev/null \
+  | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr '[:upper:]' '[:lower:]' | head -n 1)
+[ "$actual_upload_cert_sha256" = "$expected_upload_cert_sha256" ] \
+  || fail "release signer differs from the established Pothole Reporter upload certificate"
 
-echo "5/6 verifying bundled web assets"
+echo "6/7 verifying bundled web assets"
 while IFS= read -r source_file; do
   relative_path=${source_file#"$PACKAGED_ASSETS_ROOT"/}
   if ! diff -q <(unzip -p "$AAB_PATH" "base/assets/public/$relative_path") "$source_file" >/dev/null; then
@@ -116,11 +128,14 @@ while IFS= read -r source_file; do
   fi
 done < <(find "$PACKAGED_ASSETS_ROOT" -type f -print | sort)
 
-if unzip -p "$AAB_PATH" base/assets/public/standalone.js | grep -Eqa 'sk-(proj-)?[A-Za-z0-9_-]{20,}'; then
-  fail "an API-key-shaped value is embedded in standalone.js"
-fi
+while IFS= read -r packaged_js; do
+  if unzip -p "$AAB_PATH" "base/assets/public/$packaged_js" | grep -Eqa 'sk-(proj-)?[A-Za-z0-9_-]{20,}'; then
+    fail "an API-key-shaped value is embedded in $packaged_js"
+  fi
+done < <(find "$PACKAGED_ASSETS_ROOT" -type f -name '*.js' -print \
+  | sed "s#^$PACKAGED_ASSETS_ROOT/##" | sort)
 
-echo "6/6 release bundle accepted"
+echo "7/7 release bundle accepted"
 bundle_bytes=$(stat -f%z "$AAB_PATH" 2>/dev/null || stat -c%s "$AAB_PATH")
 bundle_sha256=$(shasum -a 256 "$AAB_PATH" | sed 's/[[:space:]].*//')
 printf 'AAB OK  %s bytes  SHA-256 %s\n%s\n' "$bundle_bytes" "$bundle_sha256" "$PROJECT_ROOT/$AAB_PATH"

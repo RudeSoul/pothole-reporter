@@ -84,10 +84,14 @@ independently of any geocoder.
 
 ## What is generated or inferred
 
-The pothole verdict, its size and the one-line description are produced by an AI vision
-model looking at the photograph, and the app says so. They are a judgement about a
-photograph, not a record, which is why the photograph is always attached: the officer can
-disagree by looking.
+The road-damage verdict is produced by an AI vision model looking at exactly one
+photograph. Its five fields are image quality (`acceptable` or `rejected`), assessment
+(`damaged` or `undamaged`), nullable damage type, nullable size, and a one-line
+description. Asphalt, concrete, gravel, dirt, and mud roads are in scope. Road-edge
+damage is still damage when it touches a kerb, gutter, shoulder, drain surround, or
+road-to-footpath joint; damage confined to an intact non-road object is not. The result
+is a judgement about a photograph, not a record, which is why the photograph is always
+attached: the officer can disagree by looking.
 
 A probable contract match is also a judgment, not a procurement record. The app first
 builds a deterministic local shortlist from address words and contracts indexed to the
@@ -95,6 +99,15 @@ same local body, then asks an AI model whether one candidate clearly covers that
 locality. A confidence threshold can reject weak matches, but it cannot turn an accepted
 match into proof. The complaint asks the receiving officer to verify it against the
 tender documents.
+
+The adjudication policy excludes footpath-, sidewalk-, pedestrian-walkway-, kerb-,
+drain-, culvert-, utility-, landscaping-, building-, park-, and other non-road-only
+works even when they name the exact street, locality, or ward. A combined work is
+eligible only when its text explicitly also covers road-surface repair, resurfacing,
+pavement, pothole filling, rehabilitation, or road maintenance. Prompt/threshold
+changes are checked with `python3 eval/run_tender_eval.py`, which reports precision and
+recall on sealed human-labelled positive and negative cases; an all-null matcher cannot
+pass that gate.
 
 The warranty status is **inferred** from how recently the tender was published, because
 award records carry no defect liability period. The complaint states it as a possibility
@@ -111,7 +124,7 @@ and should not be strengthened.
   shortlist. The remaining municipal rows are unresolved or belong to bodies without a
   published address; the 23,311 non-municipal rows belong to agencies such as PWD,
   panchayats, and irrigation departments and are not candidates for a municipal complaint.
-- The road-work filter matches on title keywords, so the candidate pool is inclusive by
-  design; the confidence gate on the match is what keeps weak candidates out of a
-  complaint.
+- The initial title-keyword filter is intentionally inclusive. The deterministic
+  shortlist and adjudicator's explicit non-road-only exclusion both matter; measured
+  tender precision and recall, rather than null-rate alone, gate prompt changes.
 - Contracts are a snapshot. Re-run `tools/pull-kppp.py` to refresh.

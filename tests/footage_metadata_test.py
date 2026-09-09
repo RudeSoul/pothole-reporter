@@ -7,6 +7,7 @@ replaced at the page API boundary so the test can inspect the exact FormData pro
 ``analyseFootage`` without calling a model.
 """
 import pathlib
+import json
 import sys
 
 from playwright.sync_api import sync_playwright
@@ -23,11 +24,18 @@ with sync_playwright() as p:
         "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream",
     ])
     context = browser.new_context(viewport={"width": 390, "height": 844})
+    context.add_init_script("localStorage.setItem('vision_provider', 'shared')")
 
     def block_real_remote(route):
         url = route.request.url
         if url.startswith(APP) or url.startswith("blob:") or url.startswith("data:"):
             route.continue_()
+        elif url == "https://pothole-detect.gauravsen.workers.dev/v1/health":
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({
+                "request_id": "test-health",
+                "ok": True,
+                "shared_vision_configured": True,
+            }))
         else:
             remote_leaks.append(url)
             route.abort()
@@ -98,10 +106,8 @@ with sync_playwright() as p:
           }
           frames.push(row);
           const observation = {
-            reportable: false, assessment: "absent", image_quality: "usable",
-            damage_type: "none", on_drivable_surface: true,
-            has_broken_edge_or_rim: false, has_depth_or_surface_loss: false,
-            temporal_consistency: "consistent", size: null, description: "No damage.",
+            image_quality: "acceptable", assessment: "undamaged",
+            damage_type: null, size: null, description: "The road is intact.",
           };
           return {
             analyzed: true, accepted: false, stored: false, found: false,

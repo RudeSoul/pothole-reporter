@@ -19,3 +19,38 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# --- Pothole Reporter native Drive Mode ---
+
+# Room: keep entity classes (Room uses reflection for column mapping)
+-keep class com.gauravsen.potholereporter.db.entities.** { *; }
+-keep class com.gauravsen.potholereporter.db.dao.** { *; }
+-keep class com.gauravsen.potholereporter.db.AppDatabase { *; }
+
+# Capacitor plugin: keep @PluginMethod methods accessible via reflection
+-keep class com.gauravsen.potholereporter.bridge.DriveModePlugin { *; }
+
+# OkHttp
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-keep class okhttp3.** { *; }
+-keep interface okhttp3.** { *; }
+
+# Kotlin coroutines
+-keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
+-keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
+-keepclassmembers class kotlinx.coroutines.** { volatile <fields>; }
+
+# WorkManager
+-keep class * extends androidx.work.Worker
+-keep class * extends androidx.work.ListenableWorker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
+
+# CameraX: keep internal classes that use reflection
+-keep class androidx.camera.** { *; }
+
+# Keep the notification action constants for PendingIntents
+-keep class com.gauravsen.potholereporter.drivemode.DriveModeService {
+    static final java.lang.String ACTION_*;
+}

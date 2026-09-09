@@ -16,14 +16,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = "http://localhost:8765/"
 
 ACCEPTED = {
-    "reportable": True,
-    "assessment": "clear",
-    "image_quality": "usable",
+    "image_quality": "acceptable",
+    "assessment": "damaged",
     "damage_type": "pothole_cavity",
-    "on_drivable_surface": True,
-    "has_broken_edge_or_rim": True,
-    "has_depth_or_surface_loss": True,
-    "temporal_consistency": "consistent",
     "size": "medium",
     "description": "A cavity with a broken rim is visible on the travelled surface.",
 }
@@ -31,6 +26,7 @@ ACCEPTED = {
 INIT = r"""
 (accepted) => {
   try {
+    localStorage.setItem("vision_provider", "personal");
     localStorage.setItem("openai_key", "test-key-never-sent");
     localStorage.removeItem("debug_mode");
   } catch (e) {}
@@ -61,6 +57,29 @@ INIT = r"""
 
   window.fetch = async (url, init = {}) => {
     const target = String(url);
+    if (target.startsWith("https://pothole-detect.gauravsen.workers.dev/")) {
+      const path = new URL(target).pathname;
+      const body = init.body ? JSON.parse(init.body) : {};
+      const headers = {"content-type":"application/json", "x-request-id":"test-central"};
+      if (path === "/v1/installations") return new Response(JSON.stringify({
+        request_id:"test-install", install_id:"test-installation"
+      }), {status:201, headers});
+      if (path === "/v1/activity") return new Response(JSON.stringify({
+        request_id:"test-activity", accepted:true, event:"vision_check"
+      }), {status:202, headers});
+      if (path === "/v1/tenders/resolve") return new Response(JSON.stringify({
+        request_id:"test-tender", jurisdiction:{lat:body.lat,lng:body.lng,address:null,
+          lgd:null,town:null,source:"unresolved",address_source:"unresolved"},
+        tender:null, reason:"test_no_match"
+      }), {status:200, headers});
+      if (path === "/v1/potholes/report") return new Response(JSON.stringify({
+        request_id:"test-report", duplicate:false, dedupe:null,
+        pothole:{id:9001,lat:body.lat,lng:body.lng,damage_type:body.damage_type,size:body.size,
+          first_seen_at:body.observed_at,last_seen_at:body.observed_at,
+          seen_count:1,lgd:null,town:null}
+      }), {status:201, headers});
+      throw new Error(`Unexpected central request: ${path}`);
+    }
     if (target.includes("api.openai.com/v1/models")) {
       return new Response('{"data":[]}', {
         status: 200, headers: { "content-type": "application/json" },
@@ -370,7 +389,7 @@ with sync_playwright() as p:
       const baseline = await StandaloneAPI.handle("/api/reports");
       const canonical = baseline.slice().sort((a, b) => a.lat - b.lat)[0];
       await new Promise((resolve, reject) => {
-        const req = indexedDB.open("potholes", 5);
+        const req = indexedDB.open("potholes", 7);
         req.onerror = () => reject(req.error);
         req.onsuccess = () => {
           const db = req.result;

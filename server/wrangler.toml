@@ -1,0 +1,44 @@
+name = "pothole-detect"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pothole-reporter"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# Short-lived replay markers and model-scoped YOLO monthly-cap circuits only.
+# Authoritative installations, usage, reports, tenders and aggregate metrics live
+# in D1. Circuit values contain no request or image data.
+[[kv_namespaces]]
+binding = "DEVICES"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+# Modes: openai, http_yolo, or openai_then_http_yolo. Keep the backward-
+# compatible OpenAI-only default until the YOLO URL, IAM credentials, and
+# defense-in-depth gateway token are set.
+SHARED_DETECTOR_PROVIDER = "openai"
+DAILY_VISION_CAP = "200"
+GLOBAL_VISION_MINUTE_CAP = "120"
+GLOBAL_VISION_DAILY_CAP = "5000"
+MONTHLY_VISION_CAP = "50000"
+OPENAI_TIMEOUT_MS = "55000"
+YOLO_MODEL = "pothole-yolo"
+YOLO_TIMEOUT_MS = "30000"
+YOLO_AWS_REGION = "ap-south-1"
+IDEMPOTENCY_CLAIM_TTL_MS = "180000"
+DEDUPE_METRES = "12"
+DEDUPE_MAX_METRES = "20"
+DEDUPE_DAYS = "120"
+NOMINATIM_USER_AGENT = "PotholeReporter/1.0 (operator contact required)"
+
+[triggers]
+crons = ["* * * * *"]
+
+[observability]
+enabled = true
+
+# Secrets are set with `wrangler secret put`: OPENAI_API_KEY, YOLO_API_KEY,
+# YOLO_AWS_ACCESS_KEY_ID, YOLO_AWS_SECRET_ACCESS_KEY, and, for temporary AWS
+# credentials, YOLO_AWS_SESSION_TOKEN. Never place those values in this file.

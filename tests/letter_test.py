@@ -29,6 +29,20 @@ JS = r"""
   const [, noTender] = P.draftEmail(a, 12.9, 77.6, "Main Road, Channagiri, 577213",
                                     "Chief Officer, Channagiri", null);
   out.noTender = noTender;
+  out.english = { subject: P.draftEmail(a, 12.9, 77.6,
+    "Main Road, Channagiri, 577213", "Chief Officer, Channagiri", tender)[0],
+    withTender: councilBody, noTender };
+
+  // draftEmail reads the language at call time, so the same production helper can be
+  // checked in both shipped languages without maintaining a second test implementation.
+  localStorage.setItem("app_lang", "kn");
+  const [knSubject, knTender] = P.draftEmail(a, 12.9, 77.6,
+    "ಮುಖ್ಯ ರಸ್ತೆ, ಚನ್ನಗಿರಿ, 577213", "ಮುಖ್ಯ ಅಧಿಕಾರಿ, ಚನ್ನಗಿರಿ", tender);
+  const [, knNoTender] = P.draftEmail(a, 12.9, 77.6,
+    "ಮುಖ್ಯ ರಸ್ತೆ, ಚನ್ನಗಿರಿ, 577213", "ಮುಖ್ಯ ಅಧಿಕಾರಿ, ಚನ್ನಗಿರಿ", null);
+  out.kannada = { subject: knSubject, withTender: knTender, noTender: knNoTender };
+  localStorage.removeItem("app_lang");
+
   out.types = {};
   for (const type of ["pothole_cavity", "failed_patch", "surface_breakup", "rut_or_depression"]) {
     const [subject, body] = P.draftEmail({ damage_type:type, size:"medium", description:"d" },
@@ -61,8 +75,37 @@ if "probable" not in council.lower() and "may still be" not in council.lower():
     fails.append("the contract claim lost its hedge")
 if "ACME" not in council:
     fails.append("the contractor is not named when one is recorded")
-if "no winning bidder" in r["noTender"] or "ACME" in r["noTender"]:
-    fails.append("a report with no contract still discusses one")
+
+# A matched tender may be useful context, but the app must not hint that one was found
+# when resolution returned null. Check the whole conditional paragraph rather than just
+# one contractor name: that catches a stale number, title, date, or boilerplate claim.
+for language, values in (("English", r["english"]), ("Kannada", r["kannada"])):
+    with_tender = values["withTender"]
+    no_tender = values["noTender"]
+    for token in ("DMA/1", "Road work", "ACME", "01-02-2026"):
+        if token not in with_tender:
+            fails.append(f"{language} matched-tender complaint omits {token!r}")
+        if token in no_tender:
+            fails.append(f"{language} no-tender complaint leaks {token!r}")
+    if language == "English":
+        if "tender DMA/1" not in with_tender or "probably" not in with_tender.lower():
+            fails.append("English tender wording lost the exact number or its probability hedge")
+        if "tender" in no_tender.lower():
+            fails.append("English no-tender complaint says a tender was found")
+        for phrase in ("Public procurement records", "probable record match", "tender documents"):
+            if phrase in no_tender:
+                fails.append(f"English no-tender complaint contains conditional wording: {phrase!r}")
+    else:
+        if "ಟೆಂಡರ್ DMA/1" not in with_tender or "ಸಂಭಾವ್ಯ" not in with_tender:
+            fails.append("Kannada tender wording lost the exact number or its probability hedge")
+        if "ಟೆಂಡರ್" in no_tender:
+            fails.append("Kannada no-tender complaint says a tender was found")
+
+for language, values in (("English", r["english"]), ("Kannada", r["kannada"])):
+    combined = values["subject"] + "\n" + values["withTender"]
+    for token in ("12.900000", "77.600000", "https://maps.google.com/?q=12.900000,77.600000"):
+        if token not in combined:
+            fails.append(f"{language} complaint omits location evidence {token!r}")
 
 types = r["types"]
 if "pothole" not in types["pothole_cavity"]["subject"].lower():
