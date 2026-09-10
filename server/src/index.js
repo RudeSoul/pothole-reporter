@@ -52,6 +52,16 @@ const MAX_OPENAI_UPSTREAM_TIMEOUT_MS = RUNTIME_CONFIG.timeoutsMs.serverOpenAIMax
 const MAX_YOLO_UPSTREAM_TIMEOUT_MS = RUNTIME_CONFIG.timeoutsMs.serverYoloMax;
 const KGIS_TOWN_URL =
   "https://kgis.ksrsac.in/kgismaps/rest/services/Boundaries/Admin_Dynamic_New/MapServer/1/query";
+const KGIS_NH_URL =
+  "https://kgis.ksrsac.in/kgismaps/rest/services/State_Basemap/State_Basemap_Dynamic/MapServer/289/query";
+const KGIS_SH_URL =
+  "https://kgis.ksrsac.in/kgismaps/rest/services/State_Basemap/State_Basemap_Dynamic/MapServer/290/query";
+const KGIS_DH_URL =
+  "https://kgis.ksrsac.in/kgismaps/rest/services/State_Basemap/State_Basemap_Dynamic/MapServer/291/query";
+const KGIS_GP_URL =
+  "https://kgis.ksrsac.in/kgismaps/rest/services/Boundaries/GP_Boundary/MapServer/0/query";
+const DEFAULT_NH_PROXIMITY_METRES = 20;
+const PUBLIC_NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse";
 const ALLOWED_MODELS = new Set(MODEL_CONFIG.allowedModels);
 const ALLOWED_IMAGE_DETAILS = new Set(MODEL_CONFIG.allowedImageDetails);
 const ORIGINAL_DETAIL_MODELS = new Set(MODEL_CONFIG.originalDetailModels);
@@ -71,7 +81,33 @@ const LOCATION_CACHE_TTL_MS = 5 * 60_000;
 const LOCATION_CACHE_MAX = 256;
 const DEFAULT_IDEMPOTENCY_CLAIM_TTL_MS = 3 * 60_000;
 const TENDER_IDEMPOTENCY_TTL_MS = 24 * 60 * 60_000;
+// Ownership policy is part of a tender result. Namespace the D1 replay key so a
+// deployment that adds a stricter NH/SH/DH gate can never replay a municipal or
+// contractor answer cached by an older policy, even while old clients keep using
+// the same caller-visible Idempotency-Key.
+const TENDER_IDEMPOTENCY_ROUTE = "/v1/tenders/resolve@ownership-v2";
+// Browser and WorkManager outboxes may survive a multi-day civic-service outage.
+// The receipt is single-observation, image, verdict and location bound, so a 30-day
+// retry window preserves delivery without authorizing a second map point.
+const DETECTION_RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000;
+const CONSUMED_RECEIPT_RETENTION_MS = 180 * 24 * 60 * 60_000;
+const PUBLIC_NOMINATIM_INTERVAL_MS = 1_000;
+const BOUNDED_IDEMPOTENCY_ROUTES = new Set([
+  TENDER_IDEMPOTENCY_ROUTE,
+  "/v1/vision/detect",
+]);
+// Personal-key detections are client-attested, so the server accepts only
+// explicitly supported contracts. Shared detections with a receipt are instead
+// validated against the immutable contract version stored in that receipt; this
+// lets a queued observation survive a later prompt deployment.
+const SUPPORTED_PERSONAL_DETECTOR_CONTRACTS = new Set([
+  `${DETECT_PROMPT_VERSION}:${DETECT_SCHEMA_VERSION}`,
+]);
 const locationCache = new Map();
+
+function idempotencyStorageRoute(pathname) {
+  return pathname === "/v1/tenders/resolve" ? TENDER_IDEMPOTENCY_ROUTE : pathname;
+}
 
 class HttpError extends Error {
   constructor(status, code, message, details) {
@@ -91,11 +127,38 @@ const finiteNumber = (value, fallback = NaN) => {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? number : fallback;
 };
+// Coordinates cross a public JSON boundary and must be JSON numbers. Number(null),
+// Number("") and Number(true) are finite, but accepting those coercions would put a
+// caller's malformed report at (0,0) or (1,1) on the public map.
+const externalCoordinate = (value) =>
+  typeof value === "number" && Number.isFinite(value) ? value : NaN;
 const boundedString = (value, max) =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
 const validLatLng = (lat, lng) =>
   Number.isFinite(lat) && Number.isFinite(lng)
   && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+const NON_MUNICIPAL_ROAD_OWNERSHIPS = new Set([
+  "national_highway", "state_highway", "district_highway",
+  "rural", "outside_state",
+]);
+
+// Only server-side KGIS resolution can change the public ownership projection.
+// Nonmunicipal results deliberately have source="unresolved" because they do not
+// expose a municipal LGD, so completeness must be checked from the lookup evidence.
+function authoritativeRoadOwnership(jurisdiction) {
+  if (!jurisdiction || typeof jurisdiction !== "object") return null;
+  const ownership = jurisdiction.road_ownership;
+  if (ownership === "municipal") {
+    return jurisdiction.source === "kgis" && boundedString(jurisdiction.lgd, 64)
+      ? ownership : null;
+  }
+  const lookup = jurisdiction.lookup;
+  if (!NON_MUNICIPAL_ROAD_OWNERSHIPS.has(ownership)
+      || !lookup || lookup.kgis !== "available") return null;
+  if (["rural", "outside_state"].includes(ownership)
+      && lookup.kgis_gp !== "available") return null;
+  return ownership;
+}
 
 function corsHeaders() {
   return {
@@ -215,9 +278,12 @@ function sharedDetectorStatus(env) {
     const primaryConfigured = Boolean(env.OPENAI_API_KEY);
     return {
       provider: configuredName,
-      model: MODEL_CONFIG.defaultModel,
-      configured: primaryConfigured && fallback.configured,
-      error: !primaryConfigured ? "missing_api_key" : fallback.error,
+      model: primaryConfigured ? MODEL_CONFIG.defaultModel : fallback.model,
+      // A complete YOLO gateway is the required safety boundary for chained
+      // mode. OpenAI is preferred when configured, but an absent key means its
+      // credits are unavailable and must not disable the configured fallback.
+      configured: fallback.configured,
+      error: fallback.error,
       primary_provider: "openai",
       primary_configured: primaryConfigured,
       fallback_provider: fallback.provider,
@@ -448,19 +514,60 @@ function validateImage(input, label) {
     dataUrl,
     mime,
     bytes: bytes.length,
+    decoded: bytes,
   };
 }
 
-async function parseJsonBody(request, context) {
-  if (!context.rawBody) {
-    context.rawBody = new Uint8Array(await request.clone().arrayBuffer());
+function rejectOversizedDeclaredBody(request) {
+  const declared = request.headers.get("content-length");
+  if (declared == null || declared === "") return;
+  if (!/^\d+$/.test(declared)) {
+    throw new HttpError(400, "bad_content_length", "Content-Length must be a byte count.");
   }
-  if (!context.rawBody.length) {
-    throw new HttpError(400, "bad_request", "Send a JSON request body.");
-  }
-  if (context.rawBody.length > MAX_JSON_BODY_BYTES) {
+  if (BigInt(declared) > BigInt(MAX_JSON_BODY_BYTES)) {
     throw new HttpError(413, "request_too_large",
       "The JSON request body may be no larger than 17 MB.");
+  }
+}
+
+async function readJsonBodyBytes(request, context) {
+  if (context.rawBody) return context.rawBody;
+  rejectOversizedDeclaredBody(request);
+  if (!request.body) {
+    context.rawBody = new Uint8Array(0);
+    return context.rawBody;
+  }
+
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+    total += chunk.byteLength;
+    if (total > MAX_JSON_BODY_BYTES) {
+      try { await reader.cancel("request body exceeds limit"); } catch { /* best effort */ }
+      throw new HttpError(413, "request_too_large",
+        "The JSON request body may be no larger than 17 MB.");
+    }
+    chunks.push(chunk);
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  context.rawBody = bytes;
+  return bytes;
+}
+
+async function parseJsonBody(request, context) {
+  await readJsonBodyBytes(request, context);
+  if (!context.rawBody.length) {
+    throw new HttpError(400, "bad_request", "Send a JSON request body.");
   }
   try {
     const parsed = JSON.parse(new TextDecoder().decode(context.rawBody));
@@ -511,9 +618,7 @@ async function authenticate(request, env, context) {
   if (!installation || installation.revoked_at) {
     throw new HttpError(401, "unknown_installation", "This app installation is not registered.");
   }
-  if (!context.rawBody) {
-    context.rawBody = new Uint8Array(await request.clone().arrayBuffer());
-  }
+  await readJsonBodyBytes(request, context);
   context.bodyHash = await sha256Hex(context.rawBody);
   context.idempotencyKey = boundedString(request.headers.get("idempotency-key"), 180);
   const canonical = [
@@ -569,10 +674,10 @@ function idempotencyClaimTtlMs(env) {
 
 async function idempotentResult(env, context) {
   requireIdempotency(context);
-  if (context.idempotencyRoute === "/v1/tenders/resolve") {
-    // Tender replay data contains a reverse-geocoded address. Keep it just long
-    // enough for safe client retries instead of turning idempotency into an
-    // indefinite location-history store.
+  if (BOUNDED_IDEMPOTENCY_ROUTES.has(context.idempotencyRoute)) {
+    // Tender responses contain a reverse-geocoded address, while detection
+    // responses contain a short-lived report receipt. Keep both only long enough
+    // for safe client retries.
     await env.DB.prepare(
       `DELETE FROM idempotency_keys
         WHERE install_id=?1 AND route=?2 AND idempotency_key=?3 AND created_at<?4`
@@ -663,12 +768,20 @@ function storedIdempotentResponse(row, context) {
     row.status_code, context.requestId);
 }
 
-async function rememberIdempotency(env, context, payload, statusCode = 200) {
+async function rememberIdempotency(
+  env,
+  context,
+  payload,
+  statusCode = 200,
+  beforeFinalizeStatements = [],
+) {
   if (!context.idempotencyClaimToken) {
     throw new HttpError(500, "idempotency_claim_lost",
       "The operation's idempotency claim was lost before completion.");
   }
+  const idempotencyIndex = beforeFinalizeStatements.length;
   const results = await env.DB.batch([
+    ...beforeFinalizeStatements,
     env.DB.prepare(
       `INSERT INTO idempotency_keys
          (install_id, route, idempotency_key, request_hash, status_code, response_json, created_at)
@@ -696,7 +809,8 @@ async function rememberIdempotency(env, context, payload, statusCode = 200) {
       context.idempotencyClaimToken,
     ),
   ]);
-  if (Number(results[0].meta && results[0].meta.changes || 0) !== 1) {
+  if (Number(results[idempotencyIndex].meta
+      && results[idempotencyIndex].meta.changes || 0) !== 1) {
     throw new HttpError(425, "idempotency_claim_lost",
       "The operation's idempotency lease expired. Retry with the same key.", {
         retryable: true,
@@ -721,7 +835,11 @@ async function releaseIdempotencyClaim(env, context) {
 }
 
 async function incrementCounter(env, scope, counterKey, limit) {
-  if (!Number.isFinite(limit) || limit <= 0) return { ok: true, used: null, limit: null };
+  if (!Number.isFinite(limit)) return { ok: true, used: null, limit: null };
+  // Zero is an operator kill switch, not "unlimited". All configured limits have
+  // positive defaults, so a negative value also fails closed instead of silently
+  // opening an unbounded shared-credit path after a typo.
+  if (limit <= 0) return { ok: false, used: 0, limit };
   const row = await env.DB.prepare(
     `INSERT INTO usage_counters(scope,counter_key,used,updated_at)
      VALUES (?1,?2,1,?3)
@@ -736,51 +854,86 @@ async function incrementCounter(env, scope, counterKey, limit) {
     : { ok: false, used: limit, limit };
 }
 
+async function rollbackCounters(env, acquired) {
+  if (!acquired.length) return;
+  // D1 batch() is transactional. A decrement represents this rejected admission,
+  // not a particular caller, so concurrent successful admissions remain counted.
+  // Keeping zero rows is harmless and avoids a delete/update race.
+  await env.DB.batch(acquired.map(({ scope, counterKey }) => env.DB.prepare(
+    `UPDATE usage_counters
+        SET used = CASE WHEN used > 0 THEN used - 1 ELSE 0 END,
+            updated_at = ?3
+      WHERE scope=?1 AND counter_key=?2`
+  ).bind(scope, counterKey, nowMs())));
+}
+
 async function takeVisionQuota(env, installId) {
   const dailyLimit = finiteNumber(env.DAILY_VISION_CAP, 200);
   const globalMinuteLimit = finiteNumber(env.GLOBAL_VISION_MINUTE_CAP, 120);
   const globalDailyLimit = finiteNumber(env.GLOBAL_VISION_DAILY_CAP, 5_000);
   const monthlyLimit = finiteNumber(env.MONTHLY_VISION_CAP, 50_000);
-  const daily = await incrementCounter(env, "install_day",
-    `${installId}:${isoDay()}`, dailyLimit);
-  if (!daily.ok) {
-    throw new HttpError(429, "daily_vision_limit",
-      `This installation has used today's ${daily.limit} shared vision checks.`, {
-        retryable: true,
-      });
+  const acquired = [];
+  const take = async (scope, counterKey, limit, errorFactory) => {
+    const result = await incrementCounter(env, scope, counterKey, limit);
+    if (!result.ok) throw errorFactory(result);
+    if (result.limit != null) acquired.push({ scope, counterKey });
+    return result;
+  };
+  try {
+    // Check project-wide admission before charging an installation. If any later
+    // gate refuses the operation, roll back every counter already acquired so a
+    // retry during shared overload cannot consume the caller's daily allowance.
+    const globalMinute = await take("global_minute", isoMinute(), globalMinuteLimit,
+      () => new HttpError(429, "shared_rate_limit",
+        "The shared vision service is at its global per-minute limit. Try shortly.", {
+          retryable: true,
+          retry_after_seconds: 60,
+        }));
+    const globalDay = await take("global_day", isoDay(), globalDailyLimit,
+      () => new HttpError(503, "shared_daily_budget_reached",
+        "The shared vision service has reached today's global limit. Use your own key or try tomorrow.", {
+          retryable: true,
+        }));
+    const monthly = await take("global_month", isoMonth(), monthlyLimit,
+      () => new HttpError(503, "shared_budget_reached",
+        "The shared vision service has reached its monthly limit. Use your own OpenAI key or try later.", {
+          retryable: true,
+        }));
+    const daily = await take("install_day", `${installId}:${isoDay()}`, dailyLimit,
+      (result) => new HttpError(429, "daily_vision_limit",
+        `This installation has used today's ${result.limit} shared vision checks.`, {
+          retryable: true,
+        }));
+    return { daily, globalMinute, globalDay, monthly };
+  } catch (error) {
+    try {
+      await rollbackCounters(env, acquired);
+    } catch (rollbackError) {
+      console.error(JSON.stringify({
+        event: "vision_quota_rollback_failed",
+        scopes: acquired.map(({ scope }) => scope),
+        error: String(rollbackError && rollbackError.message || rollbackError),
+      }));
+    }
+    throw error;
   }
-  const globalMinute = await incrementCounter(env, "global_minute",
-    isoMinute(), globalMinuteLimit);
-  if (!globalMinute.ok) {
-    throw new HttpError(429, "shared_rate_limit",
-      "The shared vision service is at its global per-minute limit. Try shortly.", {
-        retryable: true,
-        retry_after_seconds: 60,
-      });
-  }
-  const globalDay = await incrementCounter(env, "global_day",
-    isoDay(), globalDailyLimit);
-  if (!globalDay.ok) {
-    throw new HttpError(503, "shared_daily_budget_reached",
-      "The shared vision service has reached today's global limit. Use your own key or try tomorrow.", {
-        retryable: true,
-      });
-  }
-  const monthly = await incrementCounter(env, "global_month", isoMonth(), monthlyLimit);
-  if (!monthly.ok) {
-    throw new HttpError(503, "shared_budget_reached",
-      "The shared vision service has reached its monthly limit. Use your own OpenAI key or try later.", {
-        retryable: true,
-      });
-  }
-  return { daily, globalMinute, globalDay, monthly };
 }
 
 async function pruneExpiredTenderReplays(env) {
   const result = await env.DB.prepare(
     `DELETE FROM idempotency_keys
-      WHERE route='/v1/tenders/resolve' AND created_at<?1`
+      WHERE route IN ('/v1/tenders/resolve','/v1/tenders/resolve@ownership-v2',
+                      '/v1/vision/detect') AND created_at<?1`
   ).bind(nowMs() - TENDER_IDEMPOTENCY_TTL_MS).run();
+  return Number(result.meta && result.meta.changes || 0);
+}
+
+async function pruneExpiredDetectionReceipts(env) {
+  const result = await env.DB.prepare(
+    `DELETE FROM shared_detection_receipts
+      WHERE (consumed_at IS NULL AND expires_at<?1)
+         OR (consumed_at IS NOT NULL AND consumed_at<?2)`
+  ).bind(nowMs(), nowMs() - CONSUMED_RECEIPT_RETENTION_MS).run();
   return Number(result.meta && result.meta.changes || 0);
 }
 
@@ -825,6 +978,9 @@ async function recordMetrics(env, context, response, elapsedMs) {
     detector_provider: context.detectorProvider || null,
     detector_request_id: context.detectorRequestId || null,
     openai_request_id: context.openaiRequestId || null,
+    detection_openai_request_id: context.detectionOpenAIRequestId || null,
+    tender_openai_request_id: context.tenderOpenAIRequestId || null,
+    yolo_request_id: context.yoloRequestId || null,
     openai_error_code: context.openaiErrorCode || null,
     yolo_error_code: context.yoloErrorCode || null,
     detector_fallback_reason: context.detectorFallbackReason || null,
@@ -1061,7 +1217,7 @@ function isOpenAIExhaustionError(error) {
     && OPENAI_EXHAUSTION_CODES.has(error.details && error.details.openai_error_code);
 }
 
-async function callOpenAI(env, context, body) {
+async function callOpenAI(env, context, body, purpose = "detection") {
   if (!env.OPENAI_API_KEY) {
     throw new HttpError(503, "shared_vision_not_configured",
       "The shared vision service is not configured. Use your own OpenAI key.");
@@ -1093,7 +1249,12 @@ async function callOpenAI(env, context, body) {
     clearTimeout(timer);
   }
   context.openaiRequestId = response.headers.get("x-request-id") || null;
-  if (context.detectorProvider === "openai") {
+  if (purpose === "tender") {
+    context.tenderOpenAIRequestId = context.openaiRequestId;
+  } else {
+    context.detectionOpenAIRequestId = context.openaiRequestId;
+  }
+  if (purpose === "detection" && context.detectorProvider === "openai") {
     context.detectorRequestId = context.openaiRequestId;
   }
   const upstreamError = response.ok
@@ -1210,6 +1371,7 @@ async function callHttpYolo(env, context, detector, input) {
     clearTimeout(timer);
   }
   context.detectorRequestId = response.headers.get("x-request-id") || null;
+  context.yoloRequestId = context.detectorRequestId;
   if (response.status === 401 || response.status === 403) {
     throw new HttpError(503, "shared_vision_not_configured",
       "The shared detector rejected its server credential. Use your own OpenAI key.", {
@@ -1261,8 +1423,8 @@ async function callSharedDetector(env, context, detector, input) {
     const result = await callHttpYolo(env, context, detector, input);
     return { ...result, provider: detector.provider };
   }
-  const model = selectedModel(input.body);
   const callPrimary = async () => {
+    const model = selectedModel(input.body);
     context.detectorProvider = "openai";
     const verdict = await callOpenAI(env, context, {
       model,
@@ -1282,6 +1444,13 @@ async function callSharedDetector(env, context, detector, input) {
     return { verdict, provider: "openai", model };
   };
   if (detector.provider === "openai") return callPrimary();
+  if (!detector.primary_configured) {
+    context.detectorProvider = "http_yolo";
+    const result = await callHttpYolo(env, context, detector.fallback, input);
+    // This is a direct configured-backend call, not a failed OpenAI request, so
+    // do not emit fallback_from/fallback_reason provenance.
+    return { ...result, provider: "http_yolo" };
+  }
 
   try {
     return await callPrimary();
@@ -1349,11 +1518,7 @@ function imageContent(
   }];
 }
 
-async function handleVisionDetect(request, env, context) {
-  context.visionMode = "shared_detect";
-  const body = await parseJsonBody(request, context);
-  const cached = await idempotentResult(env, context);
-  if (cached) return cached;
+function prepareSharedDetection(body, env) {
   const imagesRaw = Array.isArray(body.images) ? body.images : [];
   if (imagesRaw.length !== 1) {
     throw new HttpError(400, "bad_image_count",
@@ -1383,21 +1548,49 @@ async function handleVisionDetect(request, env, context) {
   // Preserve the existing client-selectable OpenAI model while keeping the YOLO
   // model entirely server-owned. The chained mode still validates its primary
   // model before claiming idempotency or quota.
-  const model = detector.provider === "http_yolo" ? null : selectedModel(body);
+  const usesOpenAI = detector.provider === "openai"
+    || (detector.provider === "openai_then_http_yolo" && detector.primary_configured);
+  const model = usesOpenAI ? selectedModel(body) : null;
   // Pure YOLO accepts the universal high/default setting but rejects OpenAI-only
   // original detail. callHttpYolo constructs an allowlisted payload and never
   // forwards this presentation hint to the server-owned detector.
   const imageDetail = selectedImageDetail(body, model);
-  await rejectReplay(env, context);
-  const quota = await takeVisionQuota(env, context.installId);
-  const prompt = detectionPrompt(captureMode, language);
-  const detection = await callSharedDetector(env, context, detector, {
+  const clientObservationId = boundedString(body.client_observation_id, 180) || null;
+  const hasLat = Object.prototype.hasOwnProperty.call(body, "lat");
+  const hasLng = Object.prototype.hasOwnProperty.call(body, "lng");
+  if (hasLat !== hasLng) {
+    throw new HttpError(400, "bad_detection_location",
+      "lat and lng must either both be supplied or both be omitted.");
+  }
+  const lat = hasLat ? externalCoordinate(body.lat) : null;
+  const lng = hasLng ? externalCoordinate(body.lng) : null;
+  if (hasLat && !validLatLng(lat, lng)) {
+    throw new HttpError(400, "bad_detection_location",
+      "Detection receipt coordinates must be valid lat and lng values.");
+  }
+  return {
     body,
     images,
-    prompt,
+    detector,
     captureMode,
     language,
     imageDetail,
+    clientObservationId,
+    lat,
+    lng,
+  };
+}
+
+async function runSharedDetection(env, context, prepared) {
+  const quota = await takeVisionQuota(env, context.installId);
+  const prompt = detectionPrompt(prepared.captureMode, prepared.language);
+  const detection = await callSharedDetector(env, context, prepared.detector, {
+    body: prepared.body,
+    images: prepared.images,
+    prompt,
+    captureMode: prepared.captureMode,
+    language: prepared.language,
+    imageDetail: prepared.imageDetail,
   });
   const verdict = validateDetectionVerdict(detection.verdict);
   const payload = {
@@ -1408,7 +1601,7 @@ async function handleVisionDetect(request, env, context) {
       model: detection.model,
       prompt_version: DETECT_PROMPT_VERSION,
       schema_version: DETECT_SCHEMA_VERSION,
-      evidence_count: images.length,
+      evidence_count: prepared.images.length,
       ...(detection.fallbackFrom ? {
         fallback_from: detection.fallbackFrom,
         fallback_reason: detection.fallbackReason,
@@ -1416,7 +1609,81 @@ async function handleVisionDetect(request, env, context) {
     },
     quota: { used: quota.daily.used, limit: quota.daily.limit },
   };
-  await rememberIdempotency(env, context, payload);
+  return { payload, verdict, detection };
+}
+
+async function handleVisionDetect(request, env, context) {
+  context.visionMode = "shared_detect";
+  const body = await parseJsonBody(request, context);
+  const cached = await idempotentResult(env, context);
+  if (cached) return cached;
+  const prepared = prepareSharedDetection(body, env);
+  await rejectReplay(env, context);
+  const { payload, verdict, detection } = await runSharedDetection(env, context, prepared);
+  const beforeFinalize = [];
+  if (verdict.image_quality === "acceptable" && verdict.assessment === "damaged"
+      && prepared.clientObservationId) {
+    const issuedAt = nowMs();
+    const imageHash = await sha256Hex(prepared.images[0].decoded);
+    const receiptId = await sha256Hex([
+      // A fresh paid re-analysis gets a fresh one-use receipt even when every
+      // client field is identical. An idempotency replay still returns the cached
+      // original response and therefore the same receipt.
+      context.requestId,
+      context.installId,
+      prepared.clientObservationId,
+      imageHash,
+      DETECT_PROMPT_VERSION,
+      DETECT_SCHEMA_VERSION,
+      verdict.damage_type,
+      verdict.size || "",
+      detection.provider,
+      detection.model || "",
+      prepared.lat == null ? "" : prepared.lat,
+      prepared.lng == null ? "" : prepared.lng,
+    ].join("\n"));
+    const expiresAt = issuedAt + DETECTION_RECEIPT_TTL_MS;
+    payload.detection_receipt = receiptId;
+    payload.detection_receipt_expires_at = expiresAt;
+    beforeFinalize.push(env.DB.prepare(
+      `INSERT INTO shared_detection_receipts
+         (receipt_id,install_id,client_observation_id,image_hash,detection_lat,detection_lng,
+          damage_type,size,backend_provider,detector_model,prompt_version,schema_version,
+          issued_at,expires_at,consumed_at,consumed_request_id,consumed_client_observation_id)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,NULL,NULL,NULL)
+       ON CONFLICT(receipt_id) DO UPDATE SET
+         detection_lat=excluded.detection_lat,
+         detection_lng=excluded.detection_lng,
+         damage_type=excluded.damage_type,
+         size=excluded.size,
+         backend_provider=excluded.backend_provider,
+         detector_model=excluded.detector_model,
+         issued_at=excluded.issued_at,
+         expires_at=excluded.expires_at
+       WHERE shared_detection_receipts.install_id=excluded.install_id
+         AND shared_detection_receipts.client_observation_id=excluded.client_observation_id
+         AND shared_detection_receipts.image_hash=excluded.image_hash
+         AND shared_detection_receipts.prompt_version=excluded.prompt_version
+         AND shared_detection_receipts.schema_version=excluded.schema_version
+         AND shared_detection_receipts.consumed_at IS NULL`
+    ).bind(
+      receiptId,
+      context.installId,
+      prepared.clientObservationId,
+      imageHash,
+      prepared.lat,
+      prepared.lng,
+      verdict.damage_type,
+      verdict.size,
+      detection.provider,
+      detection.model,
+      DETECT_PROMPT_VERSION,
+      DETECT_SCHEMA_VERSION,
+      issuedAt,
+      expiresAt,
+    ));
+  }
+  await rememberIdempotency(env, context, payload, 200, beforeFinalize);
   context.outcome = verdict.image_quality === "rejected"
     ? "image_rejected" : verdict.assessment;
   return jsonResponse(payload, 200, context.requestId);
@@ -1495,6 +1762,8 @@ function publicPothole(row) {
     first_seen_at: Number(row.first_seen_at),
     last_seen_at: Number(row.last_seen_at),
     seen_count: Number(row.seen_count || 0),
+    verified_shared_observers: Number(row.verified_shared_observers || 0),
+    client_attested_observers: Number(row.client_attested_observers || 0),
     lgd: row.body_lgd || null,
     town: row.town || null,
   };
@@ -1510,6 +1779,79 @@ function sizeConflicts(candidate, existing) {
   return candidate.size && existing.size
     && ((candidate.size === "small" && existing.size === "large")
       || (candidate.size === "large" && existing.size === "small"));
+}
+
+function sharedDetectionReceiptsRequired(env) {
+  return String(env.REQUIRE_SHARED_DETECTION_RECEIPT || "true").toLowerCase()
+    !== "false";
+}
+
+async function verifySharedDetectionReceipt(env, context, candidate) {
+  if (candidate.detector.provider !== "shared_server") return null;
+  if (!candidate.detectionReceiptId) {
+    if (!sharedDetectionReceiptsRequired(env)) {
+      if (candidate.detector.prompt_version !== DETECT_PROMPT_VERSION
+          || candidate.detector.schema_version !== DETECT_SCHEMA_VERSION) {
+        throw new HttpError(409, "detector_version_mismatch",
+          `Receipt-free rollout reports require detector ${DETECT_PROMPT_VERSION} schema ${DETECT_SCHEMA_VERSION}.`);
+      }
+      return null;
+    }
+    throw new HttpError(400, "detection_receipt_required",
+      "A server-issued detection_receipt is required for shared-server map reports.");
+  }
+  const receipt = await env.DB.prepare(
+    `SELECT receipt_id,install_id,client_observation_id,image_hash,detection_lat,detection_lng,
+            damage_type,size,backend_provider,detector_model,prompt_version,schema_version,
+            expires_at,consumed_at,
+            consumed_client_observation_id
+       FROM shared_detection_receipts WHERE receipt_id=?1`
+  ).bind(candidate.detectionReceiptId).first();
+  if (!receipt || receipt.install_id !== context.installId) {
+    throw new HttpError(403, "invalid_detection_receipt",
+      "That detection receipt was not issued to this installation.");
+  }
+  if (Number(receipt.expires_at) < nowMs()) {
+    throw new HttpError(409, "detection_receipt_expired",
+      "That detection receipt has expired. Check the image again before reporting it.");
+  }
+  const expectedSize = receipt.size == null ? null : String(receipt.size);
+  if (receipt.client_observation_id !== candidate.clientObservationId
+      || String(receipt.image_hash).toLowerCase() !== candidate.imageHash
+      || receipt.damage_type !== candidate.damageType
+      || expectedSize !== candidate.size
+      || receipt.prompt_version !== candidate.detector.prompt_version
+      || Number(receipt.schema_version) !== candidate.detector.schema_version) {
+    throw new HttpError(409, "detection_receipt_mismatch",
+      "The report does not match the image and verdict authorized by its detection receipt.");
+  }
+  if (receipt.detection_lat == null || receipt.detection_lng == null
+      || !validLatLng(Number(receipt.detection_lat), Number(receipt.detection_lng))) {
+    throw new HttpError(409, "detection_receipt_missing_location",
+      "The shared detection had no location, so it cannot be added to the public map.");
+  }
+  const tolerance = Math.min(10, Math.max(1,
+    finiteNumber(env.RECEIPT_LOCATION_TOLERANCE_METRES, 3)));
+  if (metresBetween(
+    candidate.lat,
+    candidate.lng,
+    Number(receipt.detection_lat),
+    Number(receipt.detection_lng),
+  ) > tolerance) {
+    throw new HttpError(409, "detection_receipt_location_mismatch",
+      "The report location does not match the location bound to its detection receipt.");
+  }
+  if (receipt.consumed_at != null
+      && receipt.consumed_client_observation_id !== candidate.clientObservationId) {
+    throw new HttpError(409, "detection_receipt_consumed",
+      "That detection receipt has already been used for another observation.");
+  }
+  // Shared-server provenance comes from the server receipt, never from the
+  // caller's report metadata.
+  candidate.detector.model = receipt.detector_model || null;
+  candidate.detector.prompt_version = receipt.prompt_version;
+  candidate.detector.schema_version = Number(receipt.schema_version);
+  return receipt;
 }
 
 async function nearbyPothole(
@@ -1535,8 +1877,11 @@ async function nearbyPothole(
                FROM potholes
               WHERE lat BETWEEN ?1 AND ?2
                 AND lng BETWEEN ?3 AND ?4
-                AND last_seen_at >= ?5
-                AND seen_count > 0`;
+                AND last_seen_at >= ?5`;
+  // Ordinary dedupe ignores abandoned empty canonicals. Post-insert race
+  // reconciliation must include lower-ID zero-count rows because another request
+  // may have inserted its canonical but not committed its first observation yet.
+  if (beforeId == null) sql += " AND seen_count > 0";
   if (excludeId != null) {
     sql += ` AND id != ?${bound.length + 1}`;
     bound.push(excludeId);
@@ -1545,7 +1890,9 @@ async function nearbyPothole(
     sql += ` AND id < ?${bound.length + 1}`;
     bound.push(beforeId);
   }
-  sql += " ORDER BY first_seen_at ASC, id ASC LIMIT 100";
+  sql += beforeId == null
+    ? " ORDER BY first_seen_at ASC, id ASC LIMIT 100"
+    : " ORDER BY id ASC LIMIT 100";
   const { results = [] } = await env.DB.prepare(sql).bind(...bound).all();
   let best = null;
   let bestDistance = Infinity;
@@ -1553,6 +1900,12 @@ async function nearbyPothole(
     if (!compatibleDamage(candidate, row) || sizeConflicts(candidate, row)) continue;
     const distance = metresBetween(candidate.lat, candidate.lng,
       Number(row.lat), Number(row.lng));
+    if (beforeId != null && distance <= radius) {
+      // Every in-flight reporter must converge on the same stable root. Choosing
+      // the nearest lower row lets a three-way race form a chain through a row
+      // another request is about to delete.
+      return { row, distance, radius };
+    }
     if (distance <= radius && distance < bestDistance) {
       best = row;
       bestDistance = distance;
@@ -1563,6 +1916,27 @@ async function nearbyPothole(
     : null;
 }
 
+function observationMatchesCandidate(stored, candidate, potholeId, toleranceMetres) {
+  if (!stored || Number(stored.pothole_id) !== potholeId) return false;
+  const storedSize = stored.size == null ? null : String(stored.size);
+  const storedModel = stored.detector_model == null
+    ? null : String(stored.detector_model);
+  return stored.damage_type === candidate.damageType
+    && storedSize === candidate.size
+    && stored.image_hash === candidate.imageHash
+    && stored.detector_provider === candidate.detector.provider
+    && storedModel === candidate.detector.model
+    && stored.prompt_version === candidate.detector.prompt_version
+    && Number(stored.schema_version) === candidate.detector.schema_version
+    && validLatLng(Number(stored.lat), Number(stored.lng))
+    && metresBetween(
+      Number(stored.lat),
+      Number(stored.lng),
+      candidate.lat,
+      candidate.lng,
+    ) <= toleranceMetres;
+}
+
 async function commitReportObservation(
   env,
   context,
@@ -1571,19 +1945,49 @@ async function commitReportObservation(
   distance,
   jurisdiction,
 ) {
-  const authoritative = jurisdiction.source === "kgis" ? 1 : 0;
-  // These statements are one logical report mutation. D1 batch() is
-  // transactional: an observation can never survive without its observer/count
-  // projections.
-  // Every projection is derived from stored observations so a resubmitted client
-  // ID also repairs data written by an older, partially transactional deployment.
-  await env.DB.batch([
-    env.DB.prepare(
+  const resolvedOwnership = authoritativeRoadOwnership(jurisdiction);
+  const authoritativeOwnership = resolvedOwnership ? 1 : 0;
+  const municipalOwnership = resolvedOwnership === "municipal" ? 1 : 0;
+  const receipt = candidate.detectionReceipt || null;
+  const locationTolerance = Math.min(10, Math.max(1,
+    finiteNumber(env.RECEIPT_LOCATION_TOLERANCE_METRES, 3)));
+  // Use one timestamp for every receipt predicate in this transaction. Two clock
+  // reads could otherwise straddle expiry and insert a verified observation while
+  // the receipt-consumption UPDATE matched zero rows.
+  const commitAt = nowMs();
+  // Reject a reused observation ID before touching any projection. The SQL
+  // projection guards below repeat this boundary to cover two concurrent calls
+  // that both completed this read before either inserted its observation.
+  const before = await env.DB.prepare(
+    `SELECT pothole_id,lat,lng,damage_type,size,image_hash,detector_provider,
+            detector_model,prompt_version,schema_version
+       FROM observations
+      WHERE install_id=?1 AND client_observation_id=?2`
+  ).bind(context.installId, candidate.clientObservationId).first();
+  if (before && !observationMatchesCandidate(
+    before, candidate, potholeId, locationTolerance)) {
+    throw new HttpError(409, "observation_id_conflict",
+      "That client_observation_id already belongs to different evidence or location.");
+  }
+  const observationInsert = receipt
+    ? env.DB.prepare(
       `INSERT OR IGNORE INTO observations
          (pothole_id,install_id,request_id,client_observation_id,observed_at,
           lat,lng,gps_accuracy_m,heading_deg,speed_mps,damage_type,size,image_hash,
-          detector_provider,detector_model,prompt_version,schema_version,duplicate_distance_m)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)`
+          detector_provider,verification_state,detector_model,prompt_version,schema_version,
+          duplicate_distance_m)
+       SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,
+              'server_verified_shared',?15,?16,?17,?18
+        WHERE EXISTS (
+          SELECT 1 FROM shared_detection_receipts r
+           WHERE r.receipt_id=?19 AND r.install_id=?2
+             AND r.client_observation_id=?4 AND r.image_hash=?13
+             AND r.damage_type=?11
+             AND (r.size=?12 OR (r.size IS NULL AND ?12 IS NULL))
+             AND r.prompt_version=?16 AND r.schema_version=?17
+             AND r.expires_at>=?20
+             AND (r.consumed_at IS NULL OR r.consumed_client_observation_id=?4)
+        )`
     ).bind(
       potholeId,
       context.installId,
@@ -1603,7 +2007,79 @@ async function commitReportObservation(
       candidate.detector.prompt_version,
       candidate.detector.schema_version,
       distance,
-    ),
+      candidate.detectionReceiptId,
+      commitAt,
+    )
+    : env.DB.prepare(
+      `INSERT OR IGNORE INTO observations
+         (pothole_id,install_id,request_id,client_observation_id,observed_at,
+          lat,lng,gps_accuracy_m,heading_deg,speed_mps,damage_type,size,image_hash,
+          detector_provider,verification_state,detector_model,prompt_version,schema_version,
+          duplicate_distance_m)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,
+               'client_attested',?15,?16,?17,?18)`
+    ).bind(
+      potholeId,
+      context.installId,
+      context.requestId,
+      candidate.clientObservationId,
+      candidate.observedAt,
+      candidate.lat,
+      candidate.lng,
+      candidate.gpsAccuracy,
+      candidate.heading,
+      candidate.speed,
+      candidate.damageType,
+      candidate.size,
+      candidate.imageHash,
+      candidate.detector.provider,
+      candidate.detector.model,
+      candidate.detector.prompt_version,
+      candidate.detector.schema_version,
+      distance,
+    );
+  // These statements are one logical report mutation. D1 batch() is
+  // transactional: an observation can never survive without its observer/count
+  // projections.
+  // Every projection is derived from stored observations so a resubmitted client
+  // ID also repairs data written by an older, partially transactional deployment.
+  await env.DB.batch([
+    observationInsert,
+    ...(receipt ? [env.DB.prepare(
+      `UPDATE shared_detection_receipts
+          SET consumed_at=COALESCE(consumed_at,?1),
+              consumed_request_id=COALESCE(consumed_request_id,?2),
+              consumed_client_observation_id=COALESCE(consumed_client_observation_id,?3)
+        WHERE receipt_id=?4 AND install_id=?5
+          AND client_observation_id=?3 AND expires_at>=?1
+          AND (consumed_at IS NULL OR consumed_client_observation_id=?3)
+          AND EXISTS (
+            SELECT 1 FROM observations o
+             WHERE o.install_id=?5 AND o.client_observation_id=?3
+               AND o.image_hash=?6 AND o.damage_type=?7
+               AND (o.size=?8 OR (o.size IS NULL AND ?8 IS NULL))
+               AND o.pothole_id=?9 AND o.lat=?10 AND o.lng=?11
+               AND o.detector_provider='shared_server'
+               AND o.verification_state='server_verified_shared'
+               AND (o.detector_model=?12 OR (o.detector_model IS NULL AND ?12 IS NULL))
+               AND o.prompt_version=?13 AND o.schema_version=?14
+          )`
+    ).bind(
+      commitAt,
+      context.requestId,
+      candidate.clientObservationId,
+      candidate.detectionReceiptId,
+      context.installId,
+      candidate.imageHash,
+      candidate.damageType,
+      candidate.size,
+      potholeId,
+      candidate.lat,
+      candidate.lng,
+      candidate.detector.model,
+      candidate.detector.prompt_version,
+      candidate.detector.schema_version,
+    )] : []),
     env.DB.prepare(
       `INSERT INTO pothole_observers
          (pothole_id,install_id,first_seen_at,last_seen_at)
@@ -1614,12 +2090,32 @@ async function commitReportObservation(
             SELECT 1 FROM observations accepted
              WHERE accepted.pothole_id=?1 AND accepted.install_id=?2
                AND accepted.client_observation_id=?3
+               AND accepted.image_hash=?4 AND accepted.damage_type=?5
+               AND (accepted.size=?6 OR (accepted.size IS NULL AND ?6 IS NULL))
+               AND accepted.lat=?7 AND accepted.lng=?8
+               AND accepted.detector_provider=?9
+               AND (accepted.detector_model=?10
+                 OR (accepted.detector_model IS NULL AND ?10 IS NULL))
+               AND accepted.prompt_version=?11 AND accepted.schema_version=?12
           )
         GROUP BY o.pothole_id,o.install_id
        ON CONFLICT(pothole_id,install_id) DO UPDATE SET
          first_seen_at=MIN(pothole_observers.first_seen_at,excluded.first_seen_at),
          last_seen_at=MAX(pothole_observers.last_seen_at,excluded.last_seen_at)`
-    ).bind(potholeId, context.installId, candidate.clientObservationId),
+    ).bind(
+      potholeId,
+      context.installId,
+      candidate.clientObservationId,
+      candidate.imageHash,
+      candidate.damageType,
+      candidate.size,
+      candidate.lat,
+      candidate.lng,
+      candidate.detector.provider,
+      candidate.detector.model,
+      candidate.detector.prompt_version,
+      candidate.detector.schema_version,
+    ),
     env.DB.prepare(
       `UPDATE potholes
           SET first_seen_at=COALESCE(
@@ -1630,34 +2126,71 @@ async function commitReportObservation(
                 last_seen_at),
               seen_count=(
                 SELECT COUNT(*) FROM pothole_observers WHERE pothole_id=?1),
-              body_lgd=CASE WHEN ?4=1 THEN ?5 ELSE body_lgd END,
-              town=CASE WHEN ?4=1 AND ?6 IS NOT NULL THEN ?6 ELSE town END
+              body_lgd=CASE
+                WHEN ?4=1 AND ?5=1 THEN ?6
+                WHEN ?4=1 THEN NULL
+                ELSE body_lgd END,
+              town=CASE
+                WHEN ?4=1 AND ?5=1 THEN ?7
+                WHEN ?4=1 THEN NULL
+                ELSE town END
         WHERE id=?1
           AND EXISTS (
             SELECT 1 FROM observations accepted
              WHERE accepted.pothole_id=?1 AND accepted.install_id=?2
                AND accepted.client_observation_id=?3
+               AND accepted.image_hash=?8 AND accepted.damage_type=?9
+               AND (accepted.size=?10 OR (accepted.size IS NULL AND ?10 IS NULL))
+               AND accepted.lat=?11 AND accepted.lng=?12
+               AND accepted.detector_provider=?13
+               AND (accepted.detector_model=?14
+                 OR (accepted.detector_model IS NULL AND ?14 IS NULL))
+               AND accepted.prompt_version=?15 AND accepted.schema_version=?16
           )`
     ).bind(
       potholeId,
       context.installId,
       candidate.clientObservationId,
-      authoritative,
+      authoritativeOwnership,
+      municipalOwnership,
       jurisdiction.lgd,
       jurisdiction.town,
+      candidate.imageHash,
+      candidate.damageType,
+      candidate.size,
+      candidate.lat,
+      candidate.lng,
+      candidate.detector.provider,
+      candidate.detector.model,
+      candidate.detector.prompt_version,
+      candidate.detector.schema_version,
     ),
   ]);
 
   const stored = await env.DB.prepare(
-    `SELECT pothole_id FROM observations
+    `SELECT pothole_id,lat,lng,damage_type,size,image_hash,detector_provider,
+            detector_model,prompt_version,schema_version FROM observations
       WHERE install_id=?1 AND client_observation_id=?2`
   ).bind(context.installId, candidate.clientObservationId).first();
   if (!stored) {
     throw new HttpError(500, "report_write_failed", "The pothole observation could not be saved.");
   }
-  if (Number(stored.pothole_id) !== potholeId) {
+  if (!observationMatchesCandidate(stored, candidate, potholeId, locationTolerance)) {
     throw new HttpError(409, "observation_id_conflict",
-      "That client_observation_id already belongs to another pothole.");
+      "That client_observation_id already belongs to different evidence or location.");
+  }
+  if (receipt) {
+    const consumed = await env.DB.prepare(
+      `SELECT consumed_at,consumed_request_id,consumed_client_observation_id
+         FROM shared_detection_receipts
+        WHERE receipt_id=?1 AND install_id=?2`
+    ).bind(candidate.detectionReceiptId, context.installId).first();
+    if (!consumed || !(Number(consumed.consumed_at) > 0)
+        || !consumed.consumed_request_id
+        || consumed.consumed_client_observation_id !== candidate.clientObservationId) {
+      throw new HttpError(500, "receipt_consumption_failed",
+        "The shared detection receipt could not be transactionally consumed.");
+    }
   }
 }
 
@@ -1671,17 +2204,22 @@ async function cleanupEmptyCanonical(env, potholeId, requestId) {
 }
 
 async function applyAuthoritativeJurisdiction(env, potholeId, jurisdiction) {
-  if (jurisdiction.source !== "kgis") return;
+  const ownership = authoritativeRoadOwnership(jurisdiction);
+  if (!ownership) return;
+  if (ownership === "municipal") {
+    await env.DB.prepare(
+      `UPDATE potholes SET body_lgd = ?1, town = ?2 WHERE id = ?3`
+    ).bind(jurisdiction.lgd, jurisdiction.town, potholeId).run();
+    return;
+  }
   await env.DB.prepare(
-    `UPDATE potholes
-        SET body_lgd = ?1, town = COALESCE(?2, town)
-      WHERE id = ?3`
-  ).bind(jurisdiction.lgd, jurisdiction.town, potholeId).run();
+    "UPDATE potholes SET body_lgd = NULL, town = NULL WHERE id = ?1"
+  ).bind(potholeId).run();
 }
 
 function reportCandidate(body) {
-  const lat = finiteNumber(body.lat);
-  const lng = finiteNumber(body.lng);
+  const lat = externalCoordinate(body.lat);
+  const lng = externalCoordinate(body.lng);
   if (!validLatLng(lat, lng)) {
     throw new HttpError(400, "bad_location", "A report needs valid lat and lng coordinates.");
   }
@@ -1720,14 +2258,25 @@ function reportCandidate(body) {
   const detectorPromptVersion = boundedString(detector.prompt_version, 80);
   const detectorSchemaVersion = Number.isInteger(detector.schema_version)
     ? detector.schema_version : null;
+  const detectionReceiptId = boundedString(body.detection_receipt, 128).toLowerCase();
+  if (detectionReceiptId && !/^[a-f0-9]{64}$/.test(detectionReceiptId)) {
+    throw new HttpError(400, "bad_detection_receipt",
+      "detection_receipt must be the server-issued 64-character identifier.");
+  }
   if (!["shared_server", "personal_openai", "own_key"].includes(detectorProvider)) {
     throw new HttpError(400, "bad_detector_provider",
       "detector.provider must identify shared_server or personal_openai.");
   }
-  if (detectorPromptVersion !== DETECT_PROMPT_VERSION
-      || detectorSchemaVersion !== DETECT_SCHEMA_VERSION) {
+  if (!detectorPromptVersion || !Number.isInteger(detectorSchemaVersion)
+      || detectorSchemaVersion < 1) {
+    throw new HttpError(400, "bad_detector_contract",
+      "detector.prompt_version and a positive integer schema_version are required.");
+  }
+  if (detectorProvider !== "shared_server"
+      && !SUPPORTED_PERSONAL_DETECTOR_CONTRACTS.has(
+        `${detectorPromptVersion}:${detectorSchemaVersion}`)) {
     throw new HttpError(409, "detector_version_mismatch",
-      `Reports require detector ${DETECT_PROMPT_VERSION} schema ${DETECT_SCHEMA_VERSION}.`);
+      "That personal-key detector contract is not supported by this server.");
   }
   return {
     lat,
@@ -1740,6 +2289,8 @@ function reportCandidate(body) {
     damageType,
     size,
     imageHash,
+    detectionReceiptId: detectionReceiptId || null,
+    detectionReceipt: null,
     detector: {
       provider: detectorProvider,
       model: boundedString(detector.model, 80) || null,
@@ -1751,10 +2302,18 @@ function reportCandidate(body) {
   };
 }
 
-async function reportResponse(env, context, row, duplicate, distance, extra = {}) {
+async function reportResult(env, context, row, duplicate, distance, extra = {}) {
   const current = await env.DB.prepare(
     `SELECT id,lat,lng,body_lgd,town,damage_type,size,
-            first_seen_at,last_seen_at,seen_count
+            first_seen_at,last_seen_at,seen_count,
+            (SELECT COUNT(DISTINCT install_id) FROM observations
+              WHERE pothole_id=potholes.id
+                AND verification_state='server_verified_shared')
+              AS verified_shared_observers,
+            (SELECT COUNT(DISTINCT install_id) FROM observations
+              WHERE pothole_id=potholes.id
+                AND verification_state='client_attested')
+              AS client_attested_observers
        FROM potholes WHERE id = ?1`
   ).bind(row.id).first();
   const payload = {
@@ -1769,38 +2328,13 @@ async function reportResponse(env, context, row, duplicate, distance, extra = {}
     pothole: publicPothole(current),
   };
   const status = duplicate ? 200 : 201;
-  await rememberIdempotency(env, context, payload, status);
   context.potholeId = current.id;
   context.outcome = extra.resubmitted
     ? "resubmitted" : duplicate ? "duplicate" : "new_pothole";
-  return jsonResponse(payload, status, context.requestId);
+  return { payload, status };
 }
 
-async function handlePotholeReport(request, env, context) {
-  const body = await parseJsonBody(request, context);
-  const cached = await idempotentResult(env, context);
-  if (cached) return cached;
-  const candidate = reportCandidate(body);
-  // Resolve the body here as well as in tender lookup. Native capture can report
-  // before tender resolution finishes, and client hints must never become the map's
-  // authoritative jurisdiction when KGIS is available.
-  const jurisdiction = await resolveJurisdiction(
-    env,
-    {
-      lgd_hint: candidate.lgd,
-      town_hint: candidate.town,
-      address_hint: body.address_hint,
-    },
-    candidate.lat,
-    candidate.lng,
-  );
-  candidate.lgd = jurisdiction.lgd;
-  candidate.town = jurisdiction.town;
-  context.visionMode = ["personal_openai", "own_key"].includes(candidate.detector.provider)
-    ? "own_key" : candidate.detector.provider === "shared_server"
-      ? "shared_server" : "none";
-  await rejectReplay(env, context);
-
+async function persistReportCandidate(env, context, candidate, jurisdiction) {
   const resubmitted = await env.DB.prepare(
     `SELECT p.id,p.lat,p.lng,p.body_lgd,p.town,p.damage_type,p.size,
             p.first_seen_at,p.last_seen_at,p.seen_count
@@ -1816,7 +2350,7 @@ async function handlePotholeReport(request, env, context) {
       0,
       jurisdiction,
     );
-    return reportResponse(env, context, resubmitted, true, 0,
+    return reportResult(env, context, resubmitted, true, 0,
       { resubmitted: true, kind: "same_observation" });
   }
 
@@ -1832,7 +2366,7 @@ async function handlePotholeReport(request, env, context) {
       existing.distance,
       jurisdiction,
     );
-    return reportResponse(env, context, existing.row, true, existing.distance);
+    return reportResult(env, context, existing.row, true, existing.distance);
   }
 
   const inserted = await env.DB.prepare(
@@ -1878,7 +2412,7 @@ async function handlePotholeReport(request, env, context) {
       duplicate ? distance : null,
       jurisdiction,
     );
-    return await reportResponse(
+    return await reportResult(
       env,
       context,
       { id: potholeId },
@@ -1904,18 +2438,133 @@ async function handlePotholeReport(request, env, context) {
   }
 }
 
-async function fetchJsonWithTimeout(url, init = {}, timeoutMs = 10_000) {
+async function handlePotholeReport(request, env, context) {
+  const body = await parseJsonBody(request, context);
+  const cached = await idempotentResult(env, context);
+  if (cached) return cached;
+  const candidate = reportCandidate(body);
+  await rejectReplay(env, context);
+  candidate.detectionReceipt = await verifySharedDetectionReceipt(
+    env, context, candidate);
+  // Resolve the body here as well as in tender lookup. Native capture can report
+  // before tender resolution finishes, and client hints must never become the map's
+  // authoritative jurisdiction when KGIS is available.
+  const jurisdiction = await resolveJurisdiction(
+    env,
+    {
+      lgd_hint: candidate.lgd,
+      town_hint: candidate.town,
+      address_hint: body.address_hint,
+    },
+    candidate.lat,
+    candidate.lng,
+  );
+  // Client hints can keep an outage-tolerant response useful, but public map
+  // jurisdiction is authoritative only when KGIS verified municipal ownership.
+  const municipalJurisdiction = jurisdiction.source === "kgis"
+    && jurisdiction.road_ownership === "municipal";
+  candidate.lgd = municipalJurisdiction ? jurisdiction.lgd : null;
+  candidate.town = municipalJurisdiction ? jurisdiction.town : null;
+  context.visionMode = ["personal_openai", "own_key"].includes(candidate.detector.provider)
+    ? "own_key" : candidate.detector.provider === "shared_server"
+      ? "shared_server" : "none";
+  const result = await persistReportCandidate(env, context, candidate, jurisdiction);
+  await rememberIdempotency(env, context, result.payload, result.status);
+  return jsonResponse(result.payload, result.status, context.requestId);
+}
+
+async function fetchJsonWithTimeout(
+  url,
+  init = {},
+  timeoutMs = 10_000,
+  validate = () => true,
+) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
     if (!response.ok) return { available: false, data: null };
-    return { available: true, data: await response.json() };
+    const data = await response.json();
+    return validate(data)
+      ? { available: true, data }
+      : { available: false, data: null };
   } catch {
     return { available: false, data: null };
   } finally {
     clearTimeout(timer);
   }
+}
+
+function validArcGisPayload(value) {
+  return Boolean(value && typeof value === "object" && !value.error
+    && Array.isArray(value.features));
+}
+
+function validGeocoderPayload(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && !value.error && boundedString(shortAddress(value), 500));
+}
+
+function kgisPointUrl(endpoint, lat, lng, outFields, distanceMetres = 0) {
+  const geometry = encodeURIComponent(JSON.stringify({
+    x: lng,
+    y: lat,
+    spatialReference: { wkid: 4326 },
+  }));
+  const distance = Number.isFinite(distanceMetres) && distanceMetres > 0
+    ? `&distance=${encodeURIComponent(String(distanceMetres))}`
+      + "&units=esriSRUnit_Meter"
+    : "";
+  return `${endpoint}?geometry=${geometry}`
+    + "&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects"
+    + distance
+    + `&outFields=${encodeURIComponent(outFields)}`
+    + "&returnGeometry=false&f=json";
+}
+
+function reverseGeocoder(env, lat, lng) {
+  const configured = boundedString(env.GEOCODER_REVERSE_URL, 2_048);
+  const allowPublic = String(env.ALLOW_PUBLIC_NOMINATIM || "false").toLowerCase()
+    === "true";
+  const endpoint = configured || (allowPublic ? PUBLIC_NOMINATIM_URL : "");
+  if (!endpoint) return null;
+  try {
+    const url = new URL(endpoint);
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    if (url.hostname === "nominatim.openstreetmap.org" && !allowPublic) return null;
+    url.searchParams.set("lat", String(lat));
+    url.searchParams.set("lon", String(lng));
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("zoom", "17");
+    url.searchParams.set("addressdetails", "1");
+    const headers = {
+      "user-agent": boundedString(env.GEOCODER_USER_AGENT, 300)
+        || "PotholeReporter/1.13 (+https://github.com/coding-parrot/pothole-reporter)",
+    };
+    const token = boundedString(env.GEOCODER_BEARER_TOKEN, 2_048);
+    if (configured && url.hostname !== "nominatim.openstreetmap.org" && token) {
+      headers.authorization = `Bearer ${token}`;
+    }
+    return {
+      url: url.href,
+      headers,
+      publicNominatim: url.hostname === "nominatim.openstreetmap.org",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function acquirePublicNominatimLease(env) {
+  const time = nowMs();
+  const row = await env.DB.prepare(
+    `INSERT INTO external_rate_gates(name,next_allowed_at)
+     VALUES ('public_nominatim',?1)
+     ON CONFLICT(name) DO UPDATE SET next_allowed_at=excluded.next_allowed_at
+       WHERE external_rate_gates.next_allowed_at<=?2
+     RETURNING next_allowed_at`
+  ).bind(time + PUBLIC_NOMINATIM_INTERVAL_MS, time).first();
+  return Boolean(row);
 }
 
 function cachedLocation(lat, lng) {
@@ -1954,63 +2603,162 @@ async function resolveJurisdiction(env, body, lat, lng) {
   const cache = cachedLocation(lat, lng);
   let resolved = cache.value;
   if (!resolved) {
-    const geometry = encodeURIComponent(JSON.stringify({
-      x: lng,
-      y: lat,
-      spatialReference: { wkid: 4326 },
-    }));
-    const kgisUrl = `${KGIS_TOWN_URL}?geometry=${geometry}`
-      + "&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects"
-      + "&outFields=KGISTownName,Town_Type,KGISTownCode,LGD_TownCode"
-      + "&returnGeometry=false&f=json";
-    const nominatimUrl = "https://nominatim.openstreetmap.org/reverse"
-      + `?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`
-      + "&format=jsonv2&zoom=17&addressdetails=1";
-    const [kgisResult, geocodeResult] = await Promise.all([
-      fetchJsonWithTimeout(kgisUrl),
-      fetchJsonWithTimeout(nominatimUrl, {
-        headers: {
-          "user-agent": env.NOMINATIM_USER_AGENT
-            || "PotholeReporter/1.0 (set operator contact)",
-        },
-      }),
+    const geocoder = reverseGeocoder(env, lat, lng);
+    const geocoderAdmitted = geocoder && geocoder.publicNominatim
+      ? await acquirePublicNominatimLease(env) : Boolean(geocoder);
+    const highwayProximityMetres = Math.min(50, Math.max(5,
+      finiteNumber(env.KGIS_NH_PROXIMITY_METRES, DEFAULT_NH_PROXIMITY_METRES)));
+    const [townResult, nationalHighwayResult, stateHighwayResult,
+      districtHighwayResult, geocodeResult] = await Promise.all([
+      fetchJsonWithTimeout(kgisPointUrl(
+        KGIS_TOWN_URL,
+        lat,
+        lng,
+        "KGISTownName,Town_Type,KGISTownCode,LGD_TownCode",
+      ), {}, 10_000, validArcGisPayload),
+      fetchJsonWithTimeout(kgisPointUrl(
+        KGIS_NH_URL,
+        lat,
+        lng,
+        "Name",
+        highwayProximityMetres,
+      ), {}, 10_000, validArcGisPayload),
+      fetchJsonWithTimeout(kgisPointUrl(
+        KGIS_SH_URL,
+        lat,
+        lng,
+        "Name",
+        highwayProximityMetres,
+      ), {}, 10_000, validArcGisPayload),
+      fetchJsonWithTimeout(kgisPointUrl(
+        KGIS_DH_URL,
+        lat,
+        lng,
+        "Name",
+        highwayProximityMetres,
+      ), {}, 10_000, validArcGisPayload),
+      geocoderAdmitted
+        ? fetchJsonWithTimeout(
+          geocoder.url,
+          { headers: geocoder.headers, redirect: "error" },
+          10_000,
+          validGeocoderPayload,
+        )
+        : Promise.resolve({ available: false, data: null }),
     ]);
-    const kgis = kgisResult.data;
+    const kgis = townResult.data;
     const geocode = geocodeResult.data;
-    const feature = kgis && !kgis.error && Array.isArray(kgis.features)
-      ? kgis.features[0] : null;
+    const highwayLayers = [
+      { result: nationalHighwayResult, ownership: "national_highway" },
+      { result: stateHighwayResult, ownership: "state_highway" },
+      { result: districtHighwayResult, ownership: "district_highway" },
+    ];
+    const highwaysAvailable = highwayLayers.every(({ result }) => result.available);
+    const highwayMatch = highwayLayers.find(({ result }) =>
+      result.data && result.data.features[0]);
+    const highwayFeature = highwayMatch
+      && highwayMatch.result.data.features[0];
+    const feature = kgis && kgis.features[0];
     const attributes = feature && feature.attributes || {};
+    const authoritativeTownLgd = attributes.LGD_TownCode == null
+      ? "" : boundedString(String(attributes.LGD_TownCode), 64);
+    let roadOwnership = "unknown";
+    let highwayName = null;
+    let gpAvailable = false;
+    let gpName = null;
+    if (townResult.available && highwaysAvailable) {
+      if (highwayFeature) {
+        roadOwnership = highwayMatch.ownership;
+        highwayName = boundedString(highwayFeature.attributes
+          && highwayFeature.attributes.Name, 160) || null;
+      } else if (feature && authoritativeTownLgd) {
+        roadOwnership = "municipal";
+      } else if (feature) {
+        // A polygon without its authoritative LGD key cannot safely select a
+        // tender partition. Do not substitute the caller's lgd_hint.
+        roadOwnership = "unknown";
+      } else {
+        const gpResult = await fetchJsonWithTimeout(kgisPointUrl(
+          KGIS_GP_URL,
+          lat,
+          lng,
+          "KGISGPName",
+        ), {}, 10_000, validArcGisPayload);
+        gpAvailable = gpResult.available;
+        const gpFeature = gpResult.data && gpResult.data.features[0];
+        gpName = boundedString(gpFeature && gpFeature.attributes
+          && gpFeature.attributes.KGISGPName, 160) || null;
+        roadOwnership = !gpResult.available
+          ? "unknown" : gpName ? "rural" : "outside_state";
+      }
+    }
     resolved = {
-      lgd: attributes.LGD_TownCode
-        ? String(attributes.LGD_TownCode).trim() : "",
+      lgd: authoritativeTownLgd,
       town: attributes.KGISTownName
         ? String(attributes.KGISTownName).trim() : "",
       address: shortAddress(geocode) || "",
-      kgisAvailable: kgisResult.available,
+      kgisAvailable: townResult.available && highwaysAvailable,
+      townAvailable: townResult.available,
+      highwayAvailable: highwaysAvailable,
+      nationalHighwayAvailable: nationalHighwayResult.available,
+      stateHighwayAvailable: stateHighwayResult.available,
+      districtHighwayAvailable: districtHighwayResult.available,
+      gpAvailable,
       geocoderAvailable: geocodeResult.available,
+      geocoderProvider: geocoder && geocoder.publicNominatim
+        ? "public_nominatim" : geocoder ? "operator_geocoder" : null,
+      roadOwnership,
+      highwayName,
+      gpName,
     };
-    // This is an isolate-memory optimization only: no tender-only coordinate or
-    // address is persisted to KV/D1. Do not cache a total upstream outage.
-    if (resolved.kgisAvailable || resolved.geocoderAvailable) {
+    // Cache only a complete answer. Caching one provider's transient failure next
+    // to another provider's success made retries reuse the failure for five minutes.
+    const ownershipComplete = resolved.kgisAvailable
+      && resolved.roadOwnership !== "unknown"
+      && (resolved.roadOwnership !== "rural" || resolved.gpAvailable);
+    const addressComplete = resolved.roadOwnership !== "municipal"
+      || resolved.geocoderAvailable;
+    if (ownershipComplete && addressComplete) {
       rememberLocation(cache.key, resolved);
     }
   }
-  const hintLgd = boundedString(body.lgd_hint, 64);
-  const hintTown = boundedString(body.town_hint, 160);
   const hintAddress = boundedString(body.address_hint, 500);
+  // A Town polygon says where the point lies; it does not make that town the road
+  // owner.  Never expose (or let a client persist) municipal identity for a highway,
+  // rural road, outside-state point, or unresolved ownership.  Municipal resolution
+  // already requires KGIS' authoritative LGD_TownCode, so client identity hints are
+  // neither necessary nor safe here.
+  const municipal = resolved.roadOwnership === "municipal";
+  const publicLgd = municipal ? resolved.lgd || null : null;
+  const publicTown = municipal ? resolved.town || null : null;
   return {
     lat,
     lng,
     address: resolved.address || hintAddress || null,
-    lgd: resolved.lgd || hintLgd || null,
-    town: resolved.town || hintTown || null,
-    source: resolved.lgd ? "kgis" : hintLgd ? "client_hint" : "unresolved",
+    lgd: publicLgd,
+    town: publicTown,
+    source: publicLgd ? "kgis" : "unresolved",
     address_source: resolved.address
-      ? "nominatim" : hintAddress ? "client_hint" : "unresolved",
+      ? resolved.geocoderProvider || "geocoder"
+      : hintAddress ? "client_hint" : "unresolved",
     lookup: {
       kgis: resolved.kgisAvailable ? "available" : "unavailable",
-      nominatim: resolved.geocoderAvailable ? "available" : "unavailable",
+      kgis_town: resolved.townAvailable ? "available" : "unavailable",
+      kgis_highway: resolved.highwayAvailable ? "available" : "unavailable",
+      kgis_national_highway: resolved.nationalHighwayAvailable ? "available" : "unavailable",
+      kgis_state_highway: resolved.stateHighwayAvailable ? "available" : "unavailable",
+      kgis_district_highway: resolved.districtHighwayAvailable ? "available" : "unavailable",
+      kgis_gp: resolved.gpAvailable ? "available" : "not_needed_or_unavailable",
+      geocoder: resolved.geocoderAvailable ? "available"
+        : hintAddress ? "skipped_client_hint" : "unavailable",
+      // Retain the released name while the configured endpoint becomes
+      // provider-neutral.
+      nominatim: resolved.geocoderAvailable ? "available"
+        : hintAddress ? "skipped_client_hint" : "unavailable",
     },
+    road_ownership: resolved.roadOwnership || "unknown",
+    highway_name: resolved.highwayName || null,
+    rural_body: resolved.gpName || null,
   };
 }
 
@@ -2021,7 +2769,7 @@ async function backfillObservedPotholeJurisdiction(
   lng,
   jurisdiction,
 ) {
-  if (jurisdiction.source !== "kgis") return null;
+  if (!authoritativeRoadOwnership(jurisdiction)) return null;
   const radius = Math.max(1, finiteNumber(env.DEDUPE_MAX_METRES, 20));
   const [minLat, maxLat, minLng, maxLng] = boundingBox(lat, lng, radius);
   const { results = [] } = await env.DB.prepare(
@@ -2051,37 +2799,86 @@ async function backfillObservedPotholeJurisdiction(
 const TENDER_STOP = new Set([
   "road", "roads", "street", "cross", "main", "layout", "bengaluru", "bangalore",
   "karnataka", "india", "ward", "city", "corporation", "south", "north", "east",
-  "west", "central", "urban", "sector", "stage", "block", "phase",
+  "west", "central", "urban", "sector", "stage", "block", "phase", "nagar",
+  "nagara", "colony", "enclave", "extension", "extn", "area", "locality",
+  "village", "town", "zone", "division", "circle", "junction", "lane",
+  "old", "new", "service", "rd", "st",
 ]);
 const BENGALURU_BODIES = new Set(["305850", "305851", "305852", "305853", "305854"]);
 
 function addressTokens(address) {
   const tokens = new Set();
   for (const part of String(address || "").split(",").slice(0, 4)) {
-    for (const word of part.trim().toLowerCase()
-      .replace(/[()]/g, " ").split(/[^a-z0-9]+/)) {
+    const words = part.trim().toLowerCase()
+      .replace(/[()]/g, " ").split(/[^a-z0-9]+/).filter(Boolean);
+    for (const word of words) {
       if (word.length > 2 && !TENDER_STOP.has(word)) tokens.add(word);
+    }
+    // Karnataka locality names commonly alternate between spaced and joined forms
+    // ("Vasanth Nagar" / "Vasanthnagar"). Add only complete adjacent n-grams,
+    // never arbitrary substrings, so that this recall aid cannot make "Nagar" match
+    // an unrelated "Vijayanagar".
+    for (let width = 2; width <= Math.min(3, words.length); width++) {
+      for (let start = 0; start + width <= words.length; start++) {
+        const phrase = words.slice(start, start + width);
+        const compact = phrase.join("");
+        if (compact.length >= 5 && phrase.some((word) => !TENDER_STOP.has(word))) {
+          tokens.add(compact);
+        }
+      }
     }
   }
   return tokens;
 }
 
-function tenderShortlist(address, pool) {
+function tenderDescriptionTokens(value) {
+  const words = String(value || "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const tokens = new Set(words.filter((word) => word.length > 2));
+  for (let width = 2; width <= Math.min(3, words.length); width++) {
+    for (let start = 0; start + width <= words.length; start++) {
+      const phrase = words.slice(start, start + width);
+      const compact = phrase.join("");
+      if (compact.length >= 5 && phrase.some((word) => !TENDER_STOP.has(word))) {
+        tokens.add(compact);
+      }
+    }
+  }
+  return tokens;
+}
+
+function tenderShortlist(address, pool, limit = TENDER_CONFIG.maxCandidates) {
   const tokens = addressTokens(address);
   if (!tokens.size || !pool.length) return [];
-  const bodyWords = new Set();
-  for (const word of String(pool[0].location || "").toLowerCase().split(/[^a-z]+/)) {
-    if (word.length > 2) bodyWords.add(word);
+  // D1 does not promise row order and `location` is not consistently just a body
+  // name. Remove only metadata words common to nearly the whole pool; using pool[0]
+  // made a random first row erase a real locality such as Vijayanagar.
+  const locationTokenFrequency = new Map();
+  const locationTokens = [];
+  for (const tender of pool) {
+    const rowTokens = tenderDescriptionTokens(tender.location);
+    locationTokens.push(rowTokens);
+    for (const token of rowTokens) {
+      locationTokenFrequency.set(token, (locationTokenFrequency.get(token) || 0) + 1);
+    }
   }
-  for (const word of bodyWords) tokens.delete(word);
+  for (const [token, frequency] of locationTokenFrequency) {
+    if ((pool.length > 1 && frequency === pool.length)
+        || (pool.length >= 8 && frequency > pool.length * 0.8)) tokens.delete(token);
+  }
   if (!tokens.size) return [];
 
-  const descriptions = pool.map((tender) => String(tender.title || "").toLowerCase());
+  // Match complete location tokens only. Substring matching made a generic address
+  // token such as "nagar" match an unrelated "Vijayanagar" tender and could name the
+  // wrong contractor.
+  const descriptionTokens = pool.map((tender, index) => new Set([
+    ...tenderDescriptionTokens(tender.title),
+    ...locationTokens[index],
+  ]));
   const weights = new Map();
   for (const token of tokens) {
     let appearances = 0;
-    for (const description of descriptions) {
-      if (description.includes(token)) appearances++;
+    for (const words of descriptionTokens) {
+      if (words.has(token)) appearances++;
     }
     if (!appearances) continue;
     if (pool.length > 1 && appearances === pool.length) continue;
@@ -2093,7 +2890,7 @@ function tenderShortlist(address, pool) {
   for (let index = 0; index < pool.length; index++) {
     let score = 0;
     for (const [token, weight] of weights) {
-      if (descriptions[index].includes(token)) score += weight;
+      if (descriptionTokens[index].has(token)) score += weight;
     }
     if (score > 0) scored.push({ score, tender: pool[index] });
   }
@@ -2106,27 +2903,314 @@ function tenderShortlist(address, pool) {
     || publishedStamp(right.tender) - publishedStamp(left.tender)
     || String(left.tender.tender_number)
       .localeCompare(String(right.tender.tender_number)));
-  return scored.slice(0, TENDER_CONFIG.maxCandidates).map((entry) => entry.tender);
+  const maximum = Number.isFinite(limit) ? Math.max(0, Math.trunc(limit)) : scored.length;
+  return scored.slice(0, maximum).map((entry) => entry.tender);
 }
 
-function warrantyFor(published) {
-  const match = /^(\d{2})-(\d{2})-(\d{4})/.exec(String(published || ""));
-  if (!match) return { warranty: "recorded for this stretch", warranty_code: "record" };
-  const timestamp = Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
-  const years = (nowMs() - timestamp) / (365.25 * 86_400_000);
-  if (!Number.isFinite(years) || years < 0) {
-    return { warranty: "recorded for this stretch", warranty_code: "record" };
-  }
-  if (years <= 1) {
-    return { warranty: "within the defect liability period", warranty_code: "dlp" };
-  }
-  if (years <= 3) {
-    return { warranty: "within the maintenance period", warranty_code: "maint" };
-  }
-  return { warranty: "recorded for this stretch", warranty_code: "record" };
+// This fallback deliberately recognizes only explicit road-surface work phrases.
+// It does not try to understand generic "improvement" tenders and it refuses to
+// choose when more than one eligible location candidate remains. The narrow gate
+// is preferable to naming an unrelated contractor when tender adjudication cannot
+// use the model.
+const UNAMBIGUOUS_ROAD_WORK = [
+  /\b(?:pothole|pot\s+hole)s?\b(?:\W+\w+){0,6}\W+\b(?:fill\w*|filing|patch\w*|block\w*|clos\w*|cover\w*|seal\w*|repair\w*|maint\w*)\b/i,
+  /\b(?:fill\w*|filing|patch\w*|block\w*|clos\w*|cover\w*|seal\w*|repair\w*|maint\w*)\b(?:\W+\w+){0,6}\W+\b(?:pothole|pot\s+hole)s?\b/i,
+  /\b(?:cc|cement\s+concrete|concrete)\s+roads?\b/i,
+  /\broads?\s+concret(?:e|ing)\b/i,
+  /\b(?:interlocking\s+)?pavers?(?:\s+blocks?)?\s+roads?\b/i,
+  /\broads?\s+(?:paving|interlock(?:ing)?(?:\s+(?:work|installation))?)\b/i,
+  /\broad\s+patch(?:ing|\s+repair|\s+repairs)?\b/i,
+];
+const ACTIVE_SURFACE_WORK = /\b(?:re\s*[- ]?\s*asphalt(?:ed|ing)?|asphalting|resurfac\w*|re\s*[- ]?\s*carpet\w*|black\s*[- ]?\s*topp?(?:ed|ing)|tarring|paver\s+finish\s+asphalt|asphalt\s+work)\b/i;
+// These operations may precede a long proper road name. Require the road noun and
+// refuse to cross a non-surface asset while looking for it; a bare word "asphalt"
+// in a supply/footpath tender is not evidence of carriageway responsibility.
+const TIGHT_ROAD_SURFACE_WORK = [
+  /\b(?:re\s*[- ]?\s*asphalt\w*|asphalt\w*|blacktopp?\w*|resurfac\w*|paver\s+finish\s+asphalt|widen\w*|strengthen\w*|upgrad\w*)\b(?:(?!\b(?:footpaths?|sidewalks?|walkways?|kerbs?|curbs?|drains?|drainage|culverts?|utilit(?:y|ies)|landscap\w*|buildings?|parks?|medians?|dividers?|lighting|lights?|signage|signboards?|markings?|furniture|plantation|bridges?|(?:crash\s+|safety\s+)?barriers?)\b)[^.;]){0,180}\b(?:road|roads|carriageway|pavement)\b/i,
+  /\b(?:road|roads|carriageway|pavement)\b(?:(?!\b(?:footpaths?|sidewalks?|walkways?|kerbs?|curbs?|drains?|drainage|culverts?|utilit(?:y|ies)|landscap\w*|buildings?|parks?|medians?|dividers?|lighting|lights?|signage|signboards?|markings?|furniture|plantation|bridges?|(?:crash\s+|safety\s+)?barriers?)\b)[^.;]){0,80}\b(?:re\s*[- ]?\s*asphalt\w*|asphalt\w*|blacktopp?\w*|resurfac\w*|widen\w*|strengthen\w*|upgrad\w*)\b/i,
+];
+const GENERIC_ROAD_WORK = [
+  /\b(?:repair|repairs|maintenance|resurfac\w*|re-?asphalt\w*|asphalt\w*|blacktopp?\w*|concreting|rehabilitation|restoration|reconstruction|construction|development|improvements?)\s+(?:of\s+|to\s+)?(?:the\s+)?(?:\w+[\s,/-]+){0,3}(?:road|roads|carriageway|pavement)\b/i,
+  /\b(?:road|roads|carriageway|pavement)\s+(?:repair|repairs|maintenance|resurfac\w*|rehabilitation|restoration|reconstruction|construction|development|improvements?)\b/i,
+];
+const NON_ROAD_SCOPE_ASSET = /\b(?:excluded\s+asset|footpaths?|sidewalks?|walkways?|kerbs?|curbs?|drains?|drainage|culverts?|utilit(?:y|ies)|electric(?:al)?\s+poles?|landscap\w*|buildings?|parks?|medians?|dividers?|lighting|lights?|signage|signboards?|markings?|furniture|plantation|bridges?|(?:crash\s+|safety\s+)?barriers?|retaining\s+walls?|compound\s+walls?|deck\s+slabs?|covering\s+slabs?|bus\s+shelters?|pedestrian\s+subways?)\b/i;
+const NON_ROAD_WORK_FIRST = /\b(?:repair|repairs|maintenance|construction|reconstruction|development|improvements?|concreting|shifting|relocation|re-?asphalt\w*|asphalt\w*|blacktopp?\w*|resurfac\w*|providing\s+(?:paver\s+finish\s+)?asphalt|laying\s+(?:paver\s+finish\s+)?asphalt)\s+(?:of\s+|to\s+)?(?:the\s+)?(?:(?:rcc|cc|cement\s+concrete|concrete|pipe|open|closed|pedestrian|storm\s*[- ]?\s*water)\s+){0,3}(?:excluded\s+asset|footpaths?|sidewalks?|walkways?|kerbs?|curbs?|drains?|drainage|culverts?|utilit(?:y|ies)|electric(?:al)?\s+poles?|landscap\w*|buildings?|parks?|medians?|dividers?|lighting|lights?|signage|signboards?|markings?|furniture|plantation|bridges?|(?:crash\s+|safety\s+)?barriers?|retaining\s+walls?|compound\s+walls?|deck\s+slabs?|covering\s+slabs?|bus\s+shelters?|pedestrian\s+subways?)\b/i;
+const GENERIC_CIVIL_ONLY = /\b(?:general\s+improvements?|miscellaneous\s+civil\s+works?)\b/i;
+const ENABLING_WIDENING_ONLY = /\b(?:facilitat\w*|obstruct\w*|shifting?|relocat\w*|land\s+acquisition|prepar\w*\s+(?:of\s+)?dpr)\b(?:(?![.;]).){0,120}\b(?:road\s+)?widen\w*\b/i;
+const NON_SURFACE_ASSET_PHRASE = /\b(?:street\s*lights?|streetlights?|utility\s+(?:ducts?|lines?|cables?)|cycle\s*tracks?|traffic\s*signals?|pedestrian\s+underpass(?:es)?)\b/gi;
+const NON_ROAD_ASSET_FIRST = new RegExp(
+  `${NON_ROAD_SCOPE_ASSET.source}\\s+`
+    + "(?:repair|repairs|maintenance|construction|reconstruction|development|"
+    + "improvements?|installation|replacement|cleaning)\\b",
+  "i",
+);
+// When a tender starts with footpath/drain work, a bare later word "road" is not
+// enough to waive that exclusion: it could introduce a road median, light, sign or
+// side drain. Require an explicit surface material or surface-work action.
+const EXPLICIT_COMBINED_ROAD = /(?:\band\b|,)\s*(?:the\s+)?(?:(?:cc|cement\s+concrete|concrete|re-?asphalt\w*|asphalt\w*|blacktopp?\w*|paver\s+finish\s+asphalt)\s+(?:road|roads|carriageway|pavement)|(?:widen\w*|strengthen\w*|upgrad\w*|resurfac\w*|re-?asphalt\w*|asphalt\w*)\s+(?:of\s+|to\s+)?(?:the\s+)?(?:road|roads|carriageway|pavement)|(?:road|roads|carriageway|pavement)\s+(?:repair|repairs|maintenance|widen\w*|strengthen\w*|upgrad\w*|resurfac\w*|rehabilitation|restoration|reconstruction|development|improvements?|patching))\b/i;
+const ROAD_NON_SURFACE_ASSET = /\broad(?:\s*[- ]?\s*side)?\s+(?:(?:storm\s+water\s+)?(?:drain(?:age)?|footpath|walkway|kerb|curb|culvert)s?|median|divider|lighting|lights?|signage|signboards?|markings?|furniture|plantation|landscap\w*|(?:crash\s+|safety\s+)?barriers?|bridge)\b/gi;
+const SHARED_MIXED_ROAD_WORK = [
+  /\b(?:repair|repairs|maintenance|construction|development|improvements?)\s+(?:of\s+|to\s+)?(?:the\s+)?(?:road|roads|carriageway|pavement)\s*(?:,|\band\b|&|\bwith\b)\s*(?:footpaths?|sidewalks?|walkways?|kerbs?|curbs?|drains?|drainage|culverts?|utilit(?:y|ies)|landscap\w*|medians?|dividers?|lighting|signage|markings?|bridges?)\b/i,
+  /\b(?:repair|repairs|maintenance|construction|development|improvements?)\s+(?:of\s+|to\s+)?(?:the\s+)?(?:footpaths?|sidewalks?|walkways?|kerbs?|curbs?|drains?|drainage|culverts?|utilit(?:y|ies)|landscap\w*|medians?|dividers?|lighting|signage|markings?|bridges?)\s*(?:,|\band\b|&|\bwith\b)\s*(?:road|roads|carriageway|pavement)\b/i,
+];
+
+function strongRoadSurfaceEvidence(value) {
+  if (ENABLING_WIDENING_ONLY.test(value)) return false;
+  if (ACTIVE_SURFACE_WORK.test(value) && !NON_ROAD_SCOPE_ASSET.test(value)) return true;
+  if (TIGHT_ROAD_SURFACE_WORK.some((pattern) => pattern.test(value))) return true;
+  if (UNAMBIGUOUS_ROAD_WORK.some((pattern) => pattern.test(value))) return true;
+  if (EXPLICIT_COMBINED_ROAD.test(value)) return true;
+  return SHARED_MIXED_ROAD_WORK.some((pattern) => pattern.test(value));
 }
 
-async function tenderResult(env, context, jurisdiction) {
+function normalizeTenderScopeTitle(title) {
+  return String(title || "")
+    .replace(/\br\s*\.?\s*c\s*\.?\s*c\.?\b/gi, "rcc")
+    .replace(/\bc\s*\.?\s*c\.?\b/gi, "cc")
+    .replace(/\bfoot\s*[- ]+\s*path(s?)\b/gi, "footpath$1")
+    .replace(/\b(?:draine|drainge)\b/gi, "drain")
+    .replace(/\bdrainages\b/gi, "drainage")
+    .replace(/\bdrain(?=from\b|near\b|in\b|cleaning\b)/gi, "drain ")
+    .replace(/\s+/g, " ");
+}
+
+function roadSurfaceEvidence(value) {
+  if (strongRoadSurfaceEvidence(value)) return true;
+  return GENERIC_ROAD_WORK.some((pattern) => pattern.test(value));
+}
+
+function scrubNonSurfaceRoadAssets(title) {
+  // Remove phrases where "road" modifies a non-surface asset before applying road
+  // patterns. "Road-side drain" is drainage work, not evidence that the carriageway
+  // itself is covered by the contract.
+  return normalizeTenderScopeTitle(title)
+    .replace(/\bconcrete\s+pavement\s+(?:to|for|on)\s+(?:the\s+)?footpaths?\b/gi,
+      "excluded asset")
+    .replace(NON_SURFACE_ASSET_PHRASE, "excluded asset")
+    .replace(ROAD_NON_SURFACE_ASSET, "excluded asset")
+    // Dotted initials are common inside road names ("A.R Dsouza road"). Treat the
+    // dots as token separators so the bounded surface-action matcher does not mistake
+    // an initial for the end of a sentence.
+    .replace(/\./g, " ");
+}
+
+function hasExplicitRoadWorkScope(title) {
+  const value = scrubNonSurfaceRoadAssets(title);
+  if (GENERIC_CIVIL_ONLY.test(value) && !roadSurfaceEvidence(
+    value.replace(GENERIC_CIVIL_ONLY, ""))) return false;
+  // A tightly associated road-surface phrase wins even when the same package later
+  // adds drains or footpaths. Real awards frequently list those clauses in either
+  // order; the old one-directional "and road" exception dropped valid contracts.
+  if (strongRoadSurfaceEvidence(value)) return true;
+  if (NON_ROAD_ASSET_FIRST.test(value)) return false;
+  if (NON_ROAD_WORK_FIRST.test(value) && !EXPLICIT_COMBINED_ROAD.test(value)) {
+    return false;
+  }
+  return GENERIC_ROAD_WORK.some((pattern) => pattern.test(value));
+}
+
+function isClearlyNonRoadOnlyScope(title) {
+  const raw = String(title || "");
+  const value = scrubNonSurfaceRoadAssets(raw);
+  if (GENERIC_CIVIL_ONLY.test(value) && !roadSurfaceEvidence(
+    value.replace(GENERIC_CIVIL_ONLY, ""))) return true;
+  // This is a negative-only safety boundary for model-selected candidates. Do not
+  // require a title to fit the deterministic fallback's finite positive vocabulary:
+  // real awards use many valid formulations (widening, asphalting, paver finish,
+  // strengthening, and so on). Reject only when a known non-carriageway asset is
+  // actually present and no explicit road-surface evidence survives after phrases
+  // such as "road-side drain" and "road median" are scrubbed.
+  const mentionsExcludedAsset = value !== raw || NON_ROAD_SCOPE_ASSET.test(value);
+  if (!mentionsExcludedAsset) return false;
+  if (strongRoadSurfaceEvidence(value)) return false;
+  if (NON_ROAD_ASSET_FIRST.test(value)) return true;
+  if (NON_ROAD_WORK_FIRST.test(value) && !EXPLICIT_COMBINED_ROAD.test(value)) {
+    return true;
+  }
+  return !GENERIC_ROAD_WORK.some((pattern) => pattern.test(value));
+}
+
+const ROAD_IDENTITY_MARKERS = new Set([
+  "road", "roads", "street", "cross", "lane", "main", "marg", "highway",
+]);
+
+function normalizedRoadWords(value) {
+  return String(value || "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+    .map((word) => word === "rd" ? "road" : word === "st" ? "street" : word);
+}
+
+function addressRoadIdentity(address) {
+  const words = normalizedRoadWords(String(address || "").split(",", 1)[0]);
+  if (!words.some((word) => ROAD_IDENTITY_MARKERS.has(word))) return null;
+  const distinctive = words.filter((word) => !ROAD_IDENTITY_MARKERS.has(word)
+    && !TENDER_STOP.has(word));
+  if (!distinctive.length) return null;
+  const simpleNamedRoad = words.length === 2
+    && words[1] === "road"
+    && /^[a-z][a-z0-9]{2,}$/i.test(words[0])
+    && !/^\d+(?:st|nd|rd|th)?$/i.test(words[0]);
+  return {
+    words,
+    simpleCore: simpleNamedRoad ? words[0] : null,
+  };
+}
+
+function candidateCoversRoadIdentity(title, identity) {
+  if (!identity) return false;
+  const words = normalizedRoadWords(title);
+  for (let start = 0; start + identity.words.length <= words.length; start++) {
+    if (identity.words.every((word, offset) => words[start + offset] === word)) {
+      return true;
+    }
+  }
+  if (!identity.simpleCore) return false;
+
+  // Reverse geocoders sometimes return a short proper-name road while the tender
+  // spells the same stretch as "<name> <landmark> road". Permit that narrow form,
+  // but never let an administrative mention ("Manipala ward") jump to another road.
+  for (let index = 0; index < words.length; index++) {
+    if (words[index] !== identity.simpleCore) continue;
+    const suffix = words.slice(index + 1, index + 4);
+    const roadIndex = suffix.indexOf("road");
+    if (roadIndex < 0) continue;
+    const between = suffix.slice(0, roadIndex);
+    if (!between.some((word) => ROAD_IDENTITY_MARKERS.has(word)
+        || ["ward", "zone", "division", "layout", "area", "locality"].includes(word))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const ROAD_IDENTITY_NOISE = new Set([
+  ...TENDER_STOP,
+  "of", "to", "at", "in", "on", "near", "from", "between", "along", "under",
+  "repair", "repairs", "maintenance", "maintaining", "construction", "reconstruction",
+  "development", "improvement", "improvements", "resurfacing", "asphalting",
+  "asphalt", "widening", "strengthening", "upgradation", "restoration",
+  "providing", "laying", "work", "works", "annual", "package", "scheme",
+]);
+
+function candidateHasSpecificRoadIdentity(title) {
+  if (areaWideRoadWork(title)) return false;
+  const words = normalizedRoadWords(title);
+  for (let index = 0; index < words.length; index++) {
+    if (!ROAD_IDENTITY_MARKERS.has(words[index])) continue;
+    if (words[index] === "roads"
+        || words.slice(index + 1, index + 3)
+          .some((word) => ["division", "zone", "circle", "ward"].includes(word))) {
+      continue;
+    }
+    // Proper/numeric road identities normally precede the marker: "MG Road",
+    // "12th Cross", "Outer Ring Road". Ignore work verbs and administrative
+    // boilerplate so "maintenance of roads in Ward 5" remains area-level.
+    for (let before = Math.max(0, index - 4); before < index; before++) {
+      const word = words[before];
+      if (!ROAD_IDENTITY_MARKERS.has(word) && !ROAD_IDENTITY_NOISE.has(word)) {
+        return true;
+      }
+    }
+    // Also recognize the common "Road No. 5" / "Road 5" ordering without
+    // treating the locality after "road in" as a road name.
+    const next = words[index + 1];
+    const afterNumberWord = ["no", "number"].includes(next) ? words[index + 2] : next;
+    if (/^\d+(?:st|nd|rd|th)?$/.test(afterNumberWord || "")) return true;
+  }
+  return false;
+}
+
+function modelSelectedRoadConflicts(address, candidate) {
+  const identity = addressRoadIdentity(address);
+  if (!identity || !candidate) return false;
+  // Both fields are model-visible untrusted data. A generic title cannot launder
+  // an explicitly different road placed in the division/location column, and a
+  // correct title cannot make contradictory road metadata safe either.
+  for (const value of [candidate.title, candidate.location]) {
+    if (!candidateHasSpecificRoadIdentity(value)) continue;
+    if (!candidateCoversRoadIdentity(value, identity) && !areaWideRoadWork(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const UNCONDITIONAL_AREA_WIDE_ROAD_WORK = [
+  /\b(?:all|various|multiple|several)\s+(?:the\s+)?(?:road|roads|streets|carriageways)\b/i,
+  /\b(?:road|roads|streets|carriageways)\s+(?:throughout|across)\b/i,
+  /^\s*(?:annual\s+)?(?:road|roads|streets|carriageways)\s+(?:repair|repairs|maintenance)\b[^.;]{0,100}\b(?:throughout|across)\b/i,
+  /\b(?:pothole|pot\s+hole)s?\s+(?:filling|repair|repairs|maintenance)(?:\s+works?)?\s+(?:throughout|across)\b/i,
+  /\b(?:pothole|pot\s+hole)s?\s+(?:filling|repair|repairs|maintenance)\b(?:(?!\b(?:road|street|cross|lane|main|marg|highway)\b)[^.;]){0,100}\b(?:ward|zone|division)\b/i,
+];
+
+const SPECIFIC_ROAD_REFERENCE = /\b(?:road|rd|street|st|cross|lane|main|marg|highway)\b/i;
+
+function areaWideRoadWork(title) {
+  const value = String(title || "");
+  if (UNCONDITIONAL_AREA_WIDE_ROAD_WORK.some((pattern) => pattern.test(value))) {
+    return true;
+  }
+  const conditionalPatterns = [
+    /\b(?:pothole|pot\s+hole)s?\s+(?:filling|repair|repairs|maintenance)(?:\s+works?)?\s+(?:in|within)\s+([^.;]{1,120})/i,
+    /\b(?:roads|streets|carriageways)\s*(?:(?:,|and|&)\s*(?:drains?|footpaths?|culverts?)\s*)?(?:in|within)\s+([^.;]{1,120})/i,
+  ];
+  for (const pattern of conditionalPatterns) {
+    const match = pattern.exec(value);
+    if (match && !SPECIFIC_ROAD_REFERENCE.test(match[1])) return true;
+  }
+  const combinedAt = /\b(?:improvements?|development|maintenance|construction)\s+(?:of\s+|to\s+)?roads\s*(?:,|and|&)\s*(?:drains?|footpaths?|culverts?)\b[^.;]{0,30}\bat\s+([^.;]{1,120})/i.exec(value);
+  return Boolean(combinedAt
+    && !SPECIFIC_ROAD_REFERENCE.test(combinedAt[1])
+    && /\b(?:ward|zone|division)\b/i.test(combinedAt[1]));
+}
+
+function deterministicCandidateCoversLocation(address, candidate) {
+  const roadIdentity = addressRoadIdentity(address);
+  if (candidateCoversRoadIdentity(candidate.title, roadIdentity)) return true;
+  // tenderShortlist already established a non-generic locality/ward overlap. Only
+  // a clearly area-wide road contract may rely on that overlap without also naming
+  // the reported road; a different named stretch in the same locality is not enough.
+  return areaWideRoadWork(candidate.title);
+}
+
+function deterministicTenderMatch(candidates, address) {
+  const eligible = candidates.filter((candidate) =>
+    hasExplicitRoadWorkScope(candidate.title)
+      && deterministicCandidateCoversLocation(address, candidate));
+  if (eligible.length !== 1) return null;
+  return {
+    candidate: eligible[0],
+    confidence: 0.70,
+    reason: "One location-matched candidate explicitly covers road-surface work; no competing eligible candidate remained.",
+  };
+}
+
+function warrantyFor(_published) {
+  // A publication date is not an award, completion, hand-over, or contract-specific
+  // defect-liability date. Until those authoritative fields are imported, never imply
+  // that the named bidder currently owes a repair.
+  return {
+    warranty: "current liability not established by the publication record",
+    warranty_code: "unverified",
+  };
+}
+
+function publicTender(selected, confidence, reason, matchMethod) {
+  return {
+    tender_number: selected.tender_number,
+    title: selected.title,
+    location: selected.location || null,
+    contractor: selected.contractor || null,
+    published: selected.published || null,
+    confidence,
+    reason: boundedString(reason, TENDER_CONFIG.stringLimits.reason) || null,
+    match_method: matchMethod,
+    ...warrantyFor(selected.published),
+    source_name: selected.source_name || null,
+    source_url: selected.source_url || null,
+  };
+}
+
+async function tenderResult(env, context, jurisdiction, options = {}) {
   if (!jurisdiction.lgd) return { tender: null, reason: "jurisdiction_unresolved" };
   if (!jurisdiction.address) return { tender: null, reason: "address_unresolved" };
   const codes = BENGALURU_BODIES.has(jurisdiction.lgd)
@@ -2138,11 +3222,26 @@ async function tenderResult(env, context, jurisdiction) {
        FROM tenders WHERE body_lgd IN (${placeholders})`
   ).bind(...codes).all();
   if (!results.length) return { tender: null, reason: "no_tenders_for_jurisdiction" };
-  const candidates = tenderShortlist(jurisdiction.address, results);
-  if (!candidates.length) return { tender: null, reason: "no_location_match" };
+  const locationCandidates = tenderShortlist(jurisdiction.address, results, Infinity);
+  if (!locationCandidates.length) return { tender: null, reason: "no_location_match" };
+  const candidates = locationCandidates.slice(0, TENDER_CONFIG.maxCandidates);
+
+  const deterministic = () => {
+    const match = deterministicTenderMatch(locationCandidates, jurisdiction.address);
+    return match ? {
+      tender: publicTender(
+        match.candidate,
+        match.confidence,
+        match.reason,
+        "deterministic_location_scope",
+      ),
+      reason: null,
+    } : { tender: null, reason: "no_confident_match" };
+  };
+  context.visionMode = "shared_tender";
+  if (options.forceDeterministic) return deterministic();
 
   const prompt = tenderUserInput(jurisdiction.address, candidates);
-  context.visionMode = "shared_tender";
   try {
     await takeVisionQuota(env, context.installId);
     const match = await callOpenAI(env, context, {
@@ -2154,7 +3253,7 @@ async function tenderResult(env, context, jurisdiction) {
       }],
       text: outputFormat(TENDER_PROMPT_CONFIG.schemaName, TENDER_SCHEMA),
       reasoning: { effort: TENDER_CONFIG.reasoningEffort },
-    });
+    }, "tender");
     if (!match || !Number.isInteger(match.match_index)
         || match.match_index < 0 || match.match_index >= candidates.length
         || !Number.isFinite(match.confidence)
@@ -2162,20 +3261,29 @@ async function tenderResult(env, context, jurisdiction) {
       return { tender: null, reason: "no_confident_match" };
     }
     const selected = candidates[match.match_index];
+    // The model ranks location ambiguity, but it cannot override an explicit
+    // non-carriageway-only responsibility boundary. This is intentionally a
+    // negative-only gate: requiring every legitimate award to match the narrow
+    // deterministic-fallback vocabulary caused false negatives for common wording
+    // such as widening, asphalting, and paver-finish asphalt work.
+    if (isClearlyNonRoadOnlyScope(selected.title)) {
+      return { tender: null, reason: "non_road_work_scope" };
+    }
+    // Candidate text is untrusted data and the model is not an authorization
+    // boundary.  A prompt-injected or mistaken selection may not substitute a
+    // different explicitly named road merely because its locality also matched.
+    // Area-wide and unnamed-road packages remain eligible so this postgate does
+    // not collapse model recall to the narrow deterministic matcher.
+    if (modelSelectedRoadConflicts(jurisdiction.address, selected)) {
+      return { tender: null, reason: "road_location_conflict" };
+    }
     return {
-      tender: {
-        tender_number: selected.tender_number,
-        title: selected.title,
-        location: selected.location || null,
-        contractor: selected.contractor || null,
-        published: selected.published || null,
-        confidence: match.confidence,
-        reason: boundedString(match.reason, TENDER_CONFIG.stringLimits.reason) || null,
-        match_method: "model_adjudicated",
-        ...warrantyFor(selected.published),
-        source_name: selected.source_name || null,
-        source_url: selected.source_url || null,
-      },
+      tender: publicTender(
+        selected,
+        match.confidence,
+        match.reason,
+        "model_adjudicated",
+      ),
       reason: null,
     };
   } catch (error) {
@@ -2183,6 +3291,15 @@ async function tenderResult(env, context, jurisdiction) {
         && ["shared_credits_exhausted", "shared_budget_reached",
           "shared_daily_budget_reached", "shared_rate_limit", "daily_vision_limit",
           "shared_vision_not_configured", "shared_vision_unavailable"].includes(error.code)) {
+      const deterministicEligible = [
+        "shared_credits_exhausted",
+        "shared_budget_reached",
+        "shared_daily_budget_reached",
+        "daily_vision_limit",
+      ].includes(error.code);
+      if (options.allowDeterministicFallback && deterministicEligible) {
+        return deterministic();
+      }
       throw new HttpError(503, error.code, error.message, {
         ...(error.details || {}),
         retryable: true,
@@ -2196,20 +3313,40 @@ async function handleTenderResolve(request, env, context) {
   const body = await parseJsonBody(request, context);
   const cached = await idempotentResult(env, context);
   if (cached) return cached;
-  const lat = finiteNumber(body.lat);
-  const lng = finiteNumber(body.lng);
+  const lat = externalCoordinate(body.lat);
+  const lng = externalCoordinate(body.lng);
   if (!validLatLng(lat, lng)) {
     throw new HttpError(400, "bad_location",
       "Tender resolution needs valid lat and lng coordinates.");
   }
   await rejectReplay(env, context);
   const jurisdiction = await resolveJurisdiction(env, body, lat, lng);
+  if (jurisdiction.road_ownership === "unknown") {
+    throw new HttpError(503, "road_ownership_unavailable",
+      "Road ownership could not be verified. Retry later.", {
+        retryable: true,
+        services: ["kgis_town", "kgis_highway", "geocoder"].filter((service) =>
+          jurisdiction.lookup[service] !== "available"),
+      });
+  }
+  if (["national_highway", "state_highway", "district_highway",
+    "rural", "outside_state"].includes(
+    jurisdiction.road_ownership)) {
+    const enrichedPotholeId = await backfillObservedPotholeJurisdiction(
+      env, context, lat, lng, jurisdiction);
+    if (enrichedPotholeId != null) context.potholeId = enrichedPotholeId;
+    const reason = jurisdiction.road_ownership;
+    context.outcome = reason;
+    const payload = { jurisdiction, tender: null, reason };
+    await rememberIdempotency(env, context, payload);
+    return jsonResponse(payload, 200, context.requestId);
+  }
   const unavailable = [];
   if (!jurisdiction.lgd && jurisdiction.lookup.kgis === "unavailable") {
     unavailable.push("kgis");
   }
-  if (!jurisdiction.address && jurisdiction.lookup.nominatim === "unavailable") {
-    unavailable.push("nominatim");
+  if (jurisdiction.lookup.geocoder !== "available") {
+    unavailable.push("geocoder");
   }
   if (unavailable.length) {
     throw new HttpError(503, "geolocation_unavailable",
@@ -2221,7 +3358,10 @@ async function handleTenderResolve(request, env, context) {
   const enrichedPotholeId = await backfillObservedPotholeJurisdiction(
     env, context, lat, lng, jurisdiction);
   if (enrichedPotholeId != null) context.potholeId = enrichedPotholeId;
-  const matched = await tenderResult(env, context, jurisdiction);
+  const matched = await tenderResult(env, context, jurisdiction, {
+    forceDeterministic: !env.OPENAI_API_KEY,
+    allowDeterministicFallback: true,
+  });
   context.outcome = matched.tender ? "tender_matched" : matched.reason;
   const payload = {
     jurisdiction,
@@ -2263,7 +3403,15 @@ async function handleMap(request, env, context) {
   parameters.push(limit);
   const { results = [] } = await env.DB.prepare(
     `SELECT id,lat,lng,body_lgd,town,damage_type,size,
-            first_seen_at,last_seen_at,seen_count
+            first_seen_at,last_seen_at,seen_count,
+            (SELECT COUNT(DISTINCT o.install_id) FROM observations o
+              WHERE o.pothole_id=potholes.id
+                AND o.verification_state='server_verified_shared')
+              AS verified_shared_observers,
+            (SELECT COUNT(DISTINCT o.install_id) FROM observations o
+              WHERE o.pothole_id=potholes.id
+                AND o.verification_state='client_attested')
+              AS client_attested_observers
        FROM potholes WHERE ${where}
        ORDER BY last_seen_at DESC LIMIT ?${parameters.length}`
   ).bind(...parameters).all();
@@ -2284,6 +3432,10 @@ async function handleMap(request, env, context) {
         first_seen_at: Number(row.first_seen_at),
         last_seen_at: Number(row.last_seen_at),
         seen_count: Number(row.seen_count || 0),
+        verification: Number(row.verified_shared_observers || 0) > 0
+          ? "server_verified_shared" : "client_attested",
+        verified_shared_observers: Number(row.verified_shared_observers || 0),
+        client_attested_observers: Number(row.client_attested_observers || 0),
         town: row.town || null,
         lgd: row.body_lgd || null,
       },
@@ -2330,7 +3482,13 @@ async function handleImpact(request, env, context) {
          FROM potholes WHERE seen_count > 0 AND first_seen_at BETWEEN ?1 AND ?2`
     ).bind(fromMs, toMs).first(),
     env.DB.prepare(
-      `SELECT COUNT(*) AS total, COUNT(DISTINCT install_id) AS distinct_observers
+      `SELECT COUNT(*) AS total, COUNT(DISTINCT install_id) AS distinct_observers,
+              SUM(CASE WHEN verification_state='server_verified_shared' THEN 1 ELSE 0 END)
+                AS server_verified_shared,
+              SUM(CASE WHEN verification_state='client_attested' THEN 1 ELSE 0 END)
+                AS client_attested,
+              COUNT(DISTINCT CASE WHEN verification_state='server_verified_shared'
+                THEN install_id END) AS verified_distinct_observers
          FROM observations WHERE observed_at BETWEEN ?1 AND ?2`
     ).bind(fromMs, toMs).first(),
   ]);
@@ -2353,6 +3511,11 @@ async function handleImpact(request, env, context) {
       total: Number(observationRow && observationRow.total || 0),
       distinct_observers: Number(
         observationRow && observationRow.distinct_observers || 0),
+      server_verified_shared: Number(
+        observationRow && observationRow.server_verified_shared || 0),
+      client_attested: Number(observationRow && observationRow.client_attested || 0),
+      verified_distinct_observers: Number(
+        observationRow && observationRow.verified_distinct_observers || 0),
     },
   }, 200, context.requestId, { "cache-control": "public, max-age=60" });
 }
@@ -2395,7 +3558,8 @@ const MAP_HTML = `<!doctype html>
     const legend = L.control({position:"bottomright"});
     legend.onAdd = function() {
       const div = L.DomUtil.create("div","legend");
-      div.innerHTML = '<span class="dot" style="background:#ff7043"></span>Reported road damage';
+      div.innerHTML = '<span class="dot" style="background:#ff7043"></span>Server-verified shared detection<br>'
+        + '<span class="dot" style="background:#64b5f6"></span>Client-attested detection';
       return div;
     };
     legend.addTo(map);
@@ -2410,13 +3574,16 @@ const MAP_HTML = `<!doctype html>
       layer.clearLayers();
       for (const feature of data.features || []) {
         const p = feature.properties;
+        const verified = p.verification === "server_verified_shared";
         const marker = L.circleMarker(
           [feature.geometry.coordinates[1],feature.geometry.coordinates[0]],
           {radius:Math.min(11,5+Math.log2(Math.max(1,p.seen_count))),
-           color:"#ff7043",fillOpacity:.8,weight:2}
+           color:verified ? "#ff7043" : "#64b5f6",fillOpacity:.8,weight:2}
         );
         marker.bindPopup("<b>" + p.damage_type.replaceAll("_"," ") + "</b><br>"
-          + p.seen_count + " installation(s) observed it");
+          + p.seen_count + " installation(s) observed it<br>"
+          + p.verified_shared_observers + " server-verified · "
+          + p.client_attested_observers + " client-attested");
         marker.addTo(layer);
       }
     }
@@ -2491,6 +3658,16 @@ async function dispatch(request, env, context) {
       supported_shared_vision_providers: [...SHARED_DETECTOR_PROVIDERS],
       detection_prompt_version: DETECT_PROMPT_VERSION,
       detection_schema_version: DETECT_SCHEMA_VERSION,
+      supported_personal_detector_contracts: [
+        { prompt_version: DETECT_PROMPT_VERSION, schema_version: DETECT_SCHEMA_VERSION },
+      ],
+      shared_detection_receipts_required: sharedDetectionReceiptsRequired(env),
+      operator_geocoder_configured: Boolean(reverseGeocoder({
+        ...env,
+        ALLOW_PUBLIC_NOMINATIM: "false",
+      }, 0, 0)),
+      public_nominatim_enabled: String(env.ALLOW_PUBLIC_NOMINATIM || "false")
+        .toLowerCase() === "true",
     }, 200, context.requestId, { "cache-control": "public, max-age=30" });
   }
   if (request.method === "GET" && pathname === "/v1/map") {
@@ -2527,7 +3704,7 @@ export default {
     const context = {
       requestId,
       routeName: routeName(pathname),
-      idempotencyRoute: pathname,
+      idempotencyRoute: idempotencyStorageRoute(pathname),
       method: request.method.toUpperCase(),
       outcome: null,
       visionMode: "none",
@@ -2536,6 +3713,9 @@ export default {
       detectorProvider: null,
       detectorRequestId: null,
       openaiRequestId: null,
+      detectionOpenAIRequestId: null,
+      tenderOpenAIRequestId: null,
+      yoloRequestId: null,
       openaiErrorCode: null,
       yoloErrorCode: null,
       detectorFallbackReason: null,
@@ -2578,6 +3758,12 @@ export default {
         error: String(error && error.message || error),
       }));
     }));
+    executionContext.waitUntil(pruneExpiredDetectionReceipts(env).catch((error) => {
+      console.error(JSON.stringify({
+        event: "detection_receipt_prune_failed",
+        error: String(error && error.message || error),
+      }));
+    }));
   },
 };
 
@@ -2587,10 +3773,19 @@ export const __test = {
   metresBetween,
   normalizeP256Signature,
   pruneExpiredTenderReplays,
+  pruneExpiredDetectionReceipts,
   idempotencyClaimTtlMs,
   awsSigV4Headers,
   parseYoloExecuteApiEndpoint,
   sharedDetectorStatus,
   tenderShortlist,
+  hasExplicitRoadWorkScope,
+  isClearlyNonRoadOnlyScope,
+  modelSelectedRoadConflicts,
+  deterministicTenderMatch,
   validateDetectionVerdict,
+  sharedDetectionReceiptsRequired,
+  validArcGisPayload,
+  validGeocoderPayload,
+  reverseGeocoder,
 };

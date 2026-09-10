@@ -13,7 +13,6 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStreamReader
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 data class DetectionResult(
@@ -23,6 +22,7 @@ data class DetectionResult(
     val size: String?,
     val description: String,
     val decision: String,
+    val detectionReceipt: String? = null,
 )
 
 internal fun normalizeVisionLanguage(value: String?): String =
@@ -48,6 +48,24 @@ internal fun reasoningEffortForModel(model: String): String =
     LlmContractGenerated.REASONING_EFFORT_BY_MODEL[normalizeVisionModel(model)]
         ?: LlmContractGenerated.DEFAULT_REASONING_EFFORT
 
+/**
+ * Resolve the selected provider at the last native boundary before inference.
+ *
+ * A missing personal key is not a configuration error: it selects the shared service.
+ * This keeps an upgraded WebView preference from stranding background Drive Mode in a
+ * repeated "key required" failure. A real key still honours an explicit Personal choice,
+ * and an explicit Shared choice never leaks that key to the project service.
+ */
+internal fun effectiveVisionProvider(provider: String?, apiKey: String): String {
+    val requested = when (provider?.trim()) {
+        null, "" -> if (apiKey.isBlank()) "shared_server" else "personal"
+        "shared", "shared_server" -> "shared_server"
+        "personal", "personal_openai", "own_key" -> "personal"
+        else -> throw IllegalArgumentException("Unknown vision provider")
+    }
+    return if (requested == "personal" && apiKey.isBlank()) "shared_server" else requested
+}
+
 internal fun detectionPromptForDrive(language: String): String =
     LlmContractGenerated.DETECT_PROMPT +
         LlmContractGenerated.DETECT_CAPTURE_DRIVE +
@@ -69,6 +87,31 @@ internal fun sharedVisionRequestConfig(
     "prompt_version" to promptVersion,
 )
 
+internal fun sharedVisionObservationFields(
+    clientObservationId: String,
+    lat: Double,
+    lng: Double,
+): Map<String, Any> {
+    require(clientObservationId.isNotBlank()) { "Client observation ID is required" }
+    require(lat.isFinite() && lat in -90.0..90.0) { "Invalid observation latitude" }
+    require(lng.isFinite() && lng in -180.0..180.0) { "Invalid observation longitude" }
+    return mapOf(
+        "client_observation_id" to clientObservationId,
+        "lat" to lat,
+        "lng" to lng,
+    )
+}
+
+internal fun sharedVisionIdempotencyKey(clientObservationId: String): String =
+    "vision-${CentralServiceIdentity.sha256Hex(
+        clientObservationId.toByteArray(Charsets.UTF_8),
+    ).take(40)}"
+
+internal fun normalizeDetectionReceipt(value: String?): String? = value
+    ?.trim()
+    ?.lowercase()
+    ?.takeIf { it.matches(Regex("^[a-f0-9]{64}$")) }
+
 internal fun detectionDecisionFor(
     imageQuality: String,
     assessment: String,
@@ -85,7 +128,7 @@ internal fun detectionDecisionFor(
 }
 
 class DetectionDispatcher(
-    private val provider: String,
+    provider: String,
     private val apiKey: String,
     private val serviceUrl: String,
     private val serviceIdentity: CentralServiceIdentity,
@@ -93,6 +136,7 @@ class DetectionDispatcher(
     detail: String = LlmContractGenerated.DEFAULT_IMAGE_DETAIL,
     language: String = LlmContractGenerated.DEFAULT_LANGUAGE,
 ) {
+    private val provider = effectiveVisionProvider(provider, apiKey)
     private val model = normalizeVisionModel(model)
     private val detail = normalizeVisionDetail(detail, this.model)
     private val language = normalizeVisionLanguage(language)
@@ -113,10 +157,15 @@ class DetectionDispatcher(
         .build()
 
     /** Analyze exactly one selected Drive Mode frame. */
-    suspend fun detect(imageBase64: String): DetectionResult = withContext(Dispatchers.IO) {
+    suspend fun detect(
+        imageBase64: String,
+        clientObservationId: String,
+        lat: Double,
+        lng: Double,
+    ): DetectionResult = withContext(Dispatchers.IO) {
         semaphore.withPermit {
             if (provider == "shared_server") {
-                return@withPermit detectViaService(imageBase64)
+                return@withPermit detectViaService(imageBase64, clientObservationId, lat, lng)
             }
             if (apiKey.isBlank()) {
                 throw IllegalStateException("OpenAI API key is required in personal-key mode")
@@ -189,7 +238,12 @@ class DetectionDispatcher(
     }
 
     /** Shared mode sends image evidence and configuration; the server owns the prompt. */
-    private fun detectViaService(imageBase64: String): DetectionResult {
+    private fun detectViaService(
+        imageBase64: String,
+        clientObservationId: String,
+        lat: Double,
+        lng: Double,
+    ): DetectionResult {
         if (serviceUrl.isBlank()) throw IllegalStateException("Central service URL is missing")
         val path = "/v1/vision/detect"
         val body = JSONObject()
@@ -202,7 +256,17 @@ class DetectionDispatcher(
             detail,
             LlmContractGenerated.DETECT_PROMPT_VERSION,
         ).forEach { (key, value) -> body.put(key, value) }
-        return resultFromJson(executeShared(path, body, UUID.randomUUID().toString()))
+        sharedVisionObservationFields(clientObservationId, lat, lng)
+            .forEach { (key, value) -> body.put(key, value) }
+        val result = resultFromJson(executeShared(
+            path,
+            body,
+            sharedVisionIdempotencyKey(clientObservationId),
+        ))
+        if (result.decision == "accept" && result.detectionReceipt == null) {
+            throw IOException("Shared vision returned no detection receipt")
+        }
+        return result
     }
 
     private fun executeShared(path: String, bodyObject: JSONObject, idempotency: String): JSONObject {
@@ -247,6 +311,9 @@ class DetectionDispatcher(
         val assessment = json.getString("assessment")
         val damageType = if (json.isNull("damage_type")) null else json.getString("damage_type")
         val size = if (json.isNull("size")) null else json.getString("size")
+        val detectionReceipt = if (!json.has("detection_receipt")
+            || json.isNull("detection_receipt")) null
+        else normalizeDetectionReceipt(json.optString("detection_receipt"))
         return DetectionResult(
             assessment = assessment,
             imageQuality = imageQuality,
@@ -254,6 +321,7 @@ class DetectionDispatcher(
             size = size,
             description = json.getString("description"),
             decision = detectionDecisionFor(imageQuality, assessment, damageType, size),
+            detectionReceipt = detectionReceipt,
         )
     }
 }

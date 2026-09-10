@@ -13,13 +13,14 @@ guards the UI race that used to submit every frame twice.
 """
 
 import json
+import os
 import pathlib
 import sys
 
 from playwright.sync_api import sync_playwright
 
 
-APP = "http://localhost:8765/"
+APP = os.environ.get("POTHOLE_TEST_APP", "http://localhost:8765/")
 DRIVE_ID = "backpressure-overlap-drive"
 fails = []
 remote_leaks = []
@@ -129,6 +130,7 @@ with sync_playwright() as playwright:
           const completedKeys = new Set();
           const analysisBodies = [];
           const alerts = [];
+          const footagePaths = [];
           let active = 0;
           let maxActive = 0;
           let frameCalls = 0;
@@ -146,6 +148,7 @@ with sync_playwright() as playwright:
           window.alert = (message) => alerts.push(String(message));
           window.confirm = () => true;
           window.api = async (path, options = {}) => {
+            if (path.startsWith(`/api/footage/${driveId}/`)) footagePaths.push(path);
             if (path === "/api/frame") {
               const key = String(options.body.get("source_event_key") || "missing");
               const count = (attempts.get(key) || 0) + 1;
@@ -214,6 +217,7 @@ with sync_playwright() as playwright:
             maxAttemptsForOneFrame: Math.max(...attempts.values()),
             analysisBodies,
             alerts,
+            footagePaths,
             settled: settled.map((item) => ({
               status: item.status,
               reason: item.status === "rejected" ? String(item.reason) : null,
@@ -248,6 +252,13 @@ if result["retainedClips"] != 3:
         "an incomplete decoder run deleted its source footage: "
         f"{result['retainedClips']} of 3 clips remain"
     )
+if any(path.endswith("/blobs") for path in result["footagePaths"]):
+    fails.append(f"analysis materialised every stored video Blob: {result['footagePaths']}")
+manifest_reads = [path for path in result["footagePaths"] if path.endswith("/manifest")]
+clip_reads = [path for path in result["footagePaths"] if "/clip/" in path]
+if len(manifest_reads) != 1 or len(clip_reads) != 5:
+    fails.append("analysis did not use one metadata manifest and bounded per-clip reads: "
+                 f"manifest={len(manifest_reads)}, clips={len(clip_reads)}")
 expected_attempts = result["uniqueFrames"] + result["transientFrames"]
 if result["frameCalls"] != expected_attempts:
     fails.append(

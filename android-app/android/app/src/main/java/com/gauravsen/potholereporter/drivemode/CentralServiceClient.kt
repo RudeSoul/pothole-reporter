@@ -10,6 +10,9 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+internal fun normalizeCentralAddressHint(value: String?): String? =
+    value?.trim()?.takeIf { it.isNotEmpty() }
+
 /** Small signed client for civic data that is central regardless of vision provider. */
 class CentralServiceException(
     val status: Int,
@@ -36,6 +39,8 @@ class CentralServiceClient(
         val address: String?,
         val bodyLgd: String?,
         val bodyName: String?,
+        val roadOwnership: String,
+        val ownershipDetail: String?,
         val tenderNumber: String?,
         val contractor: String?,
         val tenderNote: String?,
@@ -114,6 +119,7 @@ class CentralServiceClient(
         damageType: String,
         size: String?,
         imageHash: String,
+        detectionReceipt: String?,
         detectorProvider: String,
         model: String,
         detail: String,
@@ -138,6 +144,9 @@ class CentralServiceClient(
             .put("size", size ?: JSONObject.NULL)
             .put("image_hash", imageHash)
             .put("detector", detector)
+        if (!detectionReceipt.isNullOrBlank()) {
+            body.put("detection_receipt", detectionReceipt)
+        }
         val idempotency = "drive-${CentralServiceIdentity.sha256Hex(clientObservationId.toByteArray(Charsets.UTF_8)).take(40)}"
         val (response, requestId) = post("/v1/potholes/report", body, idempotency)
         val pothole = response.optJSONObject("pothole")
@@ -159,8 +168,14 @@ class CentralServiceClient(
         )
     }
 
-    fun resolveTender(lat: Double, lng: Double, operationId: String): TenderResolution {
+    fun resolveTender(
+        lat: Double,
+        lng: Double,
+        operationId: String,
+        addressHint: String? = null,
+    ): TenderResolution {
         val body = JSONObject().put("lat", lat).put("lng", lng)
+        normalizeCentralAddressHint(addressHint)?.let { body.put("address_hint", it) }
         val idempotency = "tender-${CentralServiceIdentity.sha256Hex(
             operationId.toByteArray(Charsets.UTF_8)
         ).take(40)}"
@@ -196,6 +211,26 @@ class CentralServiceClient(
             throw CentralServiceException(502, "bad_service_response",
                 "Central service returned a tender without a number [request ${requestId ?: "unknown"}]")
         }
+        val roadOwnership = nullableString(jurisdiction, "road_ownership")
+        val allowedOwnership = setOf(
+            "municipal",
+            "national_highway",
+            "state_highway",
+            "district_highway",
+            "rural",
+            "outside_state",
+        )
+        if (roadOwnership !in allowedOwnership) {
+            throw CentralServiceException(502, "bad_service_response",
+                "Central service returned no authoritative road ownership " +
+                    "[request ${requestId ?: "unknown"}]")
+        }
+        val terminalOwnership = roadOwnership != "municipal"
+        if (terminalOwnership && (reason != roadOwnership || tender != null)) {
+            throw CentralServiceException(502, "bad_service_response",
+                "Central service returned an inconsistent ownership result " +
+                    "[request ${requestId ?: "unknown"}]")
+        }
         val contractor = nullableString(tender, "contractor")
         val published = nullableString(tender, "published")
         val note = number?.let {
@@ -210,6 +245,13 @@ class CentralServiceClient(
             address = nullableString(jurisdiction, "address"),
             bodyLgd = nullableString(jurisdiction, "lgd"),
             bodyName = nullableString(jurisdiction, "town"),
+            roadOwnership = roadOwnership!!,
+            ownershipDetail = when (roadOwnership) {
+                "national_highway", "state_highway", "district_highway" ->
+                    nullableString(jurisdiction, "highway_name")
+                "rural" -> nullableString(jurisdiction, "rural_body")
+                else -> null
+            },
             tenderNumber = number,
             contractor = contractor,
             tenderNote = note,

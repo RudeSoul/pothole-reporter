@@ -7,7 +7,7 @@ current Play Console tasks shown for the publisher's account.
 
 - [x] **Target API:** the Android project targets API 36, meeting the mobile-app rule that
   starts 31 August 2026. Recheck before every later update.
-- [x] **Signed release bundle:** version 1.13.1/code 29 was built as a non-debuggable,
+- [x] **Signed release bundle:** version 1.13.2/code 30 was built as a non-debuggable,
   signed AAB with a dedicated upload key kept outside Git. Play App Signing enrolment
   still occurs in Play Console during the first upload.
 - [ ] **Hosted privacy page:** enable a stable public host, then verify

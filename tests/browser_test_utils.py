@@ -1,6 +1,7 @@
 """Shared browser-test setup that never puts credentials in URLs or server logs."""
 
 import json
+import os
 
 
 def _central_service(route, request):
@@ -44,7 +45,7 @@ def _central_service(route, request):
 
 def open_app(page, key):
     page.route("https://pothole-detect.gauravsen.workers.dev/**", _central_service)
-    page.goto("http://localhost:8765/")
+    page.goto(os.environ.get("POTHOLE_TEST_APP", "http://localhost:8765/"))
     page.wait_for_load_state("domcontentloaded")
     page.evaluate("""key => {
       localStorage.setItem('vision_provider', 'personal');

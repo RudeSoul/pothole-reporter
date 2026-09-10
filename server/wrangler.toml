@@ -31,14 +31,25 @@ IDEMPOTENCY_CLAIM_TTL_MS = "180000"
 DEDUPE_METRES = "12"
 DEDUPE_MAX_METRES = "20"
 DEDUPE_DAYS = "120"
-NOMINATIM_USER_AGENT = "PotholeReporter/1.0 (operator contact required)"
+# KGIS NH/SH/DH polygons are queried within this bounded GPS tolerance.
+KGIS_NH_PROXIMITY_METRES = "20"
+REQUIRE_SHARED_DETECTION_RECEIPT = "true"
+RECEIPT_LOCATION_TOLERANCE_METRES = "3"
+# Sustained production must use an operator-owned/self-hosted or contracted,
+# Nominatim-compatible reverse endpoint. Public Nominatim is disabled by default.
+GEOCODER_REVERSE_URL = ""
+GEOCODER_USER_AGENT = "PotholeReporter/1.13 (+https://github.com/coding-parrot/pothole-reporter)"
+ALLOW_PUBLIC_NOMINATIM = "false"
 
 [triggers]
-crons = ["* * * * *"]
+# Daily retention cleanup. Request-time expiry checks remain authoritative, so
+# running this every minute would only add idle D1 work and cost.
+crons = ["17 3 * * *"]
 
 [observability]
 enabled = true
 
 # Secrets are set with `wrangler secret put`: OPENAI_API_KEY, YOLO_API_KEY,
 # YOLO_AWS_ACCESS_KEY_ID, YOLO_AWS_SECRET_ACCESS_KEY, and, for temporary AWS
-# credentials, YOLO_AWS_SESSION_TOKEN. Never place those values in this file.
+# credentials, YOLO_AWS_SESSION_TOKEN. GEOCODER_BEARER_TOKEN is optional for an
+# operator geocoder. Never place those values in this file.

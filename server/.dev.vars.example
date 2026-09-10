@@ -4,10 +4,25 @@ OPENAI_API_KEY=REPLACE_WITH_OPENAI_PROJECT_API_KEY
 # Optional shared-detection gateway. Set SHARED_DETECTOR_PROVIDER=http_yolo or
 # openai_then_http_yolo in local Worker configuration before using these values.
 # The gateway must be the exact regional execute-api /v1/detect URL and must
-# normalize raw detections to the road-damage v3 verdict.
+# normalize raw detections to the canonical road-damage-v5 / schema-4 verdict.
 # YOLO_API_URL=https://abc123.execute-api.ap-south-1.amazonaws.com/v1/detect
 # YOLO_API_KEY=REPLACE_WITH_PRIVATE_GATEWAY_TOKEN
 # YOLO_AWS_ACCESS_KEY_ID=REPLACE_WITH_EXTERNAL_CALLER_ACCESS_KEY_ID
 # YOLO_AWS_SECRET_ACCESS_KEY=REPLACE_WITH_EXTERNAL_CALLER_SECRET_ACCESS_KEY
 # YOLO_AWS_SESSION_TOKEN=REPLACE_IF_USING_TEMPORARY_CREDENTIALS
 # YOLO_AWS_REGION=ap-south-1
+
+# Optional bounded tolerance for KGIS NH/SH/DH checks. Runtime clamps this to
+# 5..50 metres so phone GPS drift cannot silently turn a highway into a municipal road.
+# KGIS_NH_PROXIMITY_METRES=20
+
+# Production tender resolution requires an operator-owned or contracted HTTPS
+# Nominatim-compatible reverse-geocoding endpoint. A private bearer token is sent
+# only to a configured non-public host.
+# GEOCODER_REVERSE_URL=https://geocoder.example.org/reverse
+# GEOCODER_BEARER_TOKEN=REPLACE_IF_REQUIRED
+# GEOCODER_USER_AGENT=PotholeReporter/1.13 (+https://github.com/coding-parrot/pothole-reporter)
+
+# Public Nominatim is intentionally off by default. It is suitable only for
+# explicit, low-volume development and is globally gated to one request/second.
+# ALLOW_PUBLIC_NOMINATIM=false

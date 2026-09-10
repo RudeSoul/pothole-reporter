@@ -223,22 +223,19 @@ CASES = r"""
     typeof captureBurst === "undefined" && typeof bestBurstIndex === "undefined"
       && typeof BURST_COUNT === "undefined" && typeof BURST_SPACING_MS === "undefined");
 
-  // ---- warrantyFor: decides a sentence in a letter naming a private company ----
+  // ---- warrantyFor: publication age must never imply current contractor liability ----
   const NOW = Date.UTC(2026, 7, 20);
-  eq("warranty: 6 months old is defect liability",
-     P.warrantyFor("20-02-2026", NOW), {warranty:"within the defect liability period", warranty_code:"dlp"});
-  eq("warranty: 2 years old is maintenance",
-     P.warrantyFor("20-08-2024", NOW), {warranty:"within the maintenance period", warranty_code:"maint"});
-  eq("warranty: 5 years old claims nothing",
-     P.warrantyFor("20-08-2021", NOW), {warranty:"recorded for this stretch", warranty_code:"record"});
-  eq("warranty: unparseable date claims nothing",
-     P.warrantyFor("not a date", NOW), {warranty:"recorded for this stretch", warranty_code:"record"});
-  eq("warranty: missing date claims nothing",
-     P.warrantyFor(null, NOW), {warranty:"recorded for this stretch", warranty_code:"record"});
-  eq("warranty: a future date claims nothing",
-     P.warrantyFor("20-08-2027", NOW), {warranty:"recorded for this stretch", warranty_code:"record"});
-  eq("warranty: month 13 is not a date",
-     P.warrantyFor("20-13-2025", NOW), {warranty:"recorded for this stretch", warranty_code:"record"});
+  const UNVERIFIED_LIABILITY = {
+    warranty:"current liability not established by the publication record",
+    warranty_code:"unverified",
+  };
+  for (const [label, published] of [
+      ["recent", "20-02-2026"], ["two years old", "20-08-2024"],
+      ["old", "20-08-2021"], ["unparseable", "not a date"],
+      ["missing", null], ["future", "20-08-2027"], ["invalid month", "20-13-2025"]]) {
+    eq(`warranty: ${label} publication makes no liability claim`,
+       P.warrantyFor(published, NOW), UNVERIFIED_LIABILITY);
+  }
 
   // ---- listDict: the list must never carry the full-size evidence photo ----
   const rec = {id:1, photo:"P", photo_full:"F", status:"draft"};

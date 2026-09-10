@@ -79,8 +79,8 @@ rm -f "$AAB_PATH"
 
 echo "4/7 validating release identity and manifest policy"
 grep -Fq 'package="com.gauravsen.potholereporter"' "$BUNDLE_MANIFEST" || fail "unexpected application ID"
-grep -Fq 'android:versionCode="29"' "$BUNDLE_MANIFEST" || fail "expected versionCode 29"
-grep -Fq 'android:versionName="1.13.1"' "$BUNDLE_MANIFEST" || fail "expected versionName 1.13.1"
+grep -Fq 'android:versionCode="30"' "$BUNDLE_MANIFEST" || fail "expected versionCode 30"
+grep -Fq 'android:versionName="1.13.2"' "$BUNDLE_MANIFEST" || fail "expected versionName 1.13.2"
 grep -Fq 'android:allowBackup="false"' "$BUNDLE_MANIFEST" || fail "allowBackup must remain false"
 
 if grep -Eq 'android:(debuggable|testOnly)="true"' "$BUNDLE_MANIFEST"; then

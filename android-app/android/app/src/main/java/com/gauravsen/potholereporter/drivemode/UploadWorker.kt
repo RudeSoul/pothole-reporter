@@ -1,12 +1,96 @@
 package com.gauravsen.potholereporter.drivemode
 
 import android.content.Context
+import android.location.Geocoder
 import android.util.Log
 import androidx.work.*
 import androidx.room.withTransaction
 import com.gauravsen.potholereporter.db.AppDatabase
+import com.gauravsen.potholereporter.db.entities.ReportEntity
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.TimeUnit
+
+internal fun unroutedReasonForOwnership(ownership: String?): String? = when (ownership) {
+    "national_highway", "state_highway", "district_highway" -> ownership
+    "rural" -> "rural_road"
+    "outside_state" -> "outside_area"
+    else -> null
+}
+
+/**
+ * Apply one authoritative central ownership result as a single Room update.
+ *
+ * Nullable municipal fields in a terminal response mean "not municipally owned", not
+ * "keep the old value".  Clearing all cached recipient/email fields also prevents a
+ * legacy draft from bypassing the WebView's fresh authority lookup.
+ */
+internal fun reportAfterTenderResolution(
+    report: ReportEntity,
+    resolution: CentralServiceClient.TenderResolution,
+    checkedAt: Double,
+    markReady: Boolean = true,
+): ReportEntity {
+    val unroutedReason = unroutedReasonForOwnership(resolution.roadOwnership)
+    val terminalOwnership = unroutedReason != null
+    val status = when {
+        report.server_duplicate -> "duplicate"
+        terminalOwnership -> "unrouted"
+        markReady && report.status in setOf("draft", "unrouted") -> "queued"
+        else -> report.status
+    }
+    return report.copy(
+        address = resolution.address ?: report.address,
+        body_lgd = if (terminalOwnership) null else resolution.bodyLgd,
+        body_name = if (terminalOwnership) null else resolution.bodyName,
+        road_ownership = resolution.roadOwnership,
+        road_ownership_detail = resolution.ownershipDetail,
+        email_subject = null,
+        email_body = null,
+        email_to = null,
+        officer_title = null,
+        tender_number = if (terminalOwnership) null else resolution.tenderNumber,
+        contractor = if (terminalOwnership) null else resolution.contractor,
+        tender_note = if (terminalOwnership) null else resolution.tenderNote,
+        tender_resolution_reason = resolution.reason,
+        tender_resolution_checked_at = checkedAt,
+        unrouted_reason = unroutedReason,
+        status = status,
+    )
+}
+
+/** Fail closed while a central ownership retry is pending, clearing stale authority. */
+internal fun reportAfterTenderResolutionFailure(
+    report: ReportEntity,
+    reason: String,
+    checkedAt: Double?,
+): ReportEntity = report.copy(
+    body_lgd = null,
+    body_name = null,
+    road_ownership = null,
+    road_ownership_detail = null,
+    email_subject = null,
+    email_body = null,
+    email_to = null,
+    officer_title = null,
+    tender_number = null,
+    contractor = null,
+    tender_note = null,
+    tender_resolution_reason = reason,
+    tender_resolution_checked_at = checkedAt,
+    unrouted_reason = "road_class_unknown",
+    status = if (report.server_duplicate) "duplicate" else "unrouted",
+)
+
+/** A report's stable source event owns its tender retry idempotency key. */
+internal fun tenderOperationId(report: ReportEntity): String =
+    report.source_event_key?.takeIf { it.isNotBlank() }
+        ?: "native-report:${report.id}"
+
+/** A legacy shared row without persisted ownership never counts as resolved. */
+internal fun reportNeedsOwnershipResolution(report: ReportEntity): Boolean =
+    report.tender_resolution_checked_at == null
+        || (report.detection_provider == "shared_server" && report.road_ownership == null)
 
 /**
  * WorkManager worker that processes reports with status "draft".
@@ -76,6 +160,7 @@ class UploadWorker(
                 ?: CentralServiceIdentity.DEFAULT_SERVICE_URL
             val central = CentralServiceClient(serviceUrl, CentralServiceIdentity(applicationContext))
             var centralRetryNeeded = false
+            val deferredTenderReportIds = mutableSetOf<Long>()
             val deduper = DuplicateDetector(dao)
 
             // Each lightweight outbox row points at one provisional ReportEntity, where
@@ -98,11 +183,37 @@ class UploadWorker(
                         damageType = observation.damage_type,
                         size = observation.size,
                         imageHash = observation.image_hash,
+                        detectionReceipt = observation.detection_receipt,
                         detectorProvider = observation.detector_provider,
                         model = observation.detector_model,
                         detail = observation.image_detail,
                         evidenceCount = observation.evidence_count,
                     )
+
+                    // Resolve every server-confirmed duplicate at the candidate's exact
+                    // coordinates before it can be folded into an older local row.
+                    val candidateSnapshot = dao.getById(observation.report_id)
+                    var mergeTender: CentralServiceClient.TenderResolution? = null
+                    var mergeTenderError: Exception? = null
+                    if (sync.duplicate && candidateSnapshot != null) {
+                        try {
+                            mergeTender = central.resolveTender(
+                                lat = observation.lat,
+                                lng = observation.lng,
+                                operationId = observation.client_observation_id,
+                                addressHint = candidateSnapshot.address,
+                            )
+                        } catch (e: Exception) {
+                            mergeTenderError = e
+                            if (isRetryable(e)) centralRetryNeeded = true
+                            Log.w(
+                                TAG,
+                                "Central ownership check failed before duplicate merge " +
+                                    "for report ${observation.report_id}",
+                                e,
+                            )
+                        }
+                    }
                     db.withTransaction {
                         if (!observationDao.exists(observation.client_observation_id)) {
                             return@withTransaction
@@ -126,6 +237,29 @@ class UploadWorker(
                         } else null
 
                         if (mergeTarget != null) {
+                            val error = mergeTenderError
+                            if (error != null && isRetryable(error)) {
+                                // Do not delete the only row that still carries this
+                                // sighting's exact coordinates. Keep its outbox entry for
+                                // the next idempotent retry, and fail-close both visible
+                                // rows in the meantime.
+                                val code = (error as? CentralServiceException)?.code
+                                    ?: "invalid_tender_request"
+                                val latestTarget = dao.getById(mergeTarget.id) ?: mergeTarget
+                                dao.update(reportAfterTenderResolutionFailure(
+                                    latestTarget,
+                                    code,
+                                    checkedAt = null,
+                                ))
+                                dao.update(reportAfterTenderResolutionFailure(
+                                    candidate,
+                                    code,
+                                    checkedAt = null,
+                                ))
+                                deferredTenderReportIds.add(latestTarget.id)
+                                deferredTenderReportIds.add(candidate.id)
+                                return@withTransaction
+                            }
                             val merged = deduper.mergeDuplicate(
                                 candidate,
                                 DuplicateDetector.DuplicateMatch(
@@ -137,7 +271,7 @@ class UploadWorker(
                             val canonicalMismatch = latest.server_pothole_id != null
                                 && latest.server_pothole_id != sync.id
                             val adoptingCanonical = latest.server_pothole_id == null
-                            val updated = latest.copy(
+                            var updated = latest.copy(
                                 server_pothole_id = if (canonicalMismatch) {
                                     latest.server_pothole_id
                                 } else sync.id,
@@ -150,6 +284,23 @@ class UploadWorker(
                                     && latest.status == "draft") "duplicate"
                                     else latest.status,
                             )
+                            if (mergeTender != null) {
+                                updated = reportAfterTenderResolution(
+                                    updated,
+                                    mergeTender!!,
+                                    System.currentTimeMillis() / 1000.0,
+                                )
+                            } else if (mergeTenderError != null) {
+                                val error = mergeTenderError!!
+                                val code = (error as? CentralServiceException)?.code
+                                    ?: "invalid_tender_request"
+                                updated = reportAfterTenderResolutionFailure(
+                                    updated,
+                                    code,
+                                    if (isRetryable(error)) null
+                                    else System.currentTimeMillis() / 1000.0,
+                                )
+                            }
                             dao.update(updated)
                             // This cascades the candidate's outbox row. If the user
                             // already removed it, the existence check above returned.
@@ -158,7 +309,7 @@ class UploadWorker(
                             val latest = dao.getById(candidate.id) ?: return@withTransaction
                             val canonicalMismatch = latest.server_pothole_id != null
                                 && latest.server_pothole_id != sync.id
-                            dao.update(latest.copy(
+                            var updated = latest.copy(
                                 // Never replace an existing canonical ID with a different
                                 // one. A mismatch means this provisional row represents a
                                 // separate recurrence/cross-device canonical record.
@@ -174,7 +325,25 @@ class UploadWorker(
                                     else if (sync.duplicate) "duplicate"
                                     else if (latest.status == "duplicate") "draft"
                                     else latest.status,
-                            ))
+                            )
+                            if (mergeTender != null) {
+                                updated = reportAfterTenderResolution(
+                                    updated,
+                                    mergeTender!!,
+                                    System.currentTimeMillis() / 1000.0,
+                                )
+                            } else if (mergeTenderError != null) {
+                                val error = mergeTenderError!!
+                                val code = (error as? CentralServiceException)?.code
+                                    ?: "invalid_tender_request"
+                                updated = reportAfterTenderResolutionFailure(
+                                    updated,
+                                    code,
+                                    if (isRetryable(error)) null
+                                    else System.currentTimeMillis() / 1000.0,
+                                )
+                            }
+                            dao.update(updated)
                             observationDao.delete(observation.client_observation_id)
                         }
                     }
@@ -193,7 +362,9 @@ class UploadWorker(
                 }
             }
 
-            val workIds = dao.centralWorkIds()
+            // A deferred duplicate must retry through its still-pending outbox row so
+            // ownership uses that sighting's coordinates, not the older canonical row.
+            val workIds = dao.centralWorkIds().filterNot(deferredTenderReportIds::contains)
 
             if (workIds.isEmpty() && !centralRetryNeeded) {
                 Log.i(TAG, "No reports to process")
@@ -206,65 +377,65 @@ class UploadWorker(
                 var current = dao.getById(reportId) ?: continue
                 var centralFailure = false
                 try {
+                    // Resolve once through Android's configured platform geocoder first.
+                    // Passing that result as untrusted data lets the central service avoid
+                    // another geocoder request; its operator-owned provider can still fill
+                    // a missing hint.
+                    if (current.address == null && current.lat != null && current.lng != null) {
+                        val address = reverseGeocode(current.lat, current.lng)
+                        if (address != null) {
+                            val latest = dao.getById(current.id) ?: current
+                            current = latest.copy(address = address)
+                            dao.update(current)
+                        }
+                    }
+
                     if (current.lat != null && current.lng != null
-                        && current.tender_resolution_checked_at == null) {
+                        && reportNeedsOwnershipResolution(current)) {
                         try {
                             val tender = central.resolveTender(
-                                current.lat,
-                                current.lng,
-                                current.source_event_key ?: "native-report:${current.id}",
+                                lat = current.lat,
+                                lng = current.lng,
+                                operationId = tenderOperationId(current),
+                                addressHint = current.address,
                             )
                             val latest = dao.getById(current.id) ?: current
-                            current = latest.copy(
-                                address = tender.address ?: latest.address,
-                                body_lgd = tender.bodyLgd ?: latest.body_lgd,
-                                body_name = tender.bodyName ?: latest.body_name,
-                                tender_number = tender.tenderNumber,
-                                contractor = tender.contractor,
-                                tender_note = tender.tenderNote,
-                                tender_resolution_reason = tender.reason,
-                                tender_resolution_checked_at = System.currentTimeMillis() / 1000.0,
+                            current = reportAfterTenderResolution(
+                                latest,
+                                tender,
+                                System.currentTimeMillis() / 1000.0,
                             )
                             dao.update(current)
                         } catch (e: Exception) {
-                            if (isRetryable(e)) {
+                            val retryable = isRetryable(e)
+                            if (retryable) {
                                 centralFailure = true
                                 centralRetryNeeded = true
-                            } else {
-                                val code = (e as? CentralServiceException)?.code
-                                    ?: "invalid_tender_request"
-                                val latest = dao.getById(current.id) ?: current
-                                current = latest.copy(
-                                    central_sync_error = code,
-                                    tender_resolution_reason = code,
-                                    tender_resolution_checked_at = System.currentTimeMillis() / 1000.0,
-                                )
-                                dao.update(current)
                             }
+                            val code = (e as? CentralServiceException)?.code
+                                ?: "invalid_tender_request"
+                            val latest = dao.getById(current.id) ?: current
+                            current = reportAfterTenderResolutionFailure(
+                                latest,
+                                code,
+                                if (retryable) null
+                                else System.currentTimeMillis() / 1000.0,
+                            ).let { failed ->
+                                if (retryable) failed
+                                else failed.copy(central_sync_error = code)
+                            }
+                            dao.update(current)
                             Log.w(TAG, "Central tender retry failed for report ${current.id}", e)
                         }
                     }
 
                     if (current.server_duplicate) continue
 
-                    // Reverse geocode if address is missing
-                    if (current.address == null && current.lat != null && current.lng != null) {
-                        val address = reverseGeocode(current.lat, current.lng)
-                        if (address != null) {
-                            val latest = dao.getById(current.id) ?: current
-                            dao.update(latest.copy(
-                                address = address,
-                                status = if (centralFailure) "draft" else "queued",
-                            ))
-                            Log.d(TAG, "Report ${current.id} geocoded; central_sync_pending=$centralFailure")
-                            continue
-                        }
-                    }
-
-                    // If already has address or geocoding failed, just mark as queued
+                    // Tender resolution and any available address enrichment are done.
                     val latest = dao.getById(current.id) ?: current
                     dao.update(latest.copy(
                         status = if (latest.server_duplicate) "duplicate"
+                            else if (latest.unrouted_reason != null) "unrouted"
                             else if (centralFailure) "draft" else "queued",
                     ))
                     Log.d(TAG, "Report ${current.id} processing complete; central_sync_pending=$centralFailure")
@@ -281,38 +452,30 @@ class UploadWorker(
         }
     }
 
-    /**
-     * Simple reverse geocode using Nominatim, matching the web client's format.
-     */
+    /** Use the device geocoder; native uploads never call the public Nominatim service. */
+    @Suppress("DEPRECATION")
     private fun reverseGeocode(lat: Double, lng: Double): String? {
         return try {
-            val url = java.net.URL(
-                "https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=jsonv2&zoom=17&addressdetails=1"
-            )
-            val conn = url.openConnection() as java.net.HttpURLConnection
-            conn.connectTimeout = 12000
-            conn.readTimeout = 12000
-            conn.setRequestProperty("User-Agent", "PotholeReporter/1.0")
-
-            if (conn.responseCode != 200) return null
-
-            val json = org.json.JSONObject(conn.inputStream.bufferedReader().readText())
-            val address = json.optJSONObject("address") ?: return null
-
-            fun value(key: String): String? = if (address.isNull(key)) null
-                else address.optString(key).takeIf { it.isNotBlank() }
+            if (!Geocoder.isPresent()) return null
+            val address = Geocoder(applicationContext, Locale.getDefault())
+                .getFromLocation(lat, lng, 1)
+                ?.firstOrNull() ?: return null
+            val road = listOfNotNull(
+                address.subThoroughfare?.takeIf { it.isNotBlank() },
+                address.thoroughfare?.takeIf { it.isNotBlank() },
+            ).joinToString(" ").takeIf { it.isNotBlank() }
             val parts = listOfNotNull(
-                value("road") ?: value("pedestrian") ?: value("residential")
-                    ?: value("footway"),
-                value("neighbourhood") ?: value("hamlet"),
-                value("suburb") ?: value("village"),
-                value("city") ?: value("town") ?: value("municipality"),
-                value("postcode"),
-            ).distinct()
+                road,
+                address.subLocality?.takeIf { it.isNotBlank() },
+                address.locality?.takeIf { it.isNotBlank() }
+                    ?: address.subAdminArea?.takeIf { it.isNotBlank() },
+                address.postalCode?.takeIf { it.isNotBlank() },
+            ).distinctBy { it.lowercase(Locale.ROOT) }
 
-            if (parts.isNotEmpty()) parts.joinToString(", ") else null
+            if (parts.isNotEmpty()) parts.joinToString(", ")
+            else address.getAddressLine(0)?.takeIf { it.isNotBlank() }
         } catch (e: Exception) {
-            Log.w(TAG, "Reverse geocode failed", e)
+            Log.w(TAG, "Platform reverse geocode failed", e)
             null
         }
     }

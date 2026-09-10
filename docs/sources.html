@@ -106,9 +106,9 @@
             <td>Map data can be missing, stale, or imprecise. The complaint also includes coordinates so the result can be checked.</td>
           </tr>
           <tr>
-            <td>Town boundary, gram-panchayat boundary, and national-highway check</td>
+            <td>Town boundary, gram-panchayat boundary, and national/state/district-highway checks</td>
             <td><a href="https://kgis.ksrsac.in/kgismaps/rest/services">Karnataka GIS</a>, operated by KSRSAC, is queried at the reported point.</td>
-            <td>A boundary lookup does not by itself establish maintenance responsibility. If the required road-class or jurisdiction lookup fails, the app is designed to refuse municipal routing.</td>
+            <td>Highway layers 289, 290, and 291 are checked with a bounded GPS tolerance before Town routing. A boundary lookup does not by itself establish maintenance responsibility. If any required road-class or jurisdiction lookup fails, the app refuses municipal routing.</td>
           </tr>
           <tr>
             <td>Municipal recipient</td>
@@ -131,9 +131,9 @@
             <td>The match is generated and probabilistic. Footpath-, drain-, utility-, and other non-road-only works are excluded even for an exact locality match. The complaint labels an accepted match probable and asks the officer to verify it against tender documents.</td>
           </tr>
           <tr>
-            <td>Possible defect-liability or maintenance wording</td>
-            <td>A local rule uses the tender's publication date: up to one year is described as possibly within a defect-liability period and up to three years as possibly within maintenance.</td>
-            <td>The award-search row contains no actual warranty term. This is an inference and must never be presented as a contractual fact.</td>
+            <td>Defect-liability or maintenance status</td>
+            <td>The app does not infer current liability from the tender publication date. A probable tender and recorded bidder can still be included as leads for verification.</td>
+            <td>The search row does not contain the award, completion or contractual liability dates. The complaint explicitly asks the authority to verify the tender, award, work order and applicable terms before assigning responsibility.</td>
           </tr>
           <tr>
             <td>Complaint text and signature</td>
@@ -152,7 +152,7 @@
       <li>Of 319 urban local bodies in the roster used to build the bundle, 182 have a supported directory entry and 137 do not.</li>
       <li>Of 42,283 road-related procurement rows, 18,972 are DMA or legacy BBMP records. Only 13,577 are currently indexed to a supported body and can enter a contract shortlist.</li>
       <li>41,159 procurement rows have no winning bidder recorded in the bundle.</li>
-      <li>National highways, rural roads, unknown road classes, locations outside Karnataka, and unsupported bodies are not routed to a municipal recipient.</li>
+      <li>National, state and district highways, rural roads, unknown road classes, locations outside Karnataka, and unsupported bodies are not routed to a municipal recipient.</li>
       <li>All counts describe the repository snapshot above, not the current contents of an external portal.</li>
     </ul>
   </section>

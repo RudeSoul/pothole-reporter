@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """Persisted report fields must render as text, never executable markup."""
+import os
 import sys
 
 from playwright.sync_api import sync_playwright
 
 
-APP = "http://localhost:8765/"
+APP = os.environ.get("POTHOLE_TEST_APP", "http://localhost:8765/")
 SECRET_KEY = "__stored_xss_secret"
 SECRET = "local-storage-must-stay-private"
 PIXEL = (
@@ -52,6 +53,14 @@ async ({overrides, secretKey, secret, pixel}) => {
     tender_note: "",
     email_subject: "Road damage report",
     email_body: "Please inspect this damage.",
+    // Exercise the attribution renderer through the same proof and deduplication gates
+    // required for a real sendable complaint; stale/unverified officer text is hidden.
+    road_ownership: "municipal",
+    road_ownership_source: "central_v1",
+    tender_resolution_checked_at: 1710000000,
+    server_pothole_id: 991,
+    server_duplicate: false,
+    central_sync_pending: false,
     lat: 12.9115,
     lng: 77.6427,
     photo: pixel,

@@ -71,10 +71,16 @@ for phrase in ("city corporation", "the city"):
         fails.append(f'a letter to a Chief Officer says "{phrase}", but that body is not a corporation')
 if "Chief Officer, Channagiri" not in council:
     fails.append("the greeting does not address the routed officer")
-if "probable" not in council.lower() and "may still be" not in council.lower():
+if "probable" not in council.lower():
     fails.append("the contract claim lost its hedge")
 if "ACME" not in council:
     fails.append("the contractor is not named when one is recorded")
+if "publication date does not establish" not in council.lower():
+    fails.append("English complaint does not explicitly disclaim current contractor liability")
+for claim in ("within the defect liability period", "within the maintenance period",
+              "at no additional cost"):
+    if claim in council.lower():
+        fails.append(f"English complaint makes an unsupported liability claim: {claim!r}")
 
 # A matched tender may be useful context, but the app must not hint that one was found
 # when resolution returned null. Check the whole conditional paragraph rather than just
@@ -100,6 +106,10 @@ for language, values in (("English", r["english"]), ("Kannada", r["kannada"])):
             fails.append("Kannada tender wording lost the exact number or its probability hedge")
         if "ಟೆಂಡರ್" in no_tender:
             fails.append("Kannada no-tender complaint says a tender was found")
+        if "ಪ್ರಕಟಣೆ ದಿನಾಂಕವು" not in with_tender or "ಸ್ಥಾಪಿಸುವುದಿಲ್ಲ" not in with_tender:
+            fails.append("Kannada complaint does not explicitly disclaim current contractor liability")
+        if "ಹೆಚ್ಚುವರಿ ವೆಚ್ಚವಿಲ್ಲದೆ" in with_tender:
+            fails.append("Kannada complaint makes an unsupported no-additional-cost claim")
 
 for language, values in (("English", r["english"]), ("Kannada", r["kannada"])):
     combined = values["subject"] + "\n" + values["withTender"]

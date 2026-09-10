@@ -159,8 +159,8 @@
       </select>
       <label id="providerLabel">Vision provider</label>
       <select id="setProvider">
+        <option id="providerShared" value="shared">Shared project service — no key required</option>
         <option id="providerPersonal" value="personal">My OpenAI API key</option>
-        <option id="providerShared" value="shared">Shared project service</option>
       </select>
       <div class="meta" id="providerNote" style="margin-top:6px"></div>
       <label id="keyLabel">OpenAI API key (stored only on this device)</label>
@@ -271,13 +271,13 @@ const I18N = {
     drive_btn: "&#128663; &nbsp;Drive mode",
     your_reports: "Your reports",
     no_reports: "No reports yet.",
-    banner_setup: "Analysis is not configured. Add your OpenAI API key in Settings.",
+    banner_setup: "Shared pothole checking is unavailable right now. Retry later, or use your own OpenAI API key in Settings.",
     settings_title: "Settings",
     provider_label: "Vision provider",
-    provider_shared: "Shared project service",
+    provider_shared: "Shared project service — no key required",
     provider_personal: "My OpenAI API key",
-    provider_shared_note: "Requires the project server to be online. Selected images go through it, without project retention, to its configured shared detector (OpenAI or an in-house YOLO gateway). If capacity is exhausted, the check fails visibly rather than claiming no damage.",
-    provider_personal_note: "Default for this standalone APK. Your key and selected images go directly to OpenAI. Your key is never sent to the project service.",
+    provider_shared_note: "Default when no personal key is configured. No API key is required. Selected images go through the project server, without project retention, to its shared detector (OpenAI or an in-house YOLO gateway). The server also resolves the responsible authority and any probable tender and contractor. If the service has no capacity, the check fails visibly rather than claiming no damage.",
+    provider_personal_note: "Uses your OpenAI API key. Your key and selected images go directly to OpenAI; the key is never sent to the project service. Accepted potholes still use the project server for the responsible authority, tender, contractor, deduplication and map.",
     key_label: "OpenAI API key (required only for personal mode)",
     key_required: "Enter an OpenAI API key in Settings before starting analysis.",
     name_label: "Your name (signs the complaints)",
@@ -294,18 +294,24 @@ const I18N = {
     privacy_link: "Privacy policy", sources_link: "Data sources and limits",
     privacy_accept: "Continue", privacy_decline: "Not now",
     wipe_btn: "Delete all app data",
-    welcome_hint: "This standalone APK analyses directly with an OpenAI key stored on this device. Shared mode works only when the project server is deployed.",
+    welcome_hint: "No API key is needed for Shared project service. Choose My OpenAI API key only if you want images sent directly from this device to OpenAI.",
     back: "Back", save: "Save", discard: "Discard", del: "Delete", email_btn: "Email complaint", stop: "&#9632; Stop", working: "Working...",
+    manual_analysis_active: "The previous photo is still being analysed. Wait for it to finish before taking another.",
     chip_draft: "Draft", chip_sent: "Opened in email", chip_queued: "Opened in email", chip_rejected: "Undamaged", chip_review: "Retake / review",
     chip_unrouted: "Outside coverage", chip_duplicate: "Already reported",
     duplicate_title: "Already reported nearby",
     duplicate_help: "Your detection and photo were kept as evidence and counted as another sighting. A second complaint was not created.",
+    email_waiting_dedupe: "Waiting for the shared-map duplicate check before email is enabled.",
     seen_count: "{n} sightings across devices",
     no_location: "The location could not be determined.",
     road_unknown: "Could not check who owns this road",
-    road_unknown_help: "The app could not reach the state road network to check whether this is a national highway, so it will not name a city officer for a road that may not be theirs. Try again when you have a signal.",
+    road_unknown_help: "The app could not reach the state road network to check whether this is a national, state, or district highway, so it will not name a city officer for a road that may not be theirs. Try again when you have a signal.",
     nat_highway: "{road} is a national highway",
     nat_highway_help: "National highways are maintained by NHAI or the state PWD National Highways division, not by the city or town body. No verified authority email is configured for this stretch yet, so the photo and location have been saved without opening a complaint draft.",
+    state_highway: "{road} is a state highway",
+    state_highway_help: "State highways are maintained by the state PWD, not by the city or town body. No verified authority email is configured for this stretch yet, so the photo and location have been saved without opening a complaint draft.",
+    district_highway: "{road} is a district highway",
+    district_highway_help: "District highways are maintained by the district or state road authority, not by the city or town body. No verified authority email is configured for this stretch yet, so the photo and location have been saved without opening a complaint draft.",
     rural_road: "This road is in {body} gram panchayat, not a town or city.",
     rural_road_help: "Road damage was confirmed, but it sits outside every urban local body, so it belongs to the state PWD or the panchayat engineering department rather than a municipality. Those are not in the directory yet, so no complaint has been addressed. The photo and location are saved.",
     no_address: "No published address for {body}.",
@@ -337,6 +343,7 @@ const I18N = {
     footage_line: "Footage: {mb} MB · {segments} clips",
     analyse_btn: "Analyse footage", delete_footage: "Delete footage",
     analysing: "Frame {i} of {n} · {found} new",
+    preparing_video: "Preparing recorded video...",
     analyse_done: "Footage analysed: {found} new road-damage events from {n} frames.",
     analyse_none: "No footage stored for this drive.",
     analysing_dup: "({n} already reported)",
@@ -394,7 +401,7 @@ const I18N = {
     scanning: "Scanning ({mode})... {checked} checked{analyzing}",
     starting_camera: "Starting camera…",
     finishing_analysis: "Camera stopped · finishing {n} captured analyses…",
-    shared_unavailable: "The shared project server is unavailable. Choose Personal OpenAI key in Settings. No image or video was sent.",
+    shared_unavailable: "Shared pothole checking is unavailable right now. Retry when the project server is online, or use your own OpenAI API key in Settings. No image or video was sent.",
     native_vision_error: "Vision check failed: {err}",
     analyzing_suffix: ", {n} analyzing",
     potholes_one: "{n} damage event", potholes_many: "{n} damage events",
@@ -416,13 +423,13 @@ const I18N = {
     drive_btn: "&#128663; &nbsp;ಡ್ರೈವ್ ಮೋಡ್",
     your_reports: "ನಿಮ್ಮ ವರದಿಗಳು",
     no_reports: "ಇನ್ನೂ ವರದಿಗಳಿಲ್ಲ. ಗುಂಡಿ ಹುಡುಕಲು ಹೊರಡಿ.",
-    banner_setup: "ವಿಶ್ಲೇಷಣೆ ಸಂರಚಿಸಲಾಗಿಲ್ಲ. ಸೆಟ್ಟಿಂಗ್ಸ್‌ನಲ್ಲಿ ನಿಮ್ಮ OpenAI API ಕೀ ಸೇರಿಸಿ.",
+    banner_setup: "ಹಂಚಿದ ರಸ್ತೆ ಹಾನಿ ಪರಿಶೀಲನೆ ಈಗ ಲಭ್ಯವಿಲ್ಲ. ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ, ಅಥವಾ ಸೆಟ್ಟಿಂಗ್‌ಗಳಲ್ಲಿ ನಿಮ್ಮ OpenAI API ಕೀ ಬಳಸಿ.",
     settings_title: "ಸೆಟ್ಟಿಂಗ್ಸ್",
     provider_label: "ವಿಷನ್ ಸೇವೆ",
-    provider_shared: "ಯೋಜನೆಯ ಹಂಚಿದ ಸೇವೆ",
+    provider_shared: "ಯೋಜನೆಯ ಹಂಚಿದ ಸೇವೆ — ಕೀ ಅಗತ್ಯವಿಲ್ಲ",
     provider_personal: "ನನ್ನ OpenAI API ಕೀ",
-    provider_shared_note: "ಯೋಜನೆಯ ಸರ್ವರ್ ಆನ್‌ಲೈನ್ ಇದ್ದಾಗ ಮಾತ್ರ ಇದು ಕೆಲಸ ಮಾಡುತ್ತದೆ. ಆಯ್ದ ಚಿತ್ರಗಳು ಅಲ್ಲಿ ಉಳಿಯದೆ, ಹಂಚಿದ OpenAI ಅಥವಾ YOLO ಪತ್ತೆ ವ್ಯವಸ್ಥೆಗೆ ಹೋಗುತ್ತವೆ. ಸಾಮರ್ಥ್ಯ ಮುಗಿದರೆ ಪರಿಶೀಲನೆ ವಿಫಲವೆಂದು ಸ್ಪಷ್ಟವಾಗಿ ತೋರಿಸುತ್ತದೆ.",
-    provider_personal_note: "ಈ ಸ್ವತಂತ್ರ APKಯ ಪೂರ್ವನಿಯೋಜಿತ ಆಯ್ಕೆ. ನಿಮ್ಮ ಕೀ ಮತ್ತು ಚಿತ್ರಗಳು ನೇರವಾಗಿ OpenAI ಗೆ ಹೋಗುತ್ತವೆ. ಕೀ ಎಂದಿಗೂ ಯೋಜನೆಯ ಸೇವೆಗೆ ಹೋಗುವುದಿಲ್ಲ.",
+    provider_shared_note: "ವೈಯಕ್ತಿಕ ಕೀ ಇಲ್ಲದಿದ್ದಾಗ ಇದು ಪೂರ್ವನಿಯೋಜಿತ ಆಯ್ಕೆ. API ಕೀ ಅಗತ್ಯವಿಲ್ಲ. ಆಯ್ದ ಚಿತ್ರಗಳು ಯೋಜನೆಯ ಸರ್ವರ್ ಮೂಲಕ, ಅಲ್ಲಿ ಉಳಿಯದೆ, ಹಂಚಿದ OpenAI ಅಥವಾ YOLO ಪತ್ತೆ ವ್ಯವಸ್ಥೆಗೆ ಹೋಗುತ್ತವೆ. ಸರ್ವರ್ ಜವಾಬ್ದಾರ ಪ್ರಾಧಿಕಾರ ಮತ್ತು ಸಂಭವನೀಯ ಟೆಂಡರ್ ಹಾಗೂ ಗುತ್ತಿಗೆದಾರರನ್ನೂ ಪತ್ತೆ ಮಾಡುತ್ತದೆ. ಸಾಮರ್ಥ್ಯ ಮುಗಿದರೆ ಪರಿಶೀಲನೆ ವಿಫಲವೆಂದು ಸ್ಪಷ್ಟವಾಗಿ ತೋರಿಸುತ್ತದೆ.",
+    provider_personal_note: "ನಿಮ್ಮ OpenAI API ಕೀ ಬಳಸುತ್ತದೆ. ನಿಮ್ಮ ಕೀ ಮತ್ತು ಚಿತ್ರಗಳು ನೇರವಾಗಿ OpenAI ಗೆ ಹೋಗುತ್ತವೆ; ಕೀ ಯೋಜನೆಯ ಸೇವೆಗೆ ಎಂದಿಗೂ ಹೋಗುವುದಿಲ್ಲ. ಸ್ವೀಕರಿಸಿದ ರಸ್ತೆ ಹಾನಿಗೆ ಪ್ರಾಧಿಕಾರ, ಟೆಂಡರ್, ಗುತ್ತಿಗೆದಾರ, ನಕಲು ಪರಿಶೀಲನೆ ಮತ್ತು ನಕ್ಷೆಗಾಗಿ ಯೋಜನೆಯ ಸರ್ವರ್ ಇನ್ನೂ ಬಳಸಲಾಗುತ್ತದೆ.",
     key_label: "OpenAI API ಕೀ (ವೈಯಕ್ತಿಕ ಮೋಡ್‌ಗೆ ಮಾತ್ರ ಅಗತ್ಯ)",
     key_required: "ವಿಶ್ಲೇಷಣೆ ಆರಂಭಿಸುವ ಮೊದಲು ಸೆಟ್ಟಿಂಗ್ಸ್‌ನಲ್ಲಿ OpenAI API ಕೀ ನಮೂದಿಸಿ.",
     name_label: "ನಿಮ್ಮ ಹೆಸರು (ದೂರುಗಳಿಗೆ ಸಹಿ)",
@@ -439,18 +446,24 @@ const I18N = {
     privacy_link: "ಗೌಪ್ಯತಾ ನೀತಿ", sources_link: "ಡೇಟಾ ಮೂಲಗಳು ಮತ್ತು ಮಿತಿಗಳು",
     privacy_accept: "ಮುಂದುವರಿಸಿ", privacy_decline: "ಈಗ ಬೇಡ",
     wipe_btn: "ಎಲ್ಲಾ ಆ್ಯಪ್ ಡೇಟಾ ಅಳಿಸಿ",
-    welcome_hint: "ಈ ಸ್ವತಂತ್ರ APK ಸಾಧನದಲ್ಲಿ ಉಳಿಸಿದ OpenAI ಕೀ ಬಳಸಿ ನೇರವಾಗಿ ವಿಶ್ಲೇಷಿಸುತ್ತದೆ. ಯೋಜನೆಯ ಸರ್ವರ್ ನಿಯೋಜಿಸಿದ್ದರೆ ಮಾತ್ರ ಹಂಚಿದ ಮೋಡ್ ಕೆಲಸ ಮಾಡುತ್ತದೆ.",
+    welcome_hint: "ಹಂಚಿದ ಯೋಜನೆ ಸೇವೆಗೆ API ಕೀ ಅಗತ್ಯವಿಲ್ಲ. ಚಿತ್ರಗಳನ್ನು ಈ ಸಾಧನದಿಂದ ನೇರವಾಗಿ OpenAI ಗೆ ಕಳುಹಿಸಲು ಬಯಸಿದರೆ ಮಾತ್ರ ನನ್ನ OpenAI API ಕೀ ಆಯ್ಕೆಮಾಡಿ.",
     back: "ಹಿಂದೆ", save: "ಉಳಿಸಿ", discard: "ತ್ಯಜಿಸಿ", del: "ಅಳಿಸಿ", email_btn: "ಇಮೇಲ್ ದೂರು", stop: "&#9632; ನಿಲ್ಲಿಸಿ", working: "ನಡೆಯುತ್ತಿದೆ...",
+    manual_analysis_active: "ಹಿಂದಿನ ಫೋಟೋ ಇನ್ನೂ ವಿಶ್ಲೇಷಣೆಯಾಗುತ್ತಿದೆ. ಮತ್ತೊಂದು ತೆಗೆಯುವ ಮೊದಲು ಅದು ಮುಗಿಯುವವರೆಗೆ ಕಾಯಿರಿ.",
     chip_draft: "ಡ್ರಾಫ್ಟ್", chip_sent: "ಇಮೇಲ್‌ನಲ್ಲಿ ತೆರೆಯಲಾಗಿದೆ", chip_queued: "ಇಮೇಲ್‌ನಲ್ಲಿ ತೆರೆಯಲಾಗಿದೆ", chip_rejected: "ಹಾನಿ ಇಲ್ಲ", chip_review: "ಮರುಚಿತ್ರ / ಪರಿಶೀಲನೆ",
     chip_unrouted: "ವ್ಯಾಪ್ತಿಯ ಹೊರಗೆ", chip_duplicate: "ಈಗಾಗಲೇ ವರದಿ",
     duplicate_title: "ಹತ್ತಿರದಲ್ಲಿ ಈಗಾಗಲೇ ವರದಿಯಾಗಿದೆ",
     duplicate_help: "ನಿಮ್ಮ ಪತ್ತೆ ಮತ್ತು ಫೋಟೋ ಸಾಕ್ಷ್ಯವಾಗಿ ಉಳಿದು ಮತ್ತೊಂದು ವೀಕ್ಷಣೆಯಾಗಿ ಎಣಿಕೆಯಾಗಿದೆ. ಎರಡನೇ ದೂರು ಸಿದ್ಧಪಡಿಸಲಿಲ್ಲ.",
+    email_waiting_dedupe: "ಇಮೇಲ್ ಸಕ್ರಿಯವಾಗುವ ಮೊದಲು ಹಂಚಿದ ನಕ್ಷೆಯ ನಕಲಿ ವರದಿ ಪರಿಶೀಲನೆಗಾಗಿ ಕಾಯಲಾಗುತ್ತಿದೆ.",
     seen_count: "ಸಾಧನಗಳಾದ್ಯಂತ {n} ವೀಕ್ಷಣೆಗಳು",
     no_location: "ಸ್ಥಳ ಪತ್ತೆಯಾಗಲಿಲ್ಲ.",
     road_unknown: "ಈ ರಸ್ತೆ ಯಾರ ವ್ಯಾಪ್ತಿಗೆ ಬರುತ್ತದೆ ಎಂದು ಪರಿಶೀಲಿಸಲಾಗಲಿಲ್ಲ",
-    road_unknown_help: "ಇದು ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿಯೇ ಎಂದು ಪರಿಶೀಲಿಸಲು ರಾಜ್ಯ ರಸ್ತೆ ಜಾಲವನ್ನು ತಲುಪಲಾಗಲಿಲ್ಲ. ಆದ್ದರಿಂದ ಬೇರೆಯವರ ರಸ್ತೆಗೆ ನಗರ ಅಧಿಕಾರಿಯ ಹೆಸರು ಸೂಚಿಸುವುದಿಲ್ಲ. ಸಿಗ್ನಲ್ ಬಂದ ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.",
+    road_unknown_help: "ಇದು ರಾಷ್ಟ್ರೀಯ, ರಾಜ್ಯ ಅಥವಾ ಜಿಲ್ಲಾ ಹೆದ್ದಾರಿಯೇ ಎಂದು ಪರಿಶೀಲಿಸಲು ರಾಜ್ಯ ರಸ್ತೆ ಜಾಲವನ್ನು ತಲುಪಲಾಗಲಿಲ್ಲ. ಆದ್ದರಿಂದ ಬೇರೆಯವರ ರಸ್ತೆಗೆ ನಗರ ಅಧಿಕಾರಿಯ ಹೆಸರು ಸೂಚಿಸುವುದಿಲ್ಲ. ಸಿಗ್ನಲ್ ಬಂದ ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.",
     nat_highway: "{road} ಒಂದು ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿ",
     nat_highway_help: "ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿಗಳನ್ನು NHAI ಅಥವಾ ರಾಜ್ಯ ಲೋಕೋಪಯೋಗಿ ಇಲಾಖೆಯ ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿ ವಿಭಾಗ ನಿರ್ವಹಿಸುತ್ತದೆ, ನಗರ ಸಂಸ್ಥೆ ಅಲ್ಲ. ಈ ರಸ್ತೆಗೆ ಪರಿಶೀಲಿಸಿದ ಅಧಿಕೃತ ಇಮೇಲ್ ಇನ್ನೂ ಸಂರಚಿಸಲ್ಪಟ್ಟಿಲ್ಲ; ಆದ್ದರಿಂದ ದೂರು ಕರಡು ತೆರೆಯದೆ ಫೋಟೋ ಮತ್ತು ಸ್ಥಳವನ್ನು ಉಳಿಸಲಾಗಿದೆ.",
+    state_highway: "{road} ಒಂದು ರಾಜ್ಯ ಹೆದ್ದಾರಿ",
+    state_highway_help: "ರಾಜ್ಯ ಹೆದ್ದಾರಿಗಳನ್ನು ರಾಜ್ಯ ಲೋಕೋಪಯೋಗಿ ಇಲಾಖೆ ನಿರ್ವಹಿಸುತ್ತದೆ, ನಗರ ಸಂಸ್ಥೆ ಅಲ್ಲ. ಈ ರಸ್ತೆಗೆ ಪರಿಶೀಲಿಸಿದ ಅಧಿಕೃತ ಇಮೇಲ್ ಇನ್ನೂ ಸಂರಚಿಸಲ್ಪಟ್ಟಿಲ್ಲ; ಆದ್ದರಿಂದ ದೂರು ಕರಡು ತೆರೆಯದೆ ಫೋಟೋ ಮತ್ತು ಸ್ಥಳವನ್ನು ಉಳಿಸಲಾಗಿದೆ.",
+    district_highway: "{road} ಒಂದು ಜಿಲ್ಲಾ ಹೆದ್ದಾರಿ",
+    district_highway_help: "ಜಿಲ್ಲಾ ಹೆದ್ದಾರಿಗಳನ್ನು ಜಿಲ್ಲಾ ಅಥವಾ ರಾಜ್ಯ ರಸ್ತೆ ಪ್ರಾಧಿಕಾರ ನಿರ್ವಹಿಸುತ್ತದೆ, ನಗರ ಸಂಸ್ಥೆ ಅಲ್ಲ. ಈ ರಸ್ತೆಗೆ ಪರಿಶೀಲಿಸಿದ ಅಧಿಕೃತ ಇಮೇಲ್ ಇನ್ನೂ ಸಂರಚಿಸಲ್ಪಟ್ಟಿಲ್ಲ; ಆದ್ದರಿಂದ ದೂರು ಕರಡು ತೆರೆಯದೆ ಫೋಟೋ ಮತ್ತು ಸ್ಥಳವನ್ನು ಉಳಿಸಲಾಗಿದೆ.",
     rural_road: "ಈ ರಸ್ತೆ {body} ಗ್ರಾಮ ಪಂಚಾಯತ್‌ನಲ್ಲಿದೆ, ಪಟ್ಟಣ ಅಥವಾ ನಗರದಲ್ಲಿ ಅಲ್ಲ.",
     rural_road_help: "ಗುಂಡಿ ದೃಢಪಟ್ಟಿದೆ, ಆದರೆ ಇದು ಯಾವುದೇ ನಗರ ಸ್ಥಳೀಯ ಸಂಸ್ಥೆಯ ಹೊರಗಿದೆ. ಇದು ಲೋಕೋಪಯೋಗಿ ಇಲಾಖೆ ಅಥವಾ ಪಂಚಾಯತ್ ಎಂಜಿನಿಯರಿಂಗ್ ಇಲಾಖೆಗೆ ಸೇರಿದೆ, ಅವು ಇನ್ನೂ ಪಟ್ಟಿಯಲ್ಲಿಲ್ಲ. ಫೋಟೋ ಉಳಿಸಲಾಗಿದೆ.",
     no_address: "{body} ಗೆ ಪ್ರಕಟಿತ ವಿಳಾಸ ಇಲ್ಲ.",
@@ -482,6 +495,7 @@ const I18N = {
     footage_line: "ವಿಡಿಯೋ: {mb} MB · {segments} ತುಣುಕುಗಳು",
     analyse_btn: "ವಿಡಿಯೋ ವಿಶ್ಲೇಷಿಸಿ", delete_footage: "ವಿಡಿಯೋ ಅಳಿಸಿ",
     analysing: "ಫ್ರೇಮ್ {i}/{n} · {found} ಹೊಸ",
+    preparing_video: "ರೆಕಾರ್ಡ್ ಮಾಡಿದ ವಿಡಿಯೋ ಸಿದ್ಧಪಡಿಸಲಾಗುತ್ತಿದೆ...",
     analyse_done: "ವಿಶ್ಲೇಷಣೆ ಮುಗಿಯಿತು: {n} ಫ್ರೇಮ್‌ಗಳಿಂದ {found} ಹೊಸ ಗುಂಡಿಗಳು.",
     analyse_none: "ಈ ಡ್ರೈವ್‌ಗೆ ವಿಡಿಯೋ ಇಲ್ಲ.",
     analysing_dup: "({n} ಈಗಾಗಲೇ ವರದಿ)",
@@ -539,7 +553,7 @@ const I18N = {
     scanning: "ಸ್ಕ್ಯಾನ್ ({mode})... {checked} ಪರಿಶೀಲನೆ{analyzing}",
     starting_camera: "ಕ್ಯಾಮೆರಾ ಪ್ರಾರಂಭವಾಗುತ್ತಿದೆ…",
     finishing_analysis: "ಕ್ಯಾಮೆರಾ ನಿಲ್ಲಿಸಲಾಗಿದೆ · ಸೆರೆಹಿಡಿದ {n} ವಿಶ್ಲೇಷಣೆಗಳನ್ನು ಪೂರ್ಣಗೊಳಿಸಲಾಗುತ್ತಿದೆ…",
-    shared_unavailable: "ಯೋಜನೆಯ ಹಂಚಿದ ಸರ್ವರ್ ಲಭ್ಯವಿಲ್ಲ. ಸೆಟ್ಟಿಂಗ್‌ಗಳಲ್ಲಿ ವೈಯಕ್ತಿಕ OpenAI ಕೀ ಆಯ್ಕೆಮಾಡಿ. ಯಾವುದೇ ಚಿತ್ರ ಅಥವಾ ವಿಡಿಯೋ ಕಳುಹಿಸಲಾಗಿಲ್ಲ.",
+    shared_unavailable: "ಹಂಚಿದ ರಸ್ತೆ ಹಾನಿ ಪರಿಶೀಲನೆ ಈಗ ಲಭ್ಯವಿಲ್ಲ. ಯೋಜನೆಯ ಸರ್ವರ್ ಆನ್‌ಲೈನ್ ಆದಾಗ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ, ಅಥವಾ ಸೆಟ್ಟಿಂಗ್‌ಗಳಲ್ಲಿ ನಿಮ್ಮ OpenAI API ಕೀ ಬಳಸಿ. ಯಾವುದೇ ಚಿತ್ರ ಅಥವಾ ವಿಡಿಯೋ ಕಳುಹಿಸಲಾಗಿಲ್ಲ.",
     native_vision_error: "ವಿಷನ್ ಪರಿಶೀಲನೆ ವಿಫಲವಾಗಿದೆ: {err}",
     analyzing_suffix: ", {n} ವಿಶ್ಲೇಷಣೆ",
     potholes_one: "{n} ಹಾನಿ ಘಟನೆ", potholes_many: "{n} ಹಾನಿ ಘಟನೆಗಳು",
@@ -585,13 +599,16 @@ const safePhotoSrc = (value) => {
   return /^(?:blob:|data:image\/(?:jpeg|jpg|png|webp|gif);base64,)/i.test(src)
     ? escapeAttr(src) : "";
 };
+const hasAuthoritativeMunicipalCivicCache = (report) => !!report
+  && report.road_ownership === "municipal"
+  && (report._native || report.road_ownership_source === "central_v1");
 const CENTRAL_SERVICE_URL = () => (localStorage.getItem("service_url")
   || "https://pothole-detect.gauravsen.workers.dev").replace(/\/+$/, "");
-// A standalone APK must not silently depend on a project server that may not be
-// deployed. Shared mode remains available, but only after the person explicitly
-// chooses it in Settings.
-const visionProvider = () => localStorage.getItem("vision_provider") === "shared"
-  ? "shared" : "personal";
+// A missing personal key transparently selects the shared detector. Keep this routed
+// through the engine's tested helper so UI preflight, web capture and native Drive Mode
+// cannot disagree about which provider owns the image.
+const visionProvider = () => StandaloneAPI.__pure.effectiveVisionProvider(
+  localStorage.getItem("vision_provider"), localStorage.getItem("openai_key"));
 let health = { ai_configured: null, provider: "shared_server", email_configured: false,
                delivery: "email_draft", service_url: CENTRAL_SERVICE_URL() };
 
@@ -978,44 +995,54 @@ async function prefetchManualPosition() {
 
 async function handleFile(file) {
   if (!file) return;
+  if (manualAnalysisActive) {
+    alert(t("manual_analysis_active"));
+    return;
+  }
   const token = ++manualAnalysisSequence;
   manualAnalysisActive = token;
-  const capturedAtMs = Date.now();
-  clearManualPreview();
-  const previewUrl = URL.createObjectURL(file);
-  manualPreviewUrl = previewUrl;
-  $("progressPhoto").src = previewUrl;
-  $("progressText").textContent = t("getting_location");
-  show("progress");
-  // Launch the camera as soon as camera permission is ready. Location permission is
-  // needed only after the person returns with a photo, so it must not delay the feed.
-  const prefetched = primedManualPosition;
-  primedManualPosition = null;
-  // Prefetch continues while the external camera is open, but never gets to add its
-  // whole timeout after the user returns with a photo.
-  let pos = prefetched ? await positionWithin(prefetched, 750) : null;
-  if (token !== manualAnalysisSequence) { clearManualPreview(previewUrl); return; }
-  if (!pos) {
-    await requestNativeLocationPermission();
-    if (token !== manualAnalysisSequence) { clearManualPreview(previewUrl); return; }
-    // A first-run location fix must not hold the detector behind a long wait.
-    // A later email can explain that a missing fix prevents authority routing.
-    pos = await getPosition(2000);
-  }
-  if (token !== manualAnalysisSequence) { clearManualPreview(previewUrl); return; }
-  $("progressText").textContent = t("working");
-  const fd = new FormData();
-  fd.append("photo", file);
-  fd.append("captured_at_ms", String(capturedAtMs));
-  if (pos) {
-    fd.append("lat", pos.lat); fd.append("lng", pos.lng);
-    if (pos.accuracy != null) fd.append("gps_accuracy", String(pos.accuracy));
-    if (pos.speed != null) fd.append("speed", String(pos.speed));
-    if (pos.heading != null) fd.append("heading", String(pos.heading));
-  }
+  let previewUrl = null;
   try {
-    const report = await api("/api/report", { method: "POST", body: fd });
+    const capturedAtMs = Date.now();
+    clearManualPreview();
+    previewUrl = URL.createObjectURL(file);
+    manualPreviewUrl = previewUrl;
+    $("progressPhoto").src = previewUrl;
+    $("progressText").textContent = t("getting_location");
+    show("progress");
+    // Launch the camera as soon as camera permission is ready. Location permission is
+    // needed only after the person returns with a photo, so it must not delay the feed.
+    const prefetched = primedManualPosition;
+    primedManualPosition = null;
+    // Prefetch continues while the external camera is open, but never gets to add its
+    // whole timeout after the user returns with a photo.
+    let pos = prefetched ? await positionWithin(prefetched, 750) : null;
     if (token !== manualAnalysisSequence) return;
+    if (!pos) {
+      await requestNativeLocationPermission();
+      if (token !== manualAnalysisSequence) return;
+      // A first-run location fix must not hold the detector behind a long wait.
+      // A later email can explain that a missing fix prevents authority routing.
+      pos = await getPosition(2000);
+    }
+    if (token !== manualAnalysisSequence) return;
+    $("progressText").textContent = t("working");
+    const fd = new FormData();
+    fd.append("photo", file);
+    fd.append("captured_at_ms", String(capturedAtMs));
+    if (pos) {
+      fd.append("lat", pos.lat); fd.append("lng", pos.lng);
+      if (pos.accuracy != null) fd.append("gps_accuracy", String(pos.accuracy));
+      if (pos.speed != null) fd.append("speed", String(pos.speed));
+      if (pos.heading != null) fd.append("heading", String(pos.heading));
+    }
+    const report = await api("/api/report", { method: "POST", body: fd });
+    if (token !== manualAnalysisSequence) {
+      // The detector may already have committed the report before Back was pressed.
+      // Refresh History without letting this stale request replace the current screen.
+      void loadReports().catch(() => {});
+      return;
+    }
     openDetail(report);
     // The new result is already complete. Hydrating every historical native thumbnail
     // can take longer as history grows, so refresh that list behind the visible detail.
@@ -1027,7 +1054,7 @@ async function handleFile(file) {
     }
   } finally {
     if (manualAnalysisActive === token) manualAnalysisActive = 0;
-    clearManualPreview(previewUrl);
+    if (previewUrl) clearManualPreview(previewUrl);
   }
 }
 
@@ -1064,6 +1091,8 @@ function unroutedTitle(r) {
   if (r.unrouted_reason === "no_location") return t("no_location");
   if (r.unrouted_reason === "road_class_unknown") return t("road_unknown");
   if (r.unrouted_reason === "national_highway") return t("nat_highway", { road: r.unrouted_body || "" });
+  if (r.unrouted_reason === "state_highway") return t("state_highway", { road: r.unrouted_body || "" });
+  if (r.unrouted_reason === "district_highway") return t("district_highway", { road: r.unrouted_body || "" });
   if (r.unrouted_reason === "rural_road") return t("rural_road", { body: r.unrouted_body || "a" });
   if (r.unrouted_reason === "no_address_for_body") return t("no_address", { body: r.unrouted_body || "" });
   return t("outside_coverage");
@@ -1072,6 +1101,8 @@ function unroutedHelp(r) {
   if (r.unrouted_reason === "no_location") return t("no_location_help");
   if (r.unrouted_reason === "road_class_unknown") return t("road_unknown_help");
   if (r.unrouted_reason === "national_highway") return t("nat_highway_help");
+  if (r.unrouted_reason === "state_highway") return t("state_highway_help");
+  if (r.unrouted_reason === "district_highway") return t("district_highway_help");
   if (r.unrouted_reason === "rural_road") return t("rural_road_help");
   if (r.unrouted_reason === "no_address_for_body") return t("no_address_help");
   return t("outside_coverage_help");
@@ -1133,16 +1164,18 @@ function openDetail(r, list) {
   } else if (r._native) {
     // Native Drive Mode owns these Room rows. Show its evidence and central state here,
     // and open the same routed email composer without touching browser IndexedDB.
-    const nativeSendable = !r.server_duplicate
+    const nativeSendable = StandaloneAPI.__pure.centralReportIsConfirmed(r)
       && ["draft", "queued"].includes(r._nativeStoredStatus || r.status);
+    const showCivicAttribution = hasAuthoritativeMunicipalCivicCache(r);
     d.innerHTML = `
       <div class="card">
         ${photoBlock(r)}
         <div class="verdict" style="color:var(--accent)">${escapeHtml(detectionVerdict(r))}</div>
         ${r.address ? `<div class="meta">&#128205; ${escapeHtml(r.address)}</div>` : ""}
-        ${r.body_name ? `<div class="meta">${escapeHtml(r.body_name)}</div>` : ""}
-        ${r.tender_note ? `<div class="meta">&#128209; ${escapeHtml(r.tender_note)}</div>` : ""}
+        ${showCivicAttribution && r.body_name ? `<div class="meta">${escapeHtml(r.body_name)}</div>` : ""}
+        ${showCivicAttribution && r.tender_note ? `<div class="meta">&#128209; ${escapeHtml(r.tender_note)}</div>` : ""}
         <div class="meta">${escapeHtml(r.description || "")}</div>
+        ${!nativeSendable && !r.server_duplicate ? `<div class="meta">${escapeHtml(t("email_waiting_dedupe"))}</div>` : ""}
         <div class="btn-row">
           <button class="ghost" id="backBtn">${t("back")}</button>
           ${nativeSendable ? `<button class="send" id="sendBtn" data-complaint-action="email">${sendLabel()} &#9993;</button>` : ""}
@@ -1156,6 +1189,8 @@ function openDetail(r, list) {
     const verdictText = r.status === "queued" || r.status === "sent"
       ? t("verdict_queued")
       : detectionVerdict(r);
+    const showCivicAttribution = hasAuthoritativeMunicipalCivicCache(r);
+    const browserSendable = StandaloneAPI.__pure.centralReportIsConfirmed(r);
     d.innerHTML = `
       <div class="card">
         ${photoBlock(r)}
@@ -1163,16 +1198,17 @@ function openDetail(r, list) {
           ${escapeHtml(verdictText)}
         </div>
         ${r.address ? `<div class="meta">&#128205; ${escapeHtml(r.address)}</div>` : ""}
-        ${r.officer_name ? `<div class="meta">&#128231; ${escapeHtml(t("routes_to"))} ${escapeHtml(r.officer_name)}</div>` : ""}
-        ${r.tender_note ? `<div class="meta">&#128209; ${escapeHtml(r.tender_note)}</div>` : ""}
-        ${r.officer_name ? `<div class="meta" style="margin-top:10px">${escapeHtml(t("routes_to"))} ${escapeHtml(r.officer_name)}</div>` : ""}
+        ${showCivicAttribution && r.officer_name ? `<div class="meta">&#128231; ${escapeHtml(t("routes_to"))} ${escapeHtml(r.officer_name)}</div>` : ""}
+        ${showCivicAttribution && r.tender_note ? `<div class="meta">&#128209; ${escapeHtml(r.tender_note)}</div>` : ""}
+        ${showCivicAttribution && r.officer_name ? `<div class="meta" style="margin-top:10px">${escapeHtml(t("routes_to"))} ${escapeHtml(r.officer_name)}</div>` : ""}
+        ${!browserSendable ? `<div class="meta">${escapeHtml(t("email_waiting_dedupe"))}</div>` : ""}
         <div class="btn-row">
           <button class="ghost" id="backBtn">${t("back")}</button>
-          <button class="send" id="sendBtn" data-complaint-action="email">${sendLabel()} &#9993;</button>
+          ${browserSendable ? `<button class="send" id="sendBtn" data-complaint-action="email">${sendLabel()} &#9993;</button>` : ""}
         </div>
         <button class="ghost danger" id="discardBtn" style="width:100%;margin-top:10px">${t("del")}</button>
       </div>`;
-    $("sendBtn").onclick = () => sendReport(r);
+    if (browserSendable) $("sendBtn").onclick = () => sendReport(r);
   }
   wireDetailChrome(r);
   $("backBtn").onclick = () => { show("home"); loadReports(); };
@@ -1198,7 +1234,25 @@ async function sendReport(r) {
   btn.disabled = true; btn.textContent = t("working");
   try {
     if (r._native) {
-      const complaint = await StandaloneAPI.prepareComplaint(r);
+      if (!StandaloneAPI.__pure.centralReportIsConfirmed(r)) {
+        throw new Error(t("email_waiting_dedupe"));
+      }
+      // This is the Room snapshot the user actually opened. The bridge compares it
+      // inside the same transaction as the cache write, so a background ownership or
+      // duplicate update cannot be overwritten by a stale open Detail screen.
+      const expectedRoadOwnership = r.road_ownership || null;
+      const expectedTenderResolutionCheckedAt = Number.isFinite(r.tender_resolution_checked_at)
+        ? r.tender_resolution_checked_at : null;
+      const expectedTenderNumber = r.tender_number || null;
+      const expectedServerPotholeId = Number(r.server_pothole_id) > 0
+        ? Number(r.server_pothole_id) : null;
+      const expectedAddress = r.address || null;
+      const expectedBodyLgd = r.body_lgd || null;
+      const expectedBodyName = r.body_name || null;
+      const expectedEmailTo = r.email_to || null;
+      const expectedOfficerTitle = r.officer_title || null;
+      const expectedContractor = r.contractor || null;
+      const expectedTenderNote = r.tender_note || null;
       const driveMode = Capacitor.Plugins && Capacitor.Plugins.DriveMode;
       const composer = Capacitor.registerPlugin
         ? Capacitor.registerPlugin("EmailComposer")
@@ -1206,6 +1260,96 @@ async function sendReport(r) {
       if (!driveMode || !composer || typeof composer.open !== "function") {
         throw new Error("The email composer is not available on this device.");
       }
+      const authorityCacheIsSafe = hasAuthoritativeMunicipalCivicCache(r);
+      let complaint = authorityCacheIsSafe ? r._preparedComplaint : null;
+      if (!complaint && authorityCacheIsSafe
+          && r.email_to && r.email_subject && r.email_body
+          && r.tender_resolution_checked_at != null) {
+        complaint = { to: r.email_to, officer_name: r.officer_title || null,
+          subject: r.email_subject, body: r.email_body,
+          road_ownership: r.road_ownership,
+          road_ownership_source: r._native ? "central_v1" : r.road_ownership_source,
+          tender: r.tender_number ? {
+            tender_number: r.tender_number, contractor: r.contractor || null,
+            note: r.tender_note || null, title: r.tender_title || null,
+            published: r.tender_published || null,
+          } : null };
+      }
+      if (!complaint) complaint = await StandaloneAPI.prepareComplaint(r);
+      if (!complaint || complaint.road_ownership !== "municipal"
+          || (!r._native && complaint.road_ownership_source !== "central_v1")) {
+        throw new Error("Could not verify that a municipal authority owns this road.");
+      }
+      // Stage the new civic cache without mutating the open Detail object. A bridge
+      // rejection must leave this in-memory row exactly as stale as it was, rather than
+      // falsely marking it municipal and poisoning the next tap.
+      const staged = {
+        email_to: complaint.to,
+        officer_title: complaint.officer_name || r.officer_title || null,
+        email_subject: complaint.subject,
+        email_body: complaint.body,
+        address: complaint.address || r.address || null,
+        body_lgd: complaint.body_lgd || null,
+        body_name: complaint.body_name || null,
+        road_ownership: complaint.road_ownership,
+        road_ownership_source: complaint.road_ownership_source || "central_v1",
+        tender_number: complaint.tender && complaint.tender.tender_number || null,
+        contractor: complaint.tender && complaint.tender.contractor || null,
+        tender_note: complaint.tender && complaint.tender.note || null,
+        tender_title: complaint.tender && complaint.tender.title || null,
+        tender_published: complaint.tender && complaint.tender.published || null,
+      };
+      // Room, not browser IndexedDB, owns native reports. Every tap revalidates the
+      // exact open snapshot transactionally; cached drafts avoid network enrichment,
+      // while still detecting a background ownership/deduplication change.
+      if (typeof driveMode.saveComplaintPreparation !== "function") {
+        throw new Error("The app cannot verify this complaint against its saved report.");
+      }
+      const persisted = await driveMode.saveComplaintPreparation({
+        id: r._nativeId, emailTo: staged.email_to, officerTitle: staged.officer_title,
+        emailSubject: staged.email_subject, emailBody: staged.email_body,
+        address: staged.address, bodyLgd: staged.body_lgd, bodyName: staged.body_name,
+        roadOwnership: staged.road_ownership,
+        roadOwnershipSource: staged.road_ownership_source,
+        tenderNumber: staged.tender_number, contractor: staged.contractor,
+        tenderNote: staged.tender_note,
+        expectedRoadOwnership,
+        expectedTenderResolutionCheckedAt,
+        expectedTenderNumber,
+        expectedServerPotholeId,
+        expectedAddress,
+        expectedBodyLgd,
+        expectedBodyName,
+        expectedEmailTo,
+        expectedOfficerTitle,
+        expectedContractor,
+        expectedTenderNote,
+      });
+      if (!persisted || persisted.road_ownership !== "municipal"
+          || !(Number(persisted.server_pothole_id) > 0) || persisted.server_duplicate) {
+        throw new Error("Could not verify that a municipal authority still owns this road.");
+      }
+      r._preparedComplaint = complaint;
+      r.email_to = persisted.email_to || staged.email_to;
+      r.officer_title = persisted.officer_title || staged.officer_title;
+      r.email_subject = persisted.email_subject || staged.email_subject;
+      r.email_body = persisted.email_body || staged.email_body;
+      r.address = persisted.address || staged.address;
+      r.body_lgd = persisted.body_lgd || staged.body_lgd;
+      r.body_name = persisted.body_name || staged.body_name;
+      r.road_ownership = persisted.road_ownership;
+      r.road_ownership_source = "central_v1";
+      r.tender_resolution_checked_at = persisted.tender_resolution_checked_at;
+      r.tender_number = persisted.tender_number || null;
+      r.contractor = persisted.contractor || null;
+      r.tender_note = persisted.tender_note || null;
+      r.tender_title = staged.tender_title;
+      r.tender_published = staged.tender_published;
+      r.server_pothole_id = persisted.server_pothole_id;
+      r.server_duplicate = !!persisted.server_duplicate;
+      r._nativeStoredStatus = persisted.status;
+      r.status = persisted.status === "queued" || persisted.status === "sent"
+        ? "draft" : persisted.status;
       const evidence = await driveMode.getReportPhoto({ id: r._nativeId, full: true });
       if (!evidence || !evidence.dataUrl) throw new Error("The road photo is unavailable.");
       await composer.open({
@@ -1348,7 +1492,6 @@ async function ensureVisionAvailable() {
   if (status && status.ai_configured) return true;
   const detail = status && status.service_error ? `\n\n${status.service_error}` : "";
   alert(t("shared_unavailable") + detail);
-  openSettings(false);
   return false;
 }
 
@@ -1804,6 +1947,10 @@ document.addEventListener("visibilitychange", () => {
 // Opening the camera is the cue that a call is coming: warm the connection now
 // so the photo does not also pay for a TLS handshake.
 $("captureBtn").onclick = async () => {
+  if (manualAnalysisActive) {
+    alert(t("manual_analysis_active"));
+    return;
+  }
   if (!(await ensureDataConsent())) return;
   if (!(await ensureVisionAvailable())) return;
   await requestNativeCameraPermission();
@@ -2226,9 +2373,11 @@ async function analyseFootage(driveId, driveRec) {
   try {
   if (!(await ensureVisionAvailable())) return;
   let footage;
-  try { footage = await api(`/api/footage/${encodeURIComponent(driveId)}/blobs`); }
+  try { footage = await api(`/api/footage/${encodeURIComponent(driveId)}/manifest`); }
   catch (e) { alert(t("analyse_none")); return; }
-  if (!footage.blobs.length) { alert(t("analyse_none")); return; }
+  if (!Array.isArray(footage.clips) || !footage.clips.length) {
+    alert(t("analyse_none")); return;
+  }
 
   const saveToDisk = keepFrames();
   // Ask for storage once, here, before anything starts. This used to fire from the first
@@ -2252,14 +2401,33 @@ async function analyseFootage(driveId, driveRec) {
   const manifest = [];
   let written = 0, writeFailed = false;
 
-  // Open every clip first, so the total is known before the first frame is checked. The
-  // count used to be discovered as the loop walked the video, so it read "1 of 2" and
-  // then "2 of 3": the denominator grew while the user watched it.
+  // Open every clip first, one Blob at a time, so the total is known before the first
+  // frame is checked. Keeping all recorded Blobs in one array made long drives exhaust
+  // Android WebView memory before the detector got past the first few segments.
   const clips = [];
-  const storedClips = Array.isArray(footage.clips) && footage.clips.length
-    ? footage.clips : footage.blobs.map((blob, seq) => ({ seq, blob }));
+  const storedClips = footage.clips;
   for (const [fallbackSeq, storedClip] of storedClips.entries()) {
-    const clip = storedClip.blob;
+    $("progressText").textContent = t("preparing_video", {
+      i: fallbackSeq + 1, n: storedClips.length,
+    });
+    let stored;
+    try {
+      stored = await api(`/api/footage/${encodeURIComponent(driveId)}/clip/${encodeURIComponent(storedClip.key)}`);
+    } catch (e) {
+      unreadableClips++;
+      failed++;
+      done++;
+      lastErr = t("decoder_failed");
+      continue;
+    }
+    const clip = stored && stored.blob;
+    if (!clip || !clip.size) {
+      unreadableClips++;
+      failed++;
+      done++;
+      lastErr = t("decoder_failed");
+      continue;
+    }
     const clipSeq = Number.isFinite(storedClip.seq) ? storedClip.seq : fallbackSeq;
     const url = URL.createObjectURL(clip);
     vodUrls.add(url);
@@ -2293,7 +2461,8 @@ async function analyseFootage(driveId, driveRec) {
     }
     const times = [];
     for (let at = Math.min(0.2, dur / 2); at < dur; at += VOD_STEP_S) times.push(at);
-    clips.push({ url, dur, times, blob: clip, seq: clipSeq,
+    revokeVodUrl(url);
+    clips.push({ key: storedClip.key, dur, times, seq: clipSeq,
       sourceOffsetS: Number.isFinite(storedClip.source_offset_s) ? storedClip.source_offset_s : null,
       recordingStartedAtMs: Number.isFinite(storedClip.recording_started_at_ms)
         ? storedClip.recording_started_at_ms : null });
@@ -2357,12 +2526,36 @@ async function analyseFootage(driveId, driveRec) {
 
   let frameNo = -1;
   for (const clip of clips) {
+    let stored;
+    try {
+      stored = await api(`/api/footage/${encodeURIComponent(driveId)}/clip/${encodeURIComponent(clip.key)}`);
+    } catch (e) {
+      failed += clip.times.length;
+      done += clip.times.length;
+      lastErr = t("decoder_failed");
+      frameNo += clip.times.length;
+      elapsed += clip.dur;
+      paint();
+      continue;
+    }
+    const sourceBlob = stored && stored.blob;
+    if (!sourceBlob || !sourceBlob.size) {
+      failed += clip.times.length;
+      done += clip.times.length;
+      lastErr = t("decoder_failed");
+      frameNo += clip.times.length;
+      elapsed += clip.dur;
+      paint();
+      continue;
+    }
+    const url = URL.createObjectURL(sourceBlob);
+    vodUrls.add(url);
     // One element per seeker, all on the same clip, each taking every SEEKERS-th frame.
     const pool = [];
     for (let k = 0; k < SEEKERS; k++) {
       const v = document.createElement("video");
       vodVideos.add(v);
-      v.muted = true; v.preload = "auto"; v.src = clip.url;
+      v.muted = true; v.preload = "auto"; v.src = url;
       const meta = await waitForVideoMetadata(v, k === 0 ? 10000 : 4000);
       if (meta.error) releaseVodVideo(v);
       else pool.push({ v, canvas: canvasFor() });
@@ -2374,6 +2567,7 @@ async function analyseFootage(driveId, driveRec) {
       frameNo += clip.times.length;
       elapsed += clip.dur;
       paint();
+      revokeVodUrl(url);
       continue;
     }
 
@@ -2467,11 +2661,11 @@ async function analyseFootage(driveId, driveRec) {
     }));
 
     for (const slot of pool) releaseVodVideo(slot.v);
+    revokeVodUrl(url);
     frameNo = base + clip.times.length - 1;
     elapsed += clip.dur;
   }
 
-  for (const c of clips) revokeVodUrl(c.url);
   if (saveToDisk && written) {
     try { await writeManifest(driveId, manifest); } catch (e) { writeFailed = true; }
   }
@@ -2721,7 +2915,6 @@ window.handleAppBack = () => {
   if (!$("viewer").classList.contains("hidden")) { closeViewer(); return true; }
   if (manualAnalysisActive && !$("progress").classList.contains("hidden")) {
     manualAnalysisSequence++; // the in-flight request may save, but cannot retake the UI
-    manualAnalysisActive = 0;
     clearManualPreview();
     show("home");
     void loadReports().catch(() => {});
@@ -2733,8 +2926,7 @@ window.handleAppBack = () => {
   return false;
 };
 
-// Personal vision is the standalone default. Shared vision remains an explicit option
-// for deployments with a live project server.
+// Shared vision is the no-key default; Personal is an explicit bring-your-own-key path.
 function updateProviderSettings() {
   const personal = $("setProvider").value === "personal";
   $("setKey").disabled = !personal;

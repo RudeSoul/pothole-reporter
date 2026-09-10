@@ -80,6 +80,10 @@ data class ReportEntity(
     val officer_title: String? = null,
     val body_lgd: String? = null,
     val body_name: String? = null,
+    // Persisted only after CentralServiceClient validates an authoritative server result.
+    // Null is deliberately not equivalent to municipal: legacy/null rows must revalidate.
+    val road_ownership: String? = null,
+    val road_ownership_detail: String? = null,
     val tender_number: String? = null,
     val contractor: String? = null,
     val tender_note: String? = null,

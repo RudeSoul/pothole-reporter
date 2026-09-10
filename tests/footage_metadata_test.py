@@ -8,12 +8,13 @@ replaced at the page API boundary so the test can inspect the exact FormData pro
 """
 import pathlib
 import json
+import os
 import sys
 
 from playwright.sync_api import sync_playwright
 
 
-APP = "http://localhost:8765/"
+APP = os.environ.get("POTHOLE_TEST_APP", "http://localhost:8765/")
 fails = []
 remote_leaks = []
 
@@ -86,6 +87,9 @@ with sync_playwright() as p:
       await storeClip(0, base + 2000, 2000);
       await storeClip(2, base + 32000, 32000);
       const stored = await StandaloneAPI.handle(`/api/footage/${driveId}/blobs`);
+      const storedManifest = await StandaloneAPI.handle(`/api/footage/${driveId}/manifest`);
+      const firstClip = await StandaloneAPI.handle(
+        `/api/footage/${driveId}/clip/${encodeURIComponent(storedManifest.clips[0].key)}`);
       const metadata = (stored.clips || []).map((clip) => ({
         seq: clip.seq,
         recording_started_at_ms: clip.recording_started_at_ms,
@@ -95,7 +99,9 @@ with sync_playwright() as p:
 
       const originalApi = window.api;
       const frames = [];
+      const footagePaths = [];
       window.api = async (path, opts) => {
+        if (path.startsWith(`/api/footage/${driveId}/`)) footagePaths.push(path);
         if (path === "/api/frame") {
           const fd = opts.body;
           const row = {};
@@ -141,8 +147,12 @@ with sync_playwright() as p:
         .find((drive) => drive.id === "known-union");
       return {
         blob_count: stored.blobs.length,
+        manifest_count: storedManifest.clips.length,
+        manifest_has_blob: storedManifest.clips.some((clip) => "blob" in clip),
+        single_clip_bytes: firstClip.blob && firstClip.blob.size,
         metadata,
         frames,
+        footage_paths: footagePaths,
         union_ids: unionDrive && unionDrive.already_ids,
         union_count: unionDrive && unionDrive.already,
         message: window.__metadataAlert || "",
@@ -153,6 +163,16 @@ with sync_playwright() as p:
 
 if result["blob_count"] != 2:
     fails.append(f"legacy blobs compatibility returned {result['blob_count']} clips, expected 2")
+if result["manifest_count"] != 2 or result["manifest_has_blob"]:
+    fails.append("the footage manifest did not remain metadata-only: "
+                 f"count={result['manifest_count']}, has_blob={result['manifest_has_blob']}")
+if not result["single_clip_bytes"]:
+    fails.append("the one-clip endpoint did not return its requested Blob")
+if any(path.endswith("/blobs") for path in result["footage_paths"]):
+    fails.append(f"VOD analysis used the bulk Blob endpoint: {result['footage_paths']}")
+clip_reads = [path for path in result["footage_paths"] if "/clip/" in path]
+if len(clip_reads) != 4:
+    fails.append(f"VOD analysis did not stream two clips through bounded reads: {clip_reads}")
 
 metadata = result["metadata"]
 if [item.get("seq") for item in metadata] != [0, 2]:

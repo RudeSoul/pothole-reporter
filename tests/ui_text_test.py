@@ -71,7 +71,9 @@ for name in ("static/index.html", "android-app/www/index.html"):
     for r in reasons:
         key = {"outside_area": "outside_coverage", "rural_road": "rural_road",
                "no_location": "no_location", "no_address_for_body": "no_address",
-               "national_highway": "nat_highway", "road_class_unknown": "road_unknown"}.get(r)
+               "national_highway": "nat_highway", "state_highway": "state_highway",
+               "district_highway": "district_highway",
+               "road_class_unknown": "road_unknown"}.get(r)
         if key and f"{key}:" not in s:
             fails.append(f"{name}: refusal reason '{r}' has no UI string ({key})")
 

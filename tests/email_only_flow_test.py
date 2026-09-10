@@ -7,14 +7,16 @@ The mail app still owns the final Send tap; "one click" here means no second in-
 confirmation or choice of complaint channel.
 """
 
+import hashlib
 import json
+import os
 import sys
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
 
-APP = "http://localhost:8765/"
+APP = os.environ.get("POTHOLE_TEST_APP", "http://localhost:8765/")
 SERVICE = "https://email-flow.test"
 RECIPIENT = "commissioner@example.gov.in"
 TENDER_NUMBER = "TEST-TENDER-42"
@@ -47,6 +49,9 @@ def central_service(route, request):
     elif path == "/v1/vision/detect":
         envelope(route, {
             **ACCEPTED,
+            "detection_receipt": hashlib.sha256(
+                f"receipt:{body.get('client_observation_id')}".encode("utf-8")
+            ).hexdigest(),
             "detector": {
                 "provider": "shared_server",
                 "model": body.get("model", "gpt-5-mini"),
@@ -62,6 +67,7 @@ def central_service(route, request):
                 "address": "Test Road, Central Ward, Test City, 560001",
                 "lgd": "999001", "town": "Test City Corporation",
                 "source": "kgis", "address_source": "nominatim",
+                "road_ownership": "municipal",
             },
             "tender": {
                 "tender_number": TENDER_NUMBER,
@@ -137,6 +143,7 @@ async () => {
   window.__emailFlowReport = report;
   openDetail(report, [report]);
   return {
+    id: report.id,
     status: report.status,
     officer_name: report.officer_name,
     officer_email: report.officer_email,
@@ -199,6 +206,49 @@ with sync_playwright() as p:
         if confusing_channel.lower() in report["detail_text"].lower():
             fails.append(f"detail offers another complaint channel: {confusing_channel}")
 
+    pending_guard = page.evaluate(r"""async (originalId) => {
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open("potholes");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const pendingId = await new Promise((resolve, reject) => {
+        const tx = db.transaction("reports", "readwrite");
+        const store = tx.objectStore("reports");
+        const get = store.get(Number(originalId));
+        let added;
+        get.onsuccess = () => {
+          const pending = { ...get.result };
+          delete pending.id;
+          pending.server_pothole_id = null;
+          pending.server_duplicate = false;
+          pending.central_sync_pending = true;
+          added = store.add(pending);
+        };
+        tx.oncomplete = () => resolve(added.result);
+        tx.onerror = tx.onabort = () => reject(tx.error);
+      });
+      db.close();
+      const rows = await StandaloneAPI.handle("/api/reports", { method: "GET" });
+      const pending = rows.find((item) => item.id === pendingId);
+      openDetail(pending, rows);
+      const buttons = document.querySelectorAll("#detail #sendBtn").length;
+      let error = null;
+      try {
+        await StandaloneAPI.handle(`/api/reports/${pendingId}/send`, { method: "POST" });
+      } catch (failure) {
+        error = String(failure && failure.message || failure);
+      }
+      await StandaloneAPI.handle(`/api/reports/${pendingId}`, { method: "DELETE" });
+      const original = rows.find((item) => item.id === originalId);
+      openDetail(original, rows);
+      return { buttons, error };
+    }""", report["id"])
+    if pending_guard["buttons"] != 0:
+        fails.append("pending browser report exposed Email before central deduplication")
+    if "duplicate check" not in (pending_guard["error"] or ""):
+        fails.append(f"pending browser send did not fail closed: {pending_guard}")
+
     page.locator("#sendBtn").click()
     page.wait_for_function("() => window.__emailComposerCalls.length === 1")
     outcome = page.evaluate("""() => ({
@@ -221,12 +271,25 @@ with sync_playwright() as p:
           decision: "accept", lat: 12.9716, lng: 77.5946, gps_accuracy: 4,
           address: "Native Test Road, Central Ward, Test City, 560001",
           body_lgd: "999001", body_name: "Test City Corporation",
+          road_ownership: "municipal",
           tender_number: tenderNumber, contractor: "Native Roads Example Ltd",
           tender_resolution_checked_at: 1788500000, has_photo: true,
           server_pothole_id: 7077, server_duplicate: false,
           created_at: 1788500000, seen_count: 1
         }] }),
         listDriveSessions: async () => ({ sessions: [] }),
+        saveComplaintPreparation: async (options) => ({
+          id: options.id, decision: "accept", status: "queued",
+          server_pothole_id: 7077, server_duplicate: false,
+          road_ownership: "municipal",
+          tender_resolution_checked_at: 1788500000,
+          tender_number: options.tenderNumber,
+          contractor: options.contractor, tender_note: options.tenderNote,
+          address: options.address, body_lgd: options.bodyLgd,
+          body_name: options.bodyName, email_to: options.emailTo,
+          officer_title: options.officerTitle,
+          email_subject: options.emailSubject, email_body: options.emailBody,
+        }),
         getReportPhoto: async (options) => {
           window.__nativePhotoRequests.push(JSON.parse(JSON.stringify(options)));
           return { dataUrl: "data:image/jpeg;base64," + jpeg };

@@ -155,7 +155,7 @@ class DriveModeService : LifecycleService() {
         }
 
         apiKey = intent.getStringExtra(EXTRA_API_KEY) ?: ""
-        visionProvider = intent.getStringExtra(EXTRA_PROVIDER) ?: if (apiKey.isBlank()) "shared_server" else "personal"
+        visionProvider = effectiveVisionProvider(intent.getStringExtra(EXTRA_PROVIDER), apiKey)
         serviceUrl = intent.getStringExtra(EXTRA_SERVICE_URL) ?: ""
         model = normalizeVisionModel(intent.getStringExtra(EXTRA_MODEL))
         detail = normalizeVisionDetail(intent.getStringExtra(EXTRA_DETAIL), model)
@@ -710,6 +710,7 @@ class DriveModeService : LifecycleService() {
 
         try {
             val observedAtMs = frame.capturedAtMs
+            val clientObservationId = "drive:$driveId:$seq"
 
             // 2. Detect through the selected personal/shared provider.
             if (visionProvider == "personal" && serviceUrl.isNotBlank()) {
@@ -719,12 +720,17 @@ class DriveModeService : LifecycleService() {
                     runCatching {
                         centralClient?.recordVisionActivity(
                             captureMode = "drive",
-                            clientEventId = "drive:$driveId:$seq",
+                            clientEventId = clientObservationId,
                         )
                     }.onFailure { Log.w(TAG, "Could not record personal vision activity", it) }
                 }
             }
-            val result = dispatcher.detect(prepared.analysisBase64)
+            val result = dispatcher.detect(
+                prepared.analysisBase64,
+                clientObservationId,
+                capturePos.latitude,
+                capturePos.longitude,
+            )
             session.recordChecked()
 
             // 3. Evaluate decision
@@ -763,7 +769,7 @@ class DriveModeService : LifecycleService() {
                 photo_full = prepared.evidenceJpeg,
                 drive_id = driveId,
                 capture_source = "drive_live",
-                source_event_key = "drive:$driveId:$seq",
+                source_event_key = clientObservationId,
                 captured_at = observedAtMs / 1000.0,
                 dedupe_eligible = true,
                 detection_provider = if (visionProvider == "shared_server") {
@@ -792,7 +798,10 @@ class DriveModeService : LifecycleService() {
                     speed_mps = speed,
                     damage_type = damageType,
                     size = result.size,
-                    image_hash = CentralServiceIdentity.sha256Hex(prepared.thumbnailJpeg),
+                    // This must match the decoded data URL sent to shared detection.
+                    // The thumbnail is a different JPEG and cannot verify its receipt.
+                    image_hash = CentralServiceIdentity.sha256Hex(prepared.analysisJpeg),
+                    detection_receipt = result.detectionReceipt,
                     detector_provider = report.detection_provider ?: "unknown",
                     detector_model = model,
                     image_detail = detail,

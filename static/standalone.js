@@ -24,18 +24,22 @@
     }
   }
 
-  // v1.13.0 advertised an undeployed shared endpoint as the default. App data survives
-  // an APK upgrade, so changing the fallback alone would strand existing installations
-  // on that dead value. Migrate it once; a later explicit Shared choice is preserved.
-  const PROVIDER_DEFAULT_MIGRATION = "standalone-personal-v1";
-  if (NATIVE && localStorage.getItem("provider_default_migration") !== PROVIDER_DEFAULT_MIGRATION) {
-    localStorage.setItem("vision_provider", "personal");
-    localStorage.setItem("provider_default_migration", PROVIDER_DEFAULT_MIGRATION);
+  // Shared detection is the zero-setup path. A saved Personal choice is effective only
+  // while it has a key; this also repairs upgraded installations whose old migration
+  // selected Personal even though no key was ever supplied. An explicit Shared choice
+  // remains Shared even when a key is stored.
+  function effectiveVisionProvider(selected, key) {
+    const normalized = selected === "shared_server" ? "shared"
+      : ["personal_openai", "own_key"].includes(selected) ? "personal" : selected;
+    const hasKey = Boolean(String(key || "").trim());
+    if (normalized === "shared") return "shared";
+    if (normalized === "personal") return hasKey ? "personal" : "shared";
+    return hasKey ? "personal" : "shared";
   }
 
   const S = {
     get key() { return (localStorage.getItem("openai_key") || "").trim(); },
-    get provider() { return localStorage.getItem("vision_provider") === "shared" ? "shared" : "personal"; },
+    get provider() { return effectiveVisionProvider(localStorage.getItem("vision_provider"), this.key); },
     get name() { return (localStorage.getItem("sender_name") || "").trim() || "A concerned citizen"; },
     get debug() { return localStorage.getItem("debug_mode") === "1"; },
     get model() { return normaliseModel(localStorage.getItem("detection_model")); },
@@ -106,9 +110,11 @@
   // The rule that has not changed: a body we hold no verified address for is not routed.
   // Refusing is correct; addressing a citizen's complaint to a guess is not.
   const KGIS_TOWN_URL = "https://kgis.ksrsac.in/kgismaps/rest/services/Boundaries/Admin_Dynamic_New/MapServer/1/query";
-  // State basemap layer 289, the national highway network, from the same KSRSAC service
-  // the boundaries come from.
+  // State basemap road-ownership layers from the same KSRSAC service the boundaries
+  // come from.  All three must answer before a municipal officer can be named.
   const KGIS_NH_URL = "https://kgis.ksrsac.in/kgismaps/rest/services/State_Basemap/State_Basemap_Dynamic/MapServer/289/query";
+  const KGIS_SH_URL = "https://kgis.ksrsac.in/kgismaps/rest/services/State_Basemap/State_Basemap_Dynamic/MapServer/290/query";
+  const KGIS_DH_URL = "https://kgis.ksrsac.in/kgismaps/rest/services/State_Basemap/State_Basemap_Dynamic/MapServer/291/query";
   const KGIS_GP_URL = "https://kgis.ksrsac.in/kgismaps/rest/services/Boundaries/GP_Boundary/MapServer/0/query";
   const OFFICER_TITLES = { CC: "Commissioner", CMC: "Chief Officer", TMC: "Chief Officer",
                            TP: "Chief Officer", NAC: "Chief Officer" };
@@ -384,8 +390,8 @@
   }
 
   // Personal mode can use the project service when it exists, but may never require it
-  // to show a detector result. Probe once in the background at startup; captures read
-  // this completed circuit state and skip central critical-path calls when it is offline.
+  // to show a detector result. Shared mode uses the same bounded probe as its preflight,
+  // so an outage becomes a clear error instead of an unbounded camera/analysis spinner.
   let projectServiceState = "unknown", projectServiceProbe = null, projectServiceCheckedAt = 0;
   const PROJECT_SERVICE_POSITIVE_TTL_MS = 30000;
   const projectServiceAvailable = () => projectServiceState === "available";
@@ -611,7 +617,8 @@
     };
   }
 
-  async function analyzeViaService(imageInputs, model, detail, captureMode, idempotencyKey) {
+  async function analyzeViaService(imageInputs, model, detail, captureMode, idempotencyKey,
+                                   observation) {
     const selectedModel = normaliseModel(model);
     const selectedDetail = normaliseDetail(detail, selectedModel);
     const supplied = (Array.isArray(imageInputs) ? imageInputs : [imageInputs])
@@ -620,14 +627,25 @@
     const images = [{
       data_url: typeof supplied === "string" ? supplied : supplied.url,
     }];
-    const payload = await signedServicePost("/v1/vision/detect", {
+    const body = {
       images,
       capture_mode: captureMode === "drive" ? "drive" : "manual",
       language: LANG(),
       model: selectedModel,
       image_detail: selectedDetail,
       prompt_version: PROMPT_VERSION,
-    }, {
+    };
+    // The server-issued receipt binds an accepted result to this stable observation and
+    // location. The later map write repeats the same values, preventing a caller from
+    // turning one paid detection into arbitrary impact-map points.
+    if (observation && observation.client_observation_id) {
+      body.client_observation_id = String(observation.client_observation_id);
+    }
+    if (observation && finiteCoord(observation.lat) && finiteCoord(observation.lng)) {
+      body.lat = observation.lat;
+      body.lng = observation.lng;
+    }
+    const payload = await signedServicePost("/v1/vision/detect", body, {
       idempotencyKey: idempotencyKey || randomId(),
       fallback: "The shared vision service could not check that image.",
       timeout: SHARED_VISION_TIMEOUT_MS,
@@ -646,10 +664,12 @@
 
   let streamBroken = false;
   async function analyzeImage(imageInputs, prompt, name, schema, model, onEarly, stopWhenRejected, detail,
-                              captureMode = "manual", idempotencyKey = null) {
+                              captureMode = "manual", idempotencyKey = null,
+                              observation = null) {
     if (schema === ASSESS_SCHEMA) {
       if (usingSharedVision()) {
-        return analyzeViaService(imageInputs, model, detail, captureMode, idempotencyKey);
+        return analyzeViaService(
+          imageInputs, model, detail, captureMode, idempotencyKey, observation);
       }
       // Personal-key images and verdicts stay between this device and OpenAI. This small,
       // signed counter lets the project measure usage even when no pothole is accepted.
@@ -777,7 +797,7 @@
     // NH points in Karnataka routed to a municipal officer. The state's own basemap has
     // the highway network, on the host this already calls, so the two questions are asked
     // together and the answer costs no extra wait.
-    const [town, nh] = await Promise.all([
+    const [town, nh, sh, dh] = await Promise.all([
       retryQuery(KGIS_TOWN_URL, lat, lng, "KGISTownName,Town_Type,KGISTownCode,LGD_TownCode"),
       // Exact containment only. A buffer picks up OBJECTID 3059, Bengaluru's MG Road,
       // which this land-cover layer misclassifies as National Highway, and that would
@@ -787,19 +807,31 @@
       // server refuses a report the app could have routed, and there are now two calls
       // per report where there used to be one.
       retryQuery(KGIS_NH_URL, lat, lng, "Name"),
+      retryQuery(KGIS_SH_URL, lat, lng, "Name"),
+      retryQuery(KGIS_DH_URL, lat, lng, "Name"),
     ]);
     if (!town) return { kind: "road_class_unknown" };
     // Fail closed, but not into offline(): that fallback only knows Bengaluru, so a
     // failed highway check there refused every report in the rest of the state and
     // called it "outside Karnataka". An unanswered road-class check is its own outcome.
-    if (!nh || !nh.ok) return { kind: "road_class_unknown" };
-    const h = featuresOf(await readJson(nh));
+    if ([nh, sh, dh].some((response) => !response || !response.ok)) {
+      return { kind: "road_class_unknown" };
+    }
+    const highwayLayers = await Promise.all([
+      readJson(nh).then(featuresOf),
+      readJson(sh).then(featuresOf),
+      readJson(dh).then(featuresOf),
+    ]);
     // A missing features array means the service did not answer the question. Reading it
     // as "no highway here" is the same failure as not asking at all.
-    if (h === null) return { kind: "road_class_unknown" };
-    if (h.length) {
-      const road = ((h[0].attributes || {}).Name || "").trim();
-      return { kind: "national_highway", name: road || null };
+    if (highwayLayers.some((features) => features === null)) {
+      return { kind: "road_class_unknown" };
+    }
+    const ownershipKinds = ["national_highway", "state_highway", "district_highway"];
+    for (let index = 0; index < highwayLayers.length; index++) {
+      if (!highwayLayers[index].length) continue;
+      const road = ((highwayLayers[index][0].attributes || {}).Name || "").trim();
+      return { kind: ownershipKinds[index], name: road || null };
     }
     const t = featuresOf(await readJson(town));
     if (t === null) return { kind: "road_class_unknown" };
@@ -836,10 +868,24 @@
     return _jurP;
   }
 
-  async function routeOfficer(address, lat, lng) {
-    const registry = await bodies();
+  function routeWhereFromCentral(jurisdiction) {
+    if (!jurisdiction || typeof jurisdiction !== "object") return null;
+    const ownership = String(jurisdiction.road_ownership || "");
+    if (ownership === "municipal") {
+      return { kind: "town", name: jurisdiction.town || null,
+               type: jurisdiction.town_type || "", lgd: jurisdiction.lgd || "" };
+    }
+    if (["national_highway", "state_highway", "district_highway"].includes(ownership)) {
+      return { kind: ownership, name: jurisdiction.highway_name || null };
+    }
+    if (ownership === "rural") {
+      return { kind: "rural", name: jurisdiction.rural_body || null };
+    }
+    if (ownership === "outside_state") return { kind: "outside_state" };
+    return { kind: "road_class_unknown" };
+  }
 
-
+  async function routeOfficer(address, lat, lng, authoritativeJurisdiction = null) {
     if (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)) {
       return [null, null, "no_location"];
     }
@@ -854,14 +900,21 @@
     // offline report to route; this path only fires when OpenAI is reachable and the
     // state GIS is not, and in that case the road's owner is genuinely unknown.
     let where;
-    try { where = await jurisdictionOf(lat, lng); }
+    try {
+      where = authoritativeJurisdiction
+        ? routeWhereFromCentral(authoritativeJurisdiction)
+        : await jurisdictionOf(lat, lng);
+    }
     catch (e) { return [null, null, "road_class_unknown"]; }
 
     if (where.kind === "outside_state") return [null, null, "outside_area"];
     if (where.kind === "national_highway") return [null, null, "national_highway", where.name];
+    if (where.kind === "state_highway") return [null, null, "state_highway", where.name];
+    if (where.kind === "district_highway") return [null, null, "district_highway", where.name];
     if (where.kind === "road_class_unknown") return [null, null, "road_class_unknown"];
     if (where.kind === "rural") return [null, null, "rural_road", where.name];
 
+    const registry = await bodies();
     const entry = where.lgd && registry[where.lgd];
     if (!entry || !entry.email) return [null, null, "no_address_for_body", where.name];
     const title = entry.officer || OFFICER_TITLES[entry.type || where.type] || "Chief Officer";
@@ -871,8 +924,10 @@
   function unroutedComplaintMessage(reason) {
     return {
       no_location: "This report has no location, so there is no way to tell which office is responsible. Retake it with location switched on.",
-      road_class_unknown: "The app could not check whether this road is a national highway, and it will not name a city officer for a road that may not be theirs. Try again when you have a signal.",
+      road_class_unknown: "The app could not check whether this road is a national, state, or district highway, and it will not name a city officer for a road that may not be theirs. Try again when you have a signal.",
       national_highway: "This stretch is a national highway. It is maintained by NHAI or the state PWD National Highways division, not by the city or town body, so there is no municipal officer to address.",
+      state_highway: "This stretch is a state highway. It is maintained by the state PWD, not by the city or town body, so there is no municipal officer to address.",
+      district_highway: "This stretch is a district highway. It is maintained by the district or state road authority, not by the city or town body, so there is no municipal officer to address.",
       rural_road: "This road is outside every town boundary, so it belongs to the state PWD or a panchayat rather than a city body. The app will not guess an office.",
       no_address_for_body: "This town's body is known, but no official email address for it has been published, so there is no verified recipient to address.",
       outside_area: "This road damage is outside Karnataka, which is the area this app covers, so there is no authority to address.",
@@ -1062,21 +1117,15 @@
     "karnataka", "india", "ward", "city", "corporation", "south", "north", "east",
     "west", "central", "urban", "sector", "stage", "block", "phase"]);
 
-  // Award records carry no defect liability period, so it is inferred from how recent the
-  // tender is and must stay worded as a possibility. Pulled out of matchTender so it can be
-  // tested directly: it decides a sentence in a letter naming a private company.
-  function warrantyFor(published, now) {
-    const dm = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(published || "").trim());
-    if (!dm) return { warranty: "recorded for this stretch", warranty_code: "record" };
-    const when = Date.UTC(+dm[3], +dm[2] - 1, +dm[1]);
-    if (!isFinite(when) || +dm[2] < 1 || +dm[2] > 12 || +dm[1] < 1 || +dm[1] > 31) {
-      return { warranty: "recorded for this stretch", warranty_code: "record" };
-    }
-    const ageYears = ((now === undefined ? Date.now() : now) - when) / (365.25 * 24 * 3600 * 1000);
-    if (ageYears < 0) return { warranty: "recorded for this stretch", warranty_code: "record" };
-    if (ageYears <= 1) return { warranty: "within the defect liability period", warranty_code: "dlp" };
-    if (ageYears <= 3) return { warranty: "within the maintenance period", warranty_code: "maint" };
-    return { warranty: "recorded for this stretch", warranty_code: "record" };
+  // A publication date says when a notice was published. It does not reveal the award,
+  // completion, defect-liability or maintenance dates, so it must never be converted into
+  // a current-liability claim about a contractor. Keep this helper for one canonical value
+  // across central, local and previously stored tender records.
+  function warrantyFor(_published, _now) {
+    return {
+      warranty: "current liability not established by the publication record",
+      warranty_code: "unverified",
+    };
   }
 
   // The ranked candidate list, split out from matchTender so it can be tested on its own.
@@ -1148,11 +1197,6 @@
       .map((x) => ({ score: x.score, tn: x.t.tn, t: x.t }));
   }
 
-  const centralResolutionCache = new Map();
-  const centralResolutionKey = (lat, lng) => `${Number(lat).toFixed(6)},${Number(lng).toFixed(6)}`;
-  const centralResolutionAt = (lat, lng) => finiteCoord(lat) && finiteCoord(lng)
-    ? centralResolutionCache.get(centralResolutionKey(lat, lng)) || null : null;
-
   async function tenderFromService(lat, lng, address, lgd, clientObservationId) {
     if (!finiteCoord(lat) || !finiteCoord(lng)) return { reached: false, tender: null };
     try {
@@ -1167,18 +1211,21 @@
       const result = await signedServicePost("/v1/tenders/resolve", request,
         { idempotencyKey: tenderIdempotencyKey,
           fallback: "The central tender service is unavailable." });
-      centralResolutionCache.set(centralResolutionKey(lat, lng), {
+      const resolution = {
+        reached: true,
         jurisdiction: result.jurisdiction || null,
         request_id: result.request_id || null,
         reason: result.reason || null,
-      });
-      if (!result.tender) return { reached: true, tender: null, reason: result.reason || null,
-                                   jurisdiction: result.jurisdiction || null };
+      };
+      if (!result.jurisdiction
+          || result.jurisdiction.road_ownership !== "municipal") {
+        return { ...resolution, tender: null };
+      }
+      if (!result.tender) return { ...resolution, tender: null };
       const t = result.tender;
       const inferredWarranty = warrantyFor(t.published);
       return {
-        reached: true,
-        jurisdiction: result.jurisdiction || null,
+        ...resolution,
         tender: {
           tender_number: t.tender_number,
           contractor: t.contractor || null,
@@ -1331,20 +1378,17 @@
 
     const tenderNumber = String(tender && tender.tender_number || "").trim();
     if (tenderNumber) {
-      const warrantyKn = ({ dlp: "ದೋಷ ಹೊಣೆಗಾರಿಕೆ ಅವಧಿಯಲ್ಲಿ ಇನ್ನೂ ಇರುವ ಸಾಧ್ಯತೆ ಇದೆ",
-                            maint: "ನಿರ್ವಹಣಾ ಅವಧಿಯಲ್ಲಿ ಇನ್ನೂ ಇರುವ ಸಾಧ್ಯತೆ ಇದೆ",
-                            record: "ಈ ಭಾಗದ ದಾಖಲೆಯಲ್ಲಿದೆ" })[tender.warranty_code || "record"];
       const title = String(tender.title || "").slice(0, 140).trim();
       const published = String(tender.published || "").trim();
       // Two paragraphs, not one: the first states what the records say, the second makes
       // the request. Published, never "awarded": the bundled field is the publication
       // date, and this letter names a real company to a government officer.
       if (kn) {
-        paras.push(`ಸಾರ್ವಜನಿಕ ಖರೀದಿ ದಾಖಲೆಗಳ ಪ್ರಕಾರ ಈ ರಸ್ತೆ ಭಾಗ ಟೆಂಡರ್ ${tenderNumber}${title ? ` ("${title}")` : ""} ಅಡಿಯಲ್ಲಿ ಬರುವ ಸಾಧ್ಯತೆ ಇದೆ.${published ? ` ಇದು ${published} ರಂದು ಪ್ರಕಟವಾಗಿದೆ` : ""}${tender.contractor ? `${published ? "," : ""} ಗೆದ್ದ ಬಿಡ್‌ದಾರರಾಗಿ ${tender.contractor} ಎಂದು ದಾಖಲಾಗಿದೆ` : ""}, ಮತ್ತು ${warrantyKn}.`);
-        paras.push("ದೋಷ ಹೊಣೆಗಾರಿಕೆ ಅಥವಾ ನಿರ್ವಹಣಾ ಅವಧಿ ಜಾರಿಯಲ್ಲಿದ್ದರೆ, ಸಂಸ್ಥೆಗೆ ಹೆಚ್ಚುವರಿ ವೆಚ್ಚವಿಲ್ಲದೆ ಗುತ್ತಿಗೆದಾರರಿಂದಲೇ ದುರಸ್ತಿ ಮಾಡಿಸಬೇಕೆಂದು ವಿನಂತಿಸುತ್ತೇನೆ. ಇದು ಸಂಭಾವ್ಯ ದಾಖಲೆ ಹೊಂದಾಣಿಕೆ; ದಯವಿಟ್ಟು ಟೆಂಡರ್ ದಾಖಲೆಗಳೊಂದಿಗೆ ಪರಿಶೀಲಿಸಿ.");
+        paras.push(`ಸಾರ್ವಜನಿಕ ಖರೀದಿ ದಾಖಲೆಗಳ ಪ್ರಕಾರ ಈ ರಸ್ತೆ ಭಾಗ ಟೆಂಡರ್ ${tenderNumber}${title ? ` ("${title}")` : ""} ಅಡಿಯಲ್ಲಿ ಬರುವ ಸಾಧ್ಯತೆ ಇದೆ.${published ? ` ಇದು ${published} ರಂದು ಪ್ರಕಟವಾಗಿದೆ` : ""}${tender.contractor ? `${published ? "," : ""} ಗೆದ್ದ ಬಿಡ್‌ದಾರರಾಗಿ ${tender.contractor} ಎಂದು ದಾಖಲಾಗಿದೆ` : ""}.`);
+        paras.push("ಇದು ಸಂಭಾವ್ಯ ದಾಖಲೆ ಹೊಂದಾಣಿಕೆ ಮಾತ್ರ. ಪ್ರಕಟಣೆ ದಿನಾಂಕವು ಈ ಗುತ್ತಿಗೆದಾರರಿಗೆ ಪ್ರಸ್ತುತ ದೋಷ ಹೊಣೆಗಾರಿಕೆ ಅಥವಾ ನಿರ್ವಹಣಾ ಬಾಧ್ಯತೆ ಇದೆ ಎಂದು ಸ್ಥಾಪಿಸುವುದಿಲ್ಲ. ದಯವಿಟ್ಟು ಟೆಂಡರ್, ಗುತ್ತಿಗೆ ಮಂಜೂರಾತಿ, ಕಾರ್ಯಾದೇಶ ಮತ್ತು ಅನ್ವಯಿಸುವ ಹೊಣೆಗಾರಿಕೆ ಅಥವಾ ನಿರ್ವಹಣಾ ಷರತ್ತುಗಳನ್ನು ಪರಿಶೀಲಿಸಿ, ಹೊಣೆಗಾರ ಪಕ್ಷದ ಮೂಲಕ ದುರಸ್ತಿ ಮಾಡಿಸಲು ವಿನಂತಿಸುತ್ತೇನೆ.");
       } else {
-        paras.push(`Public procurement records indicate this road stretch probably falls under tender ${tenderNumber}${title ? ` ("${title}")` : ""}${published ? `, published on ${published}` : ""}${tender.contractor ? `, with ${tender.contractor} recorded as the winning bidder` : ""}, and it may still be ${tender.warranty || "recorded for this stretch"}.`);
-        paras.push("If the defect liability or maintenance period is in force, I request that the repair be carried out by the contractor at no additional cost to the corporation. This is a probable record match; kindly verify against the tender documents.");
+        paras.push(`Public procurement records indicate this road stretch probably falls under tender ${tenderNumber}${title ? ` ("${title}")` : ""}${published ? `, published on ${published}` : ""}${tender.contractor ? `, with ${tender.contractor} recorded as the winning bidder` : ""}.`);
+        paras.push("This is only a probable record match. The publication date does not establish that this contractor has any current defect-liability or maintenance obligation. Kindly verify the tender, award, work order and applicable liability or maintenance terms, and arrange repair through the responsible party.");
       }
     }
 
@@ -1358,8 +1402,8 @@
   function idb() {
     return new Promise((resolve, reject) => {
       if (_db) return resolve(_db);
-      const req = indexedDB.open("potholes", 7);
-      req.onupgradeneeded = () => {
+      const req = indexedDB.open("potholes", 8);
+      req.onupgradeneeded = (event) => {
         const d = req.result;
         const reports = d.objectStoreNames.contains("reports")
           ? req.transaction.objectStore("reports")
@@ -1396,6 +1440,38 @@
           : d.createObjectStore("central_outbox", { keyPath: "client_observation_id" });
         if (!centralOutbox.indexNames.contains("by_report")) {
           centralOutbox.createIndex("by_report", "report_id");
+        }
+        // Builds before v8 could label a road "municipal" after checking only one road
+        // layer. That bare value is not proof that the central ownership resolver checked
+        // NH/SH/DH, so no cached recipient, contractor, or draft from those builds may be
+        // reopened. Preserve the observation/evidence and force one central revalidation.
+        if (event.oldVersion > 0 && event.oldVersion < 8) {
+          const cursorRequest = reports.openCursor();
+          cursorRequest.onsuccess = () => {
+            const cursor = cursorRequest.result;
+            if (!cursor) return;
+            const rec = cursor.value;
+            const accepted = rec.decision === "accept"
+              || ["draft", "queued", "sent", "unrouted", "duplicate"].includes(rec.status);
+            // Both legacy detector modes used phone-side civic/tender routing. The
+            // project resolver is now authoritative for both, so neither old Personal
+            // nor old Shared attributions are safe to display or email without a retry.
+            if (accepted) {
+              for (const field of [
+                "address", "body_lgd", "body_name", "road_ownership",
+                "road_ownership_source",
+                "road_ownership_detail", "officer_name", "officer_email", "officer_title",
+                "email_to", "email_subject", "email_body", "email_opened_at", "sent_at",
+                "tender_number", "contractor", "tender_note", "tender_title",
+                "tender_published", "tender_resolution_reason",
+                "tender_resolution_checked_at", "unrouted_reason", "unrouted_body",
+              ]) rec[field] = null;
+              rec.status = rec.status === "duplicate" || rec.server_duplicate
+                ? "duplicate" : "draft";
+              cursor.update(rec);
+            }
+            cursor.continue();
+          };
         }
       };
       req.onsuccess = () => { _db = req.result; resolve(_db); };
@@ -1445,8 +1521,63 @@
   const getDrive = (id) => op("readonly", (s) => s.get(String(id)), "drives");
   const putFootage = (seg) => op("readwrite", (s) => s.put(seg), "footage");
   const footageFor = (driveId) => op("readonly", (s) => s.index("by_drive").getAll(String(driveId)), "footage");
-  const allFootage = () => op("readonly", (s) => s.getAll(), "footage");
+  const getFootage = (key) => op("readonly", (s) => s.get(String(key)), "footage");
   const putDrive = (d) => op("readwrite", (s) => s.put(d), "drives");
+
+  // IndexedDB's getAll() clones every Blob in the result. A long drive can therefore
+  // exhaust the WebView just by opening History, before analysis has decoded one frame.
+  // Walk the store and retain metadata only; at most the cursor's current Blob is live.
+  function footageMetadata(driveId = null) {
+    return idb().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction("footage", "readonly");
+      const store = tx.objectStore("footage");
+      const req = driveId == null
+        ? store.openCursor()
+        : store.index("by_drive").openCursor(IDBKeyRange.only(String(driveId)));
+      const rows = [];
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        const f = cursor.value;
+        rows.push({
+          key: String(f.key),
+          drive_id: String(f.drive_id),
+          seq: Number.isFinite(f.seq) ? f.seq : 0,
+          mime: f.mime || f.blob && f.blob.type || "video/mp4",
+          bytes: Number.isFinite(f.bytes) ? f.bytes : f.blob && f.blob.size || 0,
+          recording_started_at_ms: Number.isFinite(f.recording_started_at_ms)
+            ? f.recording_started_at_ms : null,
+          source_offset_s: Number.isFinite(f.source_offset_s) ? f.source_offset_s : null,
+          at: Number.isFinite(f.at) ? f.at : null,
+        });
+        cursor.continue();
+      };
+      req.onerror = () => reject(req.error);
+      tx.oncomplete = () => resolve(rows);
+      tx.onabort = () => reject(tx.error || new Error("Could not read stored footage."));
+    }));
+  }
+
+  function deleteFootageFor(driveId) {
+    return idb().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction("footage", "readwrite");
+      const req = tx.objectStore("footage").index("by_drive")
+        .openCursor(IDBKeyRange.only(String(driveId)));
+      let failure = null;
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) return;
+        const del = cursor.delete();
+        del.onerror = () => { failure = del.error; };
+        cursor.continue();
+      };
+      req.onerror = () => { failure = req.error; };
+      tx.oncomplete = () => resolve();
+      const died = () => reject(storageError(failure || tx.error));
+      tx.onabort = died;
+      tx.onerror = died;
+    }));
+  }
 
   // Accepted Drive jobs finish concurrently. A separate getAll() followed by add()
   // lets two nearby jobs both observe "none" and both write. Keep the final check and
@@ -1647,10 +1778,21 @@
     return rec;
   }
 
-  async function centralPotholeRequest(rec, workingDataUrl, detector) {
+  function centralReportIsConfirmed(rec) {
+    return !!rec && Number(rec.server_pothole_id) > 0
+      && !rec.central_sync_pending
+      && !rec.server_duplicate && rec.status !== "duplicate";
+  }
+
+  async function centralPotholeRequest(
+    rec, workingDataUrl, detector, detectionReceipt, tenderResolution,
+  ) {
     if (!finiteCoord(rec.lat) || !finiteCoord(rec.lng)) return null;
-    const resolution = centralResolutionAt(rec.lat, rec.lng);
-    const jurisdiction = resolution && resolution.jurisdiction;
+    // Only the resolver response owned by this observation may provide authority
+    // hints. A process-wide same-coordinate cache can be overwritten by another
+    // capture while this one is still awaiting image hashing or report upload.
+    const jurisdiction = tenderResolution && tenderResolution.reached
+      ? tenderResolution.jurisdiction : null;
     const observedAt = Math.round((Number.isFinite(rec.captured_at)
       ? rec.captured_at : rec.created_at) * 1000);
     const request = {
@@ -1666,6 +1808,7 @@
       image_hash: await imageHash(workingDataUrl),
       detector: detector || {},
     };
+    if (detectionReceipt) request.detection_receipt = String(detectionReceipt);
     const lgd = jurisdiction && jurisdiction.lgd;
     const town = jurisdiction && jurisdiction.town;
     if (lgd) request.lgd_hint = String(lgd);
@@ -1953,17 +2096,13 @@
         manualInput.adaptiveBrightness, manualInput.roadBand);
       imageInputs = [{ url: dataUrl }];
     }
-    // A waiting single-shot user benefits from speculative geocoding. Drive Mode rejects
-    // most bursts, so starting a location lookup for every road sample would hammer the
-    // public geocoder; it starts only after a burst is accepted.
-    const geoP = !driveMode && usingSharedVision() && lat != null
-      ? reverseGeocode(lat, lng).catch(() => null) : null;
     const shortOf = (g) => (g && g.short) || null;
     progress(pmsg("detect"));
     // Tender resolution can send exact coordinates to the project service and may use
     // shared model quota. It therefore begins only after the vision verdict accepts this
-    // observation. The local reverse-geocode lookup above remains useful preparation for
-    // a waiting manual user and is disclosed separately in the data notice.
+    // observation. Shared mode does not also contact public GIS/geocoder services from
+    // the phone: the central resolver owns those checks and returns one authoritative
+    // address, road-ownership and tender result.
     const detectPrompt = DETECT_PROMPT
       + (driveMode
         ? DETECTION_PROMPT_CONFIG.captureLayouts.drive
@@ -1978,7 +2117,8 @@
     // It streams now purely to stop as soon as the frame is known to be rejected.
     const a = await analyzeImage(imageInputs, detectPrompt, "assessment", ASSESS_SCHEMA, detectionModel,
       driveMode ? null : emitVerdict, driveMode && !S.debug,
-      detectionDetail, driveMode ? "drive" : "manual", `vision:${clientObservationId}`);
+      detectionDetail, driveMode ? "drive" : "manual", `vision:${clientObservationId}`,
+      { client_observation_id: clientObservationId, lat, lng });
     const decision = decisionFor(a);
     const accepted = decision === "accept";
     const detector = {
@@ -1988,6 +2128,14 @@
       ...(a && a.detector && typeof a.detector === "object" ? a.detector : {}),
     };
     if (a && a.request_id) detector.request_id = a.request_id;
+    const receiptText = a && typeof a.detection_receipt === "string"
+      ? a.detection_receipt.trim().toLowerCase() : "";
+    const detectionReceipt = /^[a-f0-9]{64}$/.test(receiptText) ? receiptText : null;
+    if (accepted && usingSharedVision() && !detectionReceipt) {
+      const error = new Error("The shared vision service returned no detection receipt. Try again.");
+      error.sharedService = true;
+      throw error;
+    }
     if (driveMode && !accepted) {
       return { analyzed: true, accepted: false, stored: false, found: false,
                duplicate: false, duplicate_of: null, decision, review: decision === "review",
@@ -2008,23 +2156,43 @@
     const synchronousCentral = usingSharedVision();
     const deferEnrichment = accepted && !synchronousCentral
       && finiteCoord(lat) && finiteCoord(lng);
-    const geo = accepted && !deferEnrichment
-      ? await (geoP || (lat != null ? reverseGeocode(lat, lng).catch(() => null) : Promise.resolve(null)))
+    const geo = accepted && !deferEnrichment && !usingSharedVision()
+      ? await (lat != null ? reverseGeocode(lat, lng).catch(() => null) : Promise.resolve(null))
       : null;
     const localAddress = shortOf(geo);
-    // All capture modes reach the project tender endpoint only here, after acceptance.
-    // The GIS answer is memoised and is also reused by routeOfficer below.
-    const tender = accepted && !deferEnrichment && finiteCoord(lat) && finiteCoord(lng)
-      ? await jurisdictionOf(lat, lng).catch(() => null)
+    // Shared capture asks only the central resolver: it owns the authoritative KGIS
+    // and geocoder checks. Repeating public Nominatim and four KGIS queries on the
+    // phone could stall an accepted result for over a minute during an outage and
+    // doubles upstream load at crowd scale. Personal mode retains its local path.
+    let centralResolution = null;
+    let tender = null;
+    if (accepted && !deferEnrichment && finiteCoord(lat) && finiteCoord(lng)) {
+      if (synchronousCentral) {
+        // Keep this complete response local to the active observation. The tender,
+        // road owner and shared-map LGD/town hints must all come from the same call.
+        centralResolution = await tenderFromService(
+          lat, lng, null, null, clientObservationId,
+        ).catch((error) => ({ reached: false, tender: null, error }));
+        tender = centralResolution.reached ? centralResolution.tender : null;
+      } else {
+        tender = await jurisdictionOf(lat, lng).catch(() => null)
           .then((w) => matchTender(localAddress, w && w.kind === "town" ? w.lgd : null,
             lat, lng, clientObservationId))
-          .catch(() => null)
-      : null;
-    const centralResolution = centralResolutionAt(lat, lng);
-    const centralJurisdiction = centralResolution && centralResolution.jurisdiction;
+          .catch(() => null);
+      }
+    }
+    const centralJurisdiction = centralResolution && centralResolution.reached
+      ? centralResolution.jurisdiction : null;
     const address = localAddress || centralJurisdiction && centralJurisdiction.address || null;
+    // A failed central lookup is still authoritative as "unknown" in shared mode.
+    // Falling through to the phone's KGIS path here would duplicate public traffic,
+    // bypass the server's bounded highway tolerance, and could disagree with the
+    // ownership decision later made while the same observation is stored centrally.
+    const routingJurisdiction = usingSharedVision()
+      ? (centralJurisdiction || { road_ownership: "unknown" }) : null;
     const [officerName, officerEmail, unroutedReason, bodyName] = accepted && !deferEnrichment
-      ? await routeOfficer((geo && geo.full) || address, lat, lng) : [null, null, null, null];
+      ? await routeOfficer((geo && geo.full) || address, lat, lng,
+          routingJurisdiction) : [null, null, null, null];
     const covered = accepted && (deferEnrichment || !!officerEmail);
     if (accepted) progress(pmsg("write"));
     // No authority means no complaint. The photo, verdict and location are still kept,
@@ -2062,9 +2230,18 @@
       tender_published: tender ? tender.published : null,
       tender_confidence: tender && Number.isFinite(tender.confidence) ? tender.confidence : null,
       tender_match_method: tender ? tender.match_method : null,
-      tender_request_id: centralResolution ? centralResolution.request_id : null,
-      body_lgd: centralJurisdiction && centralJurisdiction.lgd || null,
-      body_name: centralJurisdiction && centralJurisdiction.town || bodyName || null,
+      tender_request_id: centralResolution && centralResolution.reached
+        ? centralResolution.request_id : null,
+      tender_resolution_reason: centralResolution && centralResolution.reached
+        ? centralResolution.reason : null,
+      tender_resolution_checked_at: centralResolution && centralResolution.reached
+        ? Date.now() / 1000 : null,
+      road_ownership: centralJurisdiction && centralJurisdiction.road_ownership || null,
+      road_ownership_source: centralJurisdiction ? "central_v1" : null,
+      body_lgd: centralJurisdiction && centralJurisdiction.road_ownership === "municipal"
+        ? centralJurisdiction.lgd || null : null,
+      body_name: centralJurisdiction && centralJurisdiction.road_ownership === "municipal"
+        ? centralJurisdiction.town || null : bodyName || null,
       email_opened_at: null,
       sent_at: null,
       drive_id: driveId,
@@ -2099,7 +2276,8 @@
       let centralRequestBody = null;
       let centralFailure = null;
       try {
-        const centralRequest = await centralPotholeRequest(rec, dataUrl, detector);
+        const centralRequest = await centralPotholeRequest(
+          rec, dataUrl, detector, detectionReceipt, centralResolution);
         centralRequestBody = centralRequest ? JSON.stringify(centralRequest) : null;
         // Shared mode already proved the project service during preflight and needs its
         // cross-device duplicate answer now. Personal mode persists an outbox row and
@@ -2181,35 +2359,35 @@
     }
   }
 
+  const CENTRAL_OWNERSHIP_SOURCE = "central_v1";
+  const hasCentralOwnershipProof = (rec) => !!rec && !!rec.road_ownership
+    && (rec.road_ownership_source === CENTRAL_OWNERSHIP_SOURCE || rec._native === true);
+  const hasAuthoritativeMunicipalOwnership = (rec) => !!rec
+    && rec.road_ownership === "municipal" && hasCentralOwnershipProof(rec);
 
   async function prepareComplaint(rec) {
     const lat = finiteCoord(rec && rec.lat) ? rec.lat : null;
     const lng = finiteCoord(rec && rec.lng) ? rec.lng : null;
+    // The project service is the single ownership/tender authority for both detector
+    // modes. Personal mode keeps images/key direct to OpenAI, but accepted coordinates
+    // already go to this service and must not be routed by a conflicting phone-side rule.
+    const centralAuthorityRequired = !!SERVICE_URL;
     let address = rec && rec.address || null;
     let jurisdiction = null;
-    if (lat != null && lng != null) {
-      const [geo, where] = await Promise.all([
-        address ? Promise.resolve(null) : reverseGeocode(lat, lng).catch(() => null),
-        jurisdictionOf(lat, lng).catch(() => null),
-      ]);
-      address = address || geo && geo.short || null;
-      jurisdiction = where;
-    }
-    let officerName = rec && (rec.officer_name || rec.officer_title) || null;
-    let officerEmail = rec && (rec.officer_email || rec.email_to) || null;
-    let unroutedReason = null, unroutedBody = null;
-    if (!officerEmail) {
-      [officerName, officerEmail, unroutedReason, unroutedBody] =
-        await routeOfficer(address, lat, lng);
-    }
-    if (!officerEmail) {
-      throw complaintRouteError(unroutedReason || "road_class_unknown", unroutedBody, {
-        address,
-        bodyLgd: rec && rec.body_lgd || jurisdiction && jurisdiction.lgd || null,
-        bodyName: rec && rec.body_name || jurisdiction && jurisdiction.name || null,
-      });
-    }
-
+    const ownershipReasons = new Set([
+      "national_highway", "state_highway", "district_highway", "rural", "outside_state",
+    ]);
+    const persistedOwnership = rec && (rec.road_ownership
+      || (ownershipReasons.has(rec.tender_resolution_reason)
+        ? rec.tender_resolution_reason : null));
+    let authoritativeJurisdiction = hasCentralOwnershipProof(rec) && persistedOwnership && {
+        road_ownership: persistedOwnership,
+        lgd: rec && rec.body_lgd || null,
+        town: rec && rec.body_name || null,
+        highway_name: rec && rec.unrouted_body || null,
+        rural_body: rec && rec.unrouted_body || null,
+      } || null;
+    let ownershipSource = hasCentralOwnershipProof(rec) ? CENTRAL_OWNERSHIP_SOURCE : null;
     let tender = null;
     if (rec && rec.tender_number) {
       tender = {
@@ -2217,30 +2395,126 @@
         contractor: rec.contractor || null,
         title: rec.tender_title || "",
         published: rec.tender_published || "",
-        warranty: rec.tender_warranty || "recorded for this stretch",
-        warranty_code: rec.tender_warranty_code || "record",
+        // Ignore legacy inferred DLP/maintenance values stored by older app builds.
+        ...warrantyFor(rec.tender_published),
       };
-    } else if (rec && rec.tender_resolution_checked_at == null && lat != null && lng != null) {
-      const lgd = rec.body_lgd || jurisdiction && jurisdiction.kind === "town" && jurisdiction.lgd || null;
+    }
+
+    // A shared observation is enriched by the central resolver only. This retry lets a
+    // transient capture-time outage recover when Email is tapped without leaking a
+    // parallel Nominatim/KGIS request from the phone or trusting stale local ownership.
+    const sharedNeedsRevalidation = centralAuthorityRequired && rec
+      && (rec.tender_resolution_checked_at == null || !hasCentralOwnershipProof(rec));
+    if (sharedNeedsRevalidation && lat != null && lng != null) {
+      // Use the central resolver based on the report's provider, not today's Settings.
+      // A user may switch to a personal key after capture; that must not make a legacy
+      // shared row trust cached municipal email/contractor text from an older build.
+      const central = await tenderFromService(lat, lng, null, null,
+        rec.client_observation_id || rec.source_event_key || `native-${rec.id}`)
+        .catch(() => ({ reached: false, tender: null }));
+      // Revalidation owns the answer. In particular, do not retain a legacy contractor
+      // when the authoritative response says no tender or says this is a highway.
+      tender = central && central.reached ? central.tender : null;
+      authoritativeJurisdiction = central && central.reached && central.jurisdiction
+        || { road_ownership: "unknown" };
+      ownershipSource = central && central.reached ? CENTRAL_OWNERSHIP_SOURCE : null;
+    } else if (centralAuthorityRequired && !authoritativeJurisdiction) {
+      authoritativeJurisdiction = { road_ownership: "unknown" };
+    }
+    const authoritativeMunicipal = authoritativeJurisdiction
+      && authoritativeJurisdiction.road_ownership === "municipal";
+    if (centralAuthorityRequired) {
+      address = address || authoritativeJurisdiction.address || null;
+    }
+    if (lat != null && lng != null) {
+      if (!centralAuthorityRequired) {
+        const [geo, where] = await Promise.all([
+          address ? Promise.resolve(null) : reverseGeocode(lat, lng).catch(() => null),
+          authoritativeJurisdiction
+            ? Promise.resolve(null) : jurisdictionOf(lat, lng).catch(() => null),
+        ]);
+        address = address || geo && geo.short || null;
+        jurisdiction = where;
+      }
+    }
+    let officerName = rec && (rec.officer_name || rec.officer_title) || null;
+    let officerEmail = rec && (rec.officer_email || rec.email_to) || null;
+    // A server ownership result outranks any recipient cached by an older build.
+    // Re-resolve even municipal rows so a highway answer can never inherit a stale
+    // city Commissioner and become sendable.
+    if (authoritativeJurisdiction) {
+      officerName = null;
+      officerEmail = null;
+    }
+    let unroutedReason = null, unroutedBody = null;
+    if (!officerEmail) {
+      [officerName, officerEmail, unroutedReason, unroutedBody] =
+        await routeOfficer(address, lat, lng, authoritativeJurisdiction);
+    }
+    if (!officerEmail) {
+      throw complaintRouteError(unroutedReason || "road_class_unknown", unroutedBody, {
+        address,
+        bodyLgd: authoritativeJurisdiction
+          ? authoritativeMunicipal && authoritativeJurisdiction.lgd || null
+          : rec && rec.body_lgd || jurisdiction && jurisdiction.lgd || null,
+        bodyName: authoritativeJurisdiction
+          ? authoritativeMunicipal && authoritativeJurisdiction.town || null
+          : rec && rec.body_name || jurisdiction && jurisdiction.name || null,
+      });
+    }
+
+    if (!centralAuthorityRequired && !tender && rec && rec.tender_resolution_checked_at == null
+        && lat != null && lng != null) {
+      const lgd = authoritativeJurisdiction
+        ? authoritativeMunicipal && authoritativeJurisdiction.lgd || null
+        : rec.body_lgd || jurisdiction && jurisdiction.kind === "town" && jurisdiction.lgd || null;
       tender = await matchTender(address, lgd, lat, lng,
         rec.client_observation_id || rec.source_event_key || `native-${rec.id}`).catch(() => null);
     }
     const [subject, body] = draftEmail(
       rec || {}, lat, lng, address, officerName, tender);
+    const roadOwnership = authoritativeJurisdiction
+      && authoritativeJurisdiction.road_ownership || null;
     return { to: officerEmail, officer_name: officerName, subject, body,
-      address, body_lgd: rec.body_lgd || jurisdiction && jurisdiction.lgd || null,
-      body_name: rec.body_name || jurisdiction && jurisdiction.name || null,
+      address, road_ownership: roadOwnership, road_ownership_source: ownershipSource,
+      body_lgd: authoritativeJurisdiction
+        ? authoritativeMunicipal && authoritativeJurisdiction.lgd || null
+        : rec.body_lgd || jurisdiction && jurisdiction.lgd || null,
+      body_name: authoritativeJurisdiction
+        ? authoritativeMunicipal && authoritativeJurisdiction.town || null
+        : rec.body_name || jurisdiction && jurisdiction.name || null,
       tender, tender_number: tender && tender.tender_number || null };
   }
 
   async function openEmailDraft(rec) {
     // Always the routed officer. The app never sends; the user does, in their email app.
     // No fallback recipient: an unrouted report must not borrow Bengaluru's address.
+    if (!centralReportIsConfirmed(rec)) {
+      const error = new Error(
+        "The shared-map duplicate check must finish before this email can be opened.",
+      );
+      error.code = "central_sync_pending";
+      error.report = toDict(rec);
+      throw error;
+    }
     let prepared;
     try {
-      prepared = rec.officer_email && rec.email_subject && rec.email_body
+      prepared = hasAuthoritativeMunicipalOwnership(rec)
+          && rec.officer_email && rec.email_subject && rec.email_body
           && rec.tender_resolution_checked_at != null
-        ? { to: rec.officer_email, subject: rec.email_subject, body: rec.email_body }
+        ? { to: rec.officer_email, officer_name: rec.officer_name || null,
+            subject: rec.email_subject, body: rec.email_body,
+            address: rec.address || null, body_lgd: rec.body_lgd || null,
+            body_name: rec.body_name || null,
+            road_ownership: rec.road_ownership,
+            road_ownership_source: rec.road_ownership_source,
+            tender: rec.tender_number ? {
+              tender_number: rec.tender_number, contractor: rec.contractor || null,
+              note: rec.tender_note || null, title: rec.tender_title || null,
+              published: rec.tender_published || null,
+              confidence: rec.tender_confidence,
+              match_method: rec.tender_match_method || null,
+            } : null }
         : await prepareComplaint(rec);
     } catch (error) {
       if (error && error.code === "complaint_unrouted") {
@@ -2268,6 +2542,9 @@
     rec.address = prepared.address || rec.address || null;
     rec.body_lgd = prepared.body_lgd || rec.body_lgd || null;
     rec.body_name = prepared.body_name || rec.body_name || null;
+    rec.road_ownership = prepared.road_ownership || rec.road_ownership || null;
+    rec.road_ownership_source = prepared.road_ownership_source
+      || rec.road_ownership_source || null;
     rec.email_subject = prepared.subject;
     rec.email_body = prepared.body;
     rec.tender_resolution_checked_at = rec.tender_resolution_checked_at || Date.now() / 1000;
@@ -2277,6 +2554,17 @@
       rec.tender_note = prepared.tender.note || null;
       rec.tender_title = prepared.tender.title || null;
       rec.tender_published = prepared.tender.published || null;
+      rec.tender_confidence = Number.isFinite(prepared.tender.confidence)
+        ? prepared.tender.confidence : null;
+      rec.tender_match_method = prepared.tender.match_method || null;
+    } else {
+      rec.tender_number = null;
+      rec.contractor = null;
+      rec.tender_note = null;
+      rec.tender_title = null;
+      rec.tender_published = null;
+      rec.tender_confidence = null;
+      rec.tender_match_method = null;
     }
     progress(pmsg("email"));
     if (NATIVE) {
@@ -2473,7 +2761,7 @@
     // footage is hundreds of megabytes and must never be materialised by accident.
     if (path === "/api/footage" && method === "GET") {
       const byDrive = {};
-      for (const f of await allFootage()) {
+      for (const f of await footageMetadata()) {
         const clipStart = Number.isFinite(f.recording_started_at_ms)
           ? f.recording_started_at_ms / 1000 : f.at;
         const d = byDrive[f.drive_id] || (byDrive[f.drive_id] = {
@@ -2491,6 +2779,32 @@
       }
       return Object.values(byDrive);
     }
+    if ((m = path.match(/^\/api\/footage\/([^/]+)\/manifest$/)) && method === "GET") {
+      const segs = (await footageMetadata(decodeURIComponent(m[1])))
+        .sort((a, b) => a.seq - b.seq);
+      if (!segs.length) throw new Error("No footage stored for that drive.");
+      return { mime: segs[0].mime, clips: segs };
+    }
+    if ((m = path.match(/^\/api\/footage\/([^/]+)\/clip\/([^/]+)$/)) && method === "GET") {
+      const driveId = decodeURIComponent(m[1]);
+      const clip = await getFootage(decodeURIComponent(m[2]));
+      if (!clip || String(clip.drive_id) !== driveId || !clip.blob) {
+        throw new Error("Footage segment not found.");
+      }
+      // The analyser asks for exactly one segment at a time. Never return neighbouring
+      // Blob values here: their metadata already came from the lightweight manifest.
+      return {
+        key: String(clip.key), drive_id: String(clip.drive_id),
+        seq: Number.isFinite(clip.seq) ? clip.seq : 0,
+        mime: clip.mime || clip.blob.type || "video/mp4",
+        bytes: Number.isFinite(clip.bytes) ? clip.bytes : clip.blob.size,
+        recording_started_at_ms: Number.isFinite(clip.recording_started_at_ms)
+          ? clip.recording_started_at_ms : null,
+        source_offset_s: Number.isFinite(clip.source_offset_s) ? clip.source_offset_s : null,
+        at: Number.isFinite(clip.at) ? clip.at : null,
+        blob: clip.blob,
+      };
+    }
     if ((m = path.match(/^\/api\/footage\/([^/]+)\/blobs$/)) && method === "GET") {
       const segs = (await footageFor(decodeURIComponent(m[1]))).sort((a, b) => a.seq - b.seq);
       if (!segs.length) throw new Error("No footage stored for that drive.");
@@ -2506,7 +2820,7 @@
     }
     if ((m = path.match(/^\/api\/footage\/([^/]+)$/)) && method === "DELETE") {
       const id = decodeURIComponent(m[1]);
-      for (const f of await footageFor(id)) await op("readwrite", (s) => s.delete(f.key), "footage");
+      await deleteFootageFor(id);
       return { ok: true };
     }
     if (path === "/api/drives" && method === "POST") {
@@ -2567,6 +2881,9 @@
           report: toDict(rec),
         });
       }
+      if (!centralReportIsConfirmed(rec)) {
+        throw new Error("The shared-map duplicate check must finish before this email can be opened.");
+      }
       // "queued" stays reopenable: canceling the email composer must not strand the report.
       if (rec.status === "sent") rec.status = "queued";
       if (rec.status !== "draft" && rec.status !== "queued") throw new Error("This report is not a sendable draft.");
@@ -2607,13 +2924,14 @@
   // exactly the code that runs in production. Nothing here holds state or a secret.
   const __pure = { inCoverage, peekVerdict, peekReject, rejectedVerdict, decisionFor,
                    damageTypeOf, assessmentOf, normaliseModel, normaliseDetail,
-                   buildDetectionRequest,
+                   buildDetectionRequest, effectiveVisionProvider,
                    ASSESS_SCHEMA, DETECT_PROMPT, PROMPT_VERSION,
                    buildTenderMatchRequest,
                    SCHEMA_VERSION, MAX_DETECTION_IMAGES, ROAD_BAND, averageLuminance,
                    distMeters, roadEventMatch, sameRoadEvent, findDuplicateReport,
                    draftEmail, dataUrlToBlob, photoToBase64, toDict, listDict,
                    warrantyFor, shortlistFor, matchTenderFor: matchTender,
+                   centralReportIsConfirmed,
                    canonicalServiceRequest };
 
   window.StandaloneAPI = { __pure, handle, prewarm, prepareComplaint };
@@ -2632,13 +2950,12 @@
     }).catch(() => {});
   });
 
-  // First run: open settings if no key yet (after the main script wires the UI).
+  // Warm the shared service and flush pending accepted observations on startup. A fresh
+  // install needs no setup screen: without a personal key its effective provider is the
+  // shared detector automatically.
   window.addEventListener("load", () => {
     void probeProjectService().then((available) => {
       if (available) return flushCentralOutbox();
     }).catch(() => {});
-    if (!usingSharedVision() && !S.key && typeof window.openSettings === "function") {
-      window.openSettings(true);
-    }
   });
 })();

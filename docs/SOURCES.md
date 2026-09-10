@@ -61,15 +61,22 @@ refuses to name a recipient for it rather than guessing.
 
 **Source: KGIS, run by KSRSAC, the Karnataka State Remote Sensing Applications Centre.**
 
-The app asks the state's own GIS which local body's boundary contains the pothole:
+The central service asks the state's own GIS which road class and local-body boundary
+cover the pothole. It first queries the KGIS National Highway, State Highway, and
+District Highway layers (MapServer layers 289, 290, and 291) within a bounded GPS
+tolerance. A hit is terminal: the app does not name a municipal officer, tender, or
+contractor for that location. Only after all three highway checks succeed with no hit
+does it use the Town boundary layer:
 
 ```bash
 curl -s "https://kgis.ksrsac.in/kgismaps/rest/services/Boundaries/Admin_Dynamic_New/MapServer/1/query?geometry=76.6394,12.2958&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=KGISTownName,Town_Type,LGD_TownCode&returnGeometry=false&f=json"
 ```
 
 Returns `MYSURU`, type `CC`, LGD code `252045`. That layer holds exactly 319 polygons,
-matching the state's 319 urban local bodies. Rural points fall through to the gram
-panchayat layer.
+matching the state's 319 urban local bodies. A point outside a Town polygon falls
+through to the gram-panchayat layer and is not routed to a municipal recipient. If any
+required KGIS check is unavailable or malformed, ownership stays unknown and routing
+fails closed.
 
 The officer directory is keyed on **LGD_TownCode**, the Local Government Directory code
 issued by the Ministry of Panchayati Raj, so a body is identified by a national
@@ -109,10 +116,11 @@ changes are checked with `python3 eval/run_tender_eval.py`, which reports precis
 recall on sealed human-labelled positive and negative cases; an all-null matcher cannot
 pass that gate.
 
-The warranty status is **inferred** from how recently the tender was published, because
-award records carry no defect liability period. The complaint states it as a possibility
-and asks the officer to verify against the tender documents. That wording is deliberate
-and should not be strengthened.
+The app does **not infer** defect-liability or maintenance status from a tender's
+publication date. These records do not provide the award, completion or contractual
+liability dates needed to establish a current contractor obligation. A complaint may
+include a probable tender and recorded winning bidder, but explicitly asks the officer
+to verify the tender, award, work order and applicable terms before assigning liability.
 
 ## Known limits
 

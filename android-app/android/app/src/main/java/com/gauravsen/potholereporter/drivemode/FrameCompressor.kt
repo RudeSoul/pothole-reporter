@@ -15,13 +15,14 @@ import kotlin.math.min
 object FrameCompressor {
     data class PreparedImage(
         val analysisBase64: String,
+        val analysisJpeg: ByteArray,
         val thumbnailJpeg: ByteArray,
         val evidenceJpeg: ByteArray,
     )
 
     fun prepare(primaryJpeg: ByteArray): PreparedImage {
         require(primaryJpeg.isNotEmpty()) { "Primary frame must not be empty" }
-        val analysisBase64 = processImage(
+        val analysisJpeg = processImage(
             jpegBytes = primaryJpeg,
             band = LlmContractGenerated.DRIVE_ROAD_BAND.toFloat(),
             maxDim = LlmContractGenerated.DRIVE_MAX_DIMENSION,
@@ -32,7 +33,9 @@ object FrameCompressor {
         val thumbnailJpeg = generateThumbnail(primaryJpeg)
 
         return PreparedImage(
-            analysisBase64 = analysisBase64,
+            analysisBase64 = "data:image/jpeg;base64," +
+                Base64.encodeToString(analysisJpeg, Base64.NO_WRAP),
+            analysisJpeg = analysisJpeg,
             thumbnailJpeg = thumbnailJpeg,
             evidenceJpeg = primaryJpeg,
         )
@@ -44,7 +47,7 @@ object FrameCompressor {
         maxDim: Int,
         quality: Int,
         boost: Boolean
-    ): String {
+    ): ByteArray {
         val originalBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
         requireNotNull(originalBitmap) { "Failed to decode JPEG" }
 
@@ -84,9 +87,10 @@ object FrameCompressor {
                         finalBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
                         val compressedBytes = outputStream.toByteArray()
 
-                        // 5. Convert to Base64 data URL
-                        val base64String = Base64.encodeToString(compressedBytes, Base64.NO_WRAP)
-                        return "data:image/jpeg;base64,$base64String"
+                        // Keep these exact encoded bytes beside the data URL. The shared
+                        // server hashes the decoded request image into its receipt, so the
+                        // later map report must hash this image rather than the thumbnail.
+                        return compressedBytes
                     } finally {
                         if (finalBitmap !== scaledBitmap) {
                             finalBitmap.recycle()

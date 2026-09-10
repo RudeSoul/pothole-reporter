@@ -17,6 +17,15 @@ interface CentralObservationDao {
     @Query("SELECT EXISTS(SELECT 1 FROM central_observation_outbox WHERE client_observation_id = :id)")
     suspend fun exists(id: String): Boolean
 
+    @Query("""
+        SELECT EXISTS(
+          SELECT 1 FROM central_observation_outbox
+          WHERE last_error IS NULL
+            AND (report_id = :reportId OR local_match_report_id = :reportId)
+        )
+    """)
+    suspend fun hasPendingForReport(reportId: Long): Boolean
+
     @Query("DELETE FROM central_observation_outbox WHERE client_observation_id = :id")
     suspend fun delete(id: String)
 

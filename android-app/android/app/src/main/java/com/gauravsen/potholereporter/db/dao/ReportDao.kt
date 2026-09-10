@@ -61,6 +61,9 @@ interface ReportDao {
         WHERE decision = 'accept'
           AND central_sync_eligible = 1
           AND (status = 'draft'
+            OR (lat IS NOT NULL AND lng IS NOT NULL
+              AND (tender_resolution_checked_at IS NULL
+                OR (detection_provider = 'shared_server' AND road_ownership IS NULL)))
             OR (server_pothole_id IS NULL AND central_sync_error IS NULL))
         ORDER BY id
     """)

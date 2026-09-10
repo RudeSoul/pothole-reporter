@@ -7,7 +7,7 @@ publishes aggregate impact metrics and a general map.
 There is no user account system.
 
 **Current coverage:** supported Karnataka urban local bodies with published contact
-emails. National highways and rural roads are excluded.
+emails. National, state and district highways, and rural roads are excluded.
 
 <a href="docs/example-pothole.jpg"><img src="docs/example-pothole-thumb.jpg" width="280" alt="Pothole detected by Pothole Reporter"></a>
 
@@ -36,8 +36,9 @@ emails. National highways and rural roads are excluded.
 - Groups repeat Drive/footage observations into one event; Debug mode keeps every
   accepted observation.
 
-The app refuses to guess a recipient for national highways, rural roads, locations
-outside Karnataka, unknown road ownership, or bodies without a published address.
+The app refuses to guess a recipient for national, state and district highways, rural
+roads, locations outside Karnataka, unknown road ownership, or bodies without a
+published address.
 
 ## Install and use
 
@@ -130,8 +131,10 @@ Run the complete test suite with:
 Run and deploy the central service separately using the commands and required secrets
 in [`server/README.md`](server/README.md). The checked-in Wrangler file contains
 deployment-specific placeholder IDs; the service is not deployable until those are
-replaced and a shared detector is configured. `OPENAI_API_KEY` remains required for
-tender adjudication even when YOLO handles detection.
+replaced and a shared detector is configured. Tender resolution uses model adjudication
+when the server has `OPENAI_API_KEY`; without it, the server uses its conservative
+deterministic location-and-scope matcher. Shared image detection still requires either
+the server OpenAI provider or a deployed/configured YOLO provider.
 
 The server supports the requested `openai_then_http_yolo` chain, but it remains
 disabled until an evaluated model and AWS endpoint exist. No model binary is checked

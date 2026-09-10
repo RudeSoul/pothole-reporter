@@ -46,8 +46,8 @@ class TimeoutContractTests(unittest.TestCase):
         self.assertIn("85 seconds for upstreams plus 15 seconds", SERVER_README)
 
     def test_browser_detection_uses_the_shared_deadline(self):
-        detect = WEB.split('signedServicePost("/v1/vision/detect"', 1)[1].split(
-            "});", 1
+        detect = WEB.split("async function analyzeViaService", 1)[1].split(
+            "let streamBroken", 1
         )[0]
         self.assertIn("timeout: SHARED_VISION_TIMEOUT_MS", detect)
         self.assertIn("image_detail: selectedDetail", detect)

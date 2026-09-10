@@ -4,6 +4,7 @@
 import base64
 import hashlib
 import json
+import os
 import sys
 import time
 from urllib.parse import urlparse
@@ -11,7 +12,7 @@ from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 
 
-APP = "http://localhost:8765/"
+APP = os.environ.get("POTHOLE_TEST_APP", "http://localhost:8765/")
 SERVICE = "https://server.test"
 ACCEPTED = {
     "image_quality": "acceptable",
@@ -118,7 +119,9 @@ class CentralHarness:
         self.installations = {}
         self.requests = []
         self.report_count = 0
+        self.tender_road_ownership = "municipal"
         self.fail_shared_vision = False
+        self.fail_tender_resolution = False
         self.reject_shared_vision = False
         self.fail_next_report = False
 
@@ -159,8 +162,12 @@ class CentralHarness:
                 }, 503, "req-shared-credit")
                 return
             verdict = REJECTED if self.reject_shared_vision else ACCEPTED
+            receipt = None if self.reject_shared_vision else hashlib.sha256(
+                f"receipt:{body['client_observation_id']}".encode("utf-8")
+            ).hexdigest()
             response_envelope(route, {
                 **verdict,
+                "detection_receipt": receipt,
                 "detector": {"provider": "shared_server", "model": body["model"],
                              "prompt_version": "road-damage-v5", "schema_version": 4,
                              "evidence_count": len(body["images"])},
@@ -173,16 +180,31 @@ class CentralHarness:
             return
 
         if path == "/v1/tenders/resolve":
+            if self.fail_tender_resolution:
+                response_envelope(route, {
+                    "error": "road_ownership_unavailable",
+                    "message": "Road ownership could not be verified. Retry later.",
+                    "details": {"retryable": True},
+                }, 503, "req-tender-unavailable")
+                return
+            highway_names = {
+                "state_highway": "SH 17",
+                "district_highway": "MDR 42",
+            }
+            ownership = self.tender_road_ownership
+            highway_name = highway_names.get(ownership)
             response_envelope(route, {
                 "jurisdiction": {"lat": body["lat"], "lng": body["lng"],
                     "address": "Test Road, Kalaburagi", "lgd": "248127",
                     "town": "Kalaburagi", "source": "kgis",
-                    "address_source": "nominatim"},
-                "tender": {"tender_number": "TEST-2026-1", "title": "Repair of Test Road",
+                    "address_source": "nominatim", "road_ownership": ownership,
+                    "highway_name": highway_name, "rural_body": None},
+                "tender": None if highway_name else {
+                    "tender_number": "TEST-2026-1", "title": "Repair of Test Road",
                     "location": "Kalaburagi", "contractor": "Example Roads Ltd",
                     "published": "01-08-2026", "confidence": 0.91,
                     "reason": "Road and body match", "match_method": "model_adjudicated"},
-                "reason": None,
+                "reason": ownership if highway_name else None,
             }, request_id="req-tender")
             return
 
@@ -204,7 +226,9 @@ class CentralHarness:
                     "damage_type": body["damage_type"], "size": body["size"],
                     "first_seen_at": body["observed_at"],
                     "last_seen_at": body["observed_at"], "seen_count": self.report_count,
-                    "lgd": "248127", "town": "Kalaburagi"},
+                    "lgd": None if self.tender_road_ownership != "municipal" else "248127",
+                    "town": None if self.tender_road_ownership != "municipal"
+                        else "Kalaburagi"},
             }, 200 if duplicate else 201, f"req-report-{self.report_count}")
             return
 
@@ -248,7 +272,7 @@ def route_support(route, request):
         route.abort("blockedbyclient")
 
 
-def open_context(browser, harness, personal=False):
+def open_context(browser, harness, personal=False, geolocation_handler=route_support):
     context = browser.new_context(viewport={"width": 390, "height": 844})
     settings = json.dumps({"service": SERVICE, "personal": personal})
     context.add_init_script(script="""(() => {
@@ -271,8 +295,8 @@ def open_context(browser, harness, personal=False):
     })();""")
     context.route(f"{SERVICE}/**", harness.handle)
     context.route("**/karnataka-bodies.json", route_support)
-    context.route("https://nominatim.openstreetmap.org/**", route_support)
-    context.route("https://kgis.ksrsac.in/**", route_support)
+    context.route("https://nominatim.openstreetmap.org/**", geolocation_handler)
+    context.route("https://kgis.ksrsac.in/**", geolocation_handler)
 
     openai_calls = []
 
@@ -307,14 +331,19 @@ CREATE_REPORT = """async () => {
   fd.append('captured_at_ms', String(Date.now()));
   const report = await StandaloneAPI.handle('/api/report', {method:'POST', body:fd});
   window.__contractReport = report;
-  return {id:report.id, status:report.status, server_pothole_id:report.server_pothole_id,
+  return {id:report.id, status:report.status, decision:report.decision,
+    server_pothole_id:report.server_pothole_id,
     client_observation_id:report.client_observation_id,
     server_duplicate:report.server_duplicate, seen_count:report.seen_count,
     central_sync_pending:report.central_sync_pending,
     server_sync_error:report.server_sync_error,
     has_photo:!!report.photo,
     has_photo_full:!!report.photo_full, email_subject:report.email_subject,
-    email_body:report.email_body, tender_number:report.tender_number};
+    email_body:report.email_body, tender_number:report.tender_number,
+    tender_title:report.tender_title, tender_note:report.tender_note,
+    contractor:report.contractor, vision_provider:report.vision_provider,
+    officer_name:report.officer_name, officer_email:report.officer_email,
+    unrouted_reason:report.unrouted_reason, unrouted_body:report.unrouted_body};
 }"""
 
 READ_REPORT = """async (id) => {
@@ -322,14 +351,19 @@ READ_REPORT = """async (id) => {
     .find((row) => row.id === id);
   if (!report) return null;
   window.__contractReport = report;
-  return {id:report.id, status:report.status, server_pothole_id:report.server_pothole_id,
+  return {id:report.id, status:report.status, decision:report.decision,
+    server_pothole_id:report.server_pothole_id,
     client_observation_id:report.client_observation_id,
     server_duplicate:report.server_duplicate, seen_count:report.seen_count,
     central_sync_pending:report.central_sync_pending,
     server_sync_error:report.server_sync_error,
     has_photo:!!report.photo,
     has_photo_full:!!report.photo_full, email_subject:report.email_subject,
-    email_body:report.email_body, tender_number:report.tender_number};
+    email_body:report.email_body, tender_number:report.tender_number,
+    tender_title:report.tender_title, tender_note:report.tender_note,
+    contractor:report.contractor, vision_provider:report.vision_provider,
+    officer_name:report.officer_name, officer_email:report.officer_email,
+    unrouted_reason:report.unrouted_reason, unrouted_body:report.unrouted_body};
 }"""
 
 READ_OUTBOX = """async () => await new Promise((resolve, reject) => {
@@ -377,11 +411,287 @@ def verify_signatures(harness):
     return failures
 
 
+def verify_shared_highway_refusal(browser, ownership):
+    """The central ownership gate must outrank the browser's municipal-only GIS."""
+    failures = []
+    highway_name = {
+        "state_highway": "SH 17",
+        "district_highway": "MDR 42",
+    }[ownership]
+    harness = CentralHarness()
+    harness.tender_road_ownership = ownership
+    context, page, openai_calls = open_context(browser, harness, personal=False)
+    try:
+        no_personal_key = page.evaluate("() => localStorage.getItem('openai_key')")
+        report_start = len(harness.requests)
+        created = page.evaluate(CREATE_REPORT)
+        stored = page.evaluate(READ_REPORT, created["id"])
+
+        prepared = page.evaluate("""async (id) => {
+          const report = (await StandaloneAPI.handle('/api/reports'))
+            .find((row) => row.id === id);
+          try {
+            const draft = await StandaloneAPI.prepareComplaint(report);
+            return {failed:false, to:draft && draft.to || null,
+              subject:draft && draft.subject || null};
+          } catch (error) {
+            return {failed:true, code:error.code || null,
+              reason:error.unroutedReason || null,
+              body:error.unroutedBody || null, message:error.message};
+          }
+        }""", created["id"])
+        sent = page.evaluate("""async (id) => {
+          try {
+            await StandaloneAPI.handle(`/api/reports/${id}/send`, {method:'POST'});
+            return {failed:false};
+          } catch (error) {
+            return {failed:true, code:error.code || null,
+              reason:error.unroutedReason || null, message:error.message};
+          }
+        }""", created["id"])
+        stored_after_attempts = page.evaluate(READ_REPORT, created["id"])
+
+        report_paths = [request["path"] for request in harness.requests[report_start:]
+                        if request["path"] in ("/v1/vision/detect",
+                                               "/v1/tenders/resolve",
+                                               "/v1/potholes/report")]
+        if report_paths != ["/v1/vision/detect", "/v1/tenders/resolve",
+                            "/v1/potholes/report"]:
+            failures.append(f"{ownership} shared report used the wrong service flow: "
+                            f"{report_paths}")
+        tender_resolves = [request for request in harness.requests
+                           if request["path"] == "/v1/tenders/resolve"]
+        if len(tender_resolves) != 1:
+            failures.append(f"{ownership} resolved its tender "
+                            f"{len(tender_resolves)} times")
+
+        safe_fields = ("officer_name", "officer_email", "email_subject", "email_body",
+                       "tender_number", "tender_title", "tender_note", "contractor")
+        if not (stored
+                and created["decision"] == stored["decision"] == "accept"
+                and created["status"] == stored["status"] == "unrouted"
+                and stored["unrouted_reason"] == ownership
+                and stored["unrouted_body"] == highway_name
+                and stored["vision_provider"] == "shared_server"
+                and stored["server_pothole_id"] == "101"
+                and not stored["central_sync_pending"]
+                and stored["server_sync_error"] is None
+                and not stored["server_duplicate"]
+                and all(stored[field] is None for field in safe_fields)):
+            failures.append(f"{ownership} was not durably stored as a safe unrouted "
+                            f"accepted report: created={created}, stored={stored}")
+
+        if prepared.get("failed") is not True \
+                or prepared.get("code") != "complaint_unrouted" \
+                or prepared.get("reason") != ownership:
+            failures.append(f"{ownership} complaint preparation did not fail closed: "
+                            f"{prepared}")
+        if sent.get("failed") is not True \
+                or sent.get("code") != "complaint_unrouted" \
+                or sent.get("reason") != ownership:
+            failures.append(f"{ownership} send endpoint did not fail closed: {sent}")
+        if stored_after_attempts != stored:
+            failures.append(f"{ownership} complaint attempts changed the safe stored "
+                            f"record: before={stored}, after={stored_after_attempts}")
+        if no_personal_key is not None or openai_calls:
+            failures.append(f"{ownership} contract was not shared/no-personal-key: "
+                            f"key={no_personal_key!r}, openai_calls={len(openai_calls)}")
+    finally:
+        context.close()
+
+    if len(harness.installations) != 1:
+        failures.append(f"{ownership} expected one device identity, got "
+                        f"{len(harness.installations)}")
+    failures.extend(f"{ownership}: {failure}" for failure in verify_signatures(harness))
+    return failures
+
+
+def verify_shared_capture_uses_central_enrichment_only(browser):
+    """A no-key shared capture must never repeat the server's GIS/geocoder work."""
+    failures = []
+    harness = CentralHarness()
+    local_upstream_requests = []
+
+    def delayed_failure(route, request):
+        # These routes are deliberately unusable. If shared capture regresses to the
+        # legacy client-side path, make the dependency both visible and slow before it
+        # fails; the accepted report must complete without touching either endpoint.
+        local_upstream_requests.append(request.url)
+        time.sleep(0.25)
+        route.abort("timedout")
+
+    context, page, openai_calls = open_context(
+        browser,
+        harness,
+        personal=False,
+        geolocation_handler=delayed_failure,
+    )
+    try:
+        no_personal_key = page.evaluate("() => localStorage.getItem('openai_key')")
+        request_start = len(harness.requests)
+        created = page.evaluate(CREATE_REPORT)
+        central_paths = [
+            request["path"] for request in harness.requests[request_start:]
+            if request["path"] in (
+                "/v1/vision/detect",
+                "/v1/tenders/resolve",
+                "/v1/potholes/report",
+            )
+        ]
+        tender_requests = [
+            request for request in harness.requests[request_start:]
+            if request["path"] == "/v1/tenders/resolve"
+        ]
+
+        if local_upstream_requests:
+            failures.append(
+                "shared capture contacted client-side GIS/geocoder endpoints: "
+                f"{local_upstream_requests}"
+            )
+        if central_paths != [
+                "/v1/vision/detect",
+                "/v1/tenders/resolve",
+                "/v1/potholes/report",
+        ]:
+            failures.append(f"shared capture did not use the central-only flow: {central_paths}")
+        if len(tender_requests) != 1 or set(tender_requests[0]["body"]) != {"lat", "lng"}:
+            failures.append(
+                "shared capture sent client-derived jurisdiction/address enrichment: "
+                f"{[request['body'] for request in tender_requests]}"
+            )
+        if not (
+                created["status"] == "draft"
+                and created["decision"] == "accept"
+                and created["vision_provider"] == "shared_server"
+                and created["server_pothole_id"] == "101"
+                and created["officer_email"] == "test@example.gov.in"
+                and created["tender_number"] == "TEST-2026-1"
+                and created["contractor"] == "Example Roads Ltd"
+                and not created["central_sync_pending"]
+                and created["server_sync_error"] is None
+        ):
+            failures.append(
+                "shared capture did not complete from central enrichment while local "
+                f"upstreams were poisoned: {created}"
+            )
+        if no_personal_key is not None or openai_calls:
+            failures.append(
+                "central-only contract was not a no-personal-key shared capture: "
+                f"key={no_personal_key!r}, direct_openai_calls={len(openai_calls)}"
+            )
+    finally:
+        context.close()
+
+    if len(harness.installations) != 1:
+        failures.append(
+            f"central-only flow expected one device identity, got {len(harness.installations)}"
+        )
+    failures.extend(
+        f"central-only enrichment: {failure}" for failure in verify_signatures(harness)
+    )
+    return failures
+
+
+def verify_shared_tender_failure_never_uses_local_enrichment(browser):
+    """A central tender outage must not reopen the browser's old GIS fallback."""
+    failures = []
+    harness = CentralHarness()
+    harness.fail_tender_resolution = True
+    local_upstream_requests = []
+
+    def delayed_failure(route, request):
+        local_upstream_requests.append(request.url)
+        time.sleep(0.25)
+        route.abort("timedout")
+
+    context, page, openai_calls = open_context(
+        browser,
+        harness,
+        personal=False,
+        geolocation_handler=delayed_failure,
+    )
+    try:
+        no_personal_key = page.evaluate("() => localStorage.getItem('openai_key')")
+        request_start = len(harness.requests)
+        created = page.evaluate(CREATE_REPORT)
+        central_paths = [
+            request["path"] for request in harness.requests[request_start:]
+            if request["path"] in (
+                "/v1/vision/detect",
+                "/v1/tenders/resolve",
+                "/v1/potholes/report",
+            )
+        ]
+        allowed_paths = [
+            ["/v1/vision/detect", "/v1/tenders/resolve"],
+            ["/v1/vision/detect", "/v1/tenders/resolve", "/v1/potholes/report"],
+        ]
+        safe_fields = (
+            "officer_name",
+            "officer_email",
+            "email_subject",
+            "email_body",
+            "tender_number",
+            "tender_title",
+            "tender_note",
+            "contractor",
+        )
+
+        if local_upstream_requests:
+            failures.append(
+                "failed central tender lookup contacted client-side GIS/geocoder: "
+                f"{local_upstream_requests}"
+            )
+        if central_paths not in allowed_paths:
+            failures.append(
+                "failed central tender lookup used an unexpected request flow: "
+                f"{central_paths}"
+            )
+        if not (
+                created["status"] == "unrouted"
+                and created["decision"] == "accept"
+                and created["vision_provider"] == "shared_server"
+                and created["unrouted_reason"] == "road_class_unknown"
+                and created["unrouted_body"] is None
+                and all(created[field] is None for field in safe_fields)
+        ):
+            failures.append(
+                "central tender failure did not remain a safe unsendable observation: "
+                f"{created}"
+            )
+        report_attempted = "/v1/potholes/report" in central_paths
+        if report_attempted and created["server_pothole_id"] != "101":
+            failures.append(
+                "successful optional central report was not retained after tender failure: "
+                f"{created}"
+            )
+        if no_personal_key is not None or openai_calls:
+            failures.append(
+                "tender-failure contract was not no-key shared mode: "
+                f"key={no_personal_key!r}, direct_openai_calls={len(openai_calls)}"
+            )
+    finally:
+        context.close()
+
+    if len(harness.installations) != 1:
+        failures.append(
+            "tender-failure flow expected one device identity, got "
+            f"{len(harness.installations)}"
+        )
+    failures.extend(
+        f"central tender failure: {failure}" for failure in verify_signatures(harness)
+    )
+    return failures
+
+
 def main():
     failures = []
     harness = CentralHarness()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
+
+        failures.extend(verify_shared_capture_uses_central_enrichment_only(browser))
+        failures.extend(verify_shared_tender_failure_never_uses_local_enrichment(browser))
 
         shared_context, shared_page, shared_openai = open_context(browser, harness, personal=False)
         # A failed accepted-pothole upload is committed with its exact body and stable
@@ -431,12 +741,18 @@ def main():
         online_pending = shared_page.evaluate(CREATE_REPORT)
         online_at = len(harness.requests)
         shared_page.evaluate("window.dispatchEvent(new Event('online'))")
-        shared_page.wait_for_function("""id => StandaloneAPI.handle('/api/reports')
-          .then((rows) => rows.some((row) => row.id === id
-            && row.central_sync_pending === false))""", arg=online_pending["id"])
-        online_synced = shared_page.evaluate(READ_REPORT, online_pending["id"])
+        # The reconnect first probes health after a retryable 503 trips the service
+        # circuit, then flushes the durable row. Do not treat the Promise returned from
+        # an IndexedDB predicate as completion before the POST has actually committed.
+        online_synced = None
+        for _ in range(120):
+            online_synced = shared_page.evaluate(READ_REPORT, online_pending["id"])
+            if online_synced and online_synced["central_sync_pending"] is False:
+                break
+            shared_page.wait_for_timeout(25)
         online_delta = [request["path"] for request in harness.requests[online_at:]]
-        if online_delta != ["/v1/potholes/report"]:
+        if online_delta not in (["/v1/potholes/report"],
+                                ["/v1/health", "/v1/potholes/report"]):
             failures.append(f"online retry repeated vision, tender, or complaint work: "
                             f"{online_delta}")
         online_attempts = [request for request in harness.requests
@@ -556,9 +872,40 @@ def main():
                or body.get("model") != "gpt-5.6"
                or len(body.get("images") or []) != 1
                or set(body["images"][0]) != {"data_url"}
+               or not body.get("client_observation_id")
+               or body.get("lat") != 12.9716
+               or body.get("lng") != 77.5946
                for body in shared_detections):
-            failures.append(f"shared detection omitted original detail or sealed one-image input: "
+            failures.append(f"shared detection omitted detail, observation, location, or image: "
                             f"{shared_detections}")
+        detection_by_observation = {
+            body["client_observation_id"]: body
+            for body in shared_detections if body.get("client_observation_id")
+        }
+        shared_reports = [request["body"] for request in harness.requests
+                          if request["path"] == "/v1/potholes/report"
+                          and request["body"].get("detector", {}).get("provider") ==
+                          "shared_server"]
+        for report_body in shared_reports:
+            observation_id = report_body.get("client_observation_id")
+            detection_body = detection_by_observation.get(observation_id)
+            if not detection_body:
+                failures.append(f"shared report has no matching detection observation: {report_body}")
+                continue
+            data_url = detection_body["images"][0]["data_url"]
+            encoded = data_url.split(",", 1)[1]
+            expected_hash = hashlib.sha256(base64.b64decode(encoded)).hexdigest()
+            expected_receipt = hashlib.sha256(
+                f"receipt:{observation_id}".encode("utf-8")
+            ).hexdigest()
+            if (report_body.get("detection_receipt") != expected_receipt
+                    or report_body.get("image_hash") != expected_hash
+                    or report_body.get("lat") != detection_body.get("lat")
+                    or report_body.get("lng") != detection_body.get("lng")):
+                failures.append(
+                    "shared report did not preserve its receipt/image/location binding: "
+                    f"detect={detection_body}, report={report_body}"
+                )
         if paths.count("/v1/activity") != 1:
             failures.append(f"personal activity count was {paths.count('/v1/activity')}")
         activities = [request["body"] for request in harness.requests
@@ -587,7 +934,9 @@ def main():
                 and shared["server_pothole_id"] == "101"
                 and shared["central_sync_pending"] is False
                 and shared["server_sync_error"] is None
-                and shared["tender_number"] == "TEST-2026-1"):
+                and shared["tender_number"] == "TEST-2026-1"
+                and shared["contractor"] == "Example Roads Ltd"
+                and shared["vision_provider"] == "shared_server"):
             failures.append(f"first central report was not a new draft: {shared}")
         if not (personal["status"] == "duplicate" and personal["server_duplicate"]
                 and personal["server_pothole_id"] == "101" and personal["seen_count"] == 3
@@ -612,6 +961,13 @@ def main():
             failures.append("browser sent a removed pothole-condition request")
 
         personal_context.close()
+
+        # The browser's older local ownership gate only knows the national-highway
+        # layer, so its mocked KGIS answer deliberately looks municipal here. In shared
+        # mode the server's richer signed resolution is authoritative: state and district
+        # highways must remain useful map observations without becoming city complaints.
+        for ownership in ("state_highway", "district_highway"):
+            failures.extend(verify_shared_highway_refusal(browser, ownership))
         browser.close()
 
     if len(harness.installations) != 2:

@@ -17,6 +17,7 @@ import com.gauravsen.potholereporter.drivemode.LlmContractGenerated
 import com.gauravsen.potholereporter.drivemode.normalizeVisionDetail
 import com.gauravsen.potholereporter.drivemode.normalizeVisionLanguage
 import com.gauravsen.potholereporter.drivemode.normalizeVisionModel
+import com.gauravsen.potholereporter.drivemode.effectiveVisionProvider
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -56,6 +57,54 @@ internal fun requiredDriveModeRuntimePermissions(): List<String> = listOf(
     Manifest.permission.CAMERA,
     Manifest.permission.ACCESS_FINE_LOCATION,
 )
+
+/**
+ * Authorize replacing a native report's cached complaint from an open WebView snapshot.
+ *
+ * The values supplied by JavaScript are not authority; they only prove which Room row
+ * the UI observed. The freshly prepared municipal result may be written only if that
+ * snapshot is still current and the row remains an accepted, nonduplicate draft.
+ */
+internal data class ComplaintCivicSnapshot(
+    val roadOwnership: String?,
+    val tenderResolutionCheckedAt: Double?,
+    val tenderNumber: String?,
+    val serverPotholeId: Long?,
+    val address: String?,
+    val bodyLgd: String?,
+    val bodyName: String?,
+    val emailTo: String?,
+    val officerTitle: String?,
+    val contractor: String?,
+    val tenderNote: String?,
+)
+
+internal fun canSaveComplaintPreparation(
+    decision: String,
+    status: String,
+    serverDuplicate: Boolean,
+    unroutedReason: String?,
+    hasPendingCentralObservation: Boolean,
+    current: ComplaintCivicSnapshot,
+    expected: ComplaintCivicSnapshot,
+): Boolean {
+    if (decision != "accept" || serverDuplicate || hasPendingCentralObservation ||
+        status !in setOf("draft", "queued") || current.serverPotholeId == null ||
+        current.serverPotholeId <= 0L
+    ) {
+        return false
+    }
+    if (current != expected) return false
+    if (current.roadOwnership !in setOf<String?>(null, "municipal")) return false
+    // Null is a legitimate first central check only for a clean unresolved draft. A
+    // retry-failed/unrouted null must never be turned municipal by stale JavaScript.
+    if (current.roadOwnership == null &&
+        (current.tenderResolutionCheckedAt != null || unroutedReason != null)
+    ) {
+        return false
+    }
+    return true
+}
 
 /**
  * Capacitor plugin bridge for native Drive Mode.
@@ -137,7 +186,7 @@ class DriveModePlugin : Plugin() {
         }
 
         val apiKey = call.getString("apiKey", "") ?: ""
-        val provider = call.getString("provider", if (apiKey.isBlank()) "shared_server" else "personal")
+        val requestedProvider = call.getString("provider", if (apiKey.isBlank()) "shared_server" else "personal")
             ?: "shared_server"
         val serviceUrl = call.getString("serviceUrl", DEFAULT_SERVICE_URL) ?: DEFAULT_SERVICE_URL
         val model = normalizeVisionModel(call.getString("model", LlmContractGenerated.DEFAULT_MODEL))
@@ -149,11 +198,9 @@ class DriveModePlugin : Plugin() {
             call.getString("language", LlmContractGenerated.DEFAULT_LANGUAGE)
         )
 
-        if (provider == "personal" && apiKey.isBlank()) {
-            call.reject("API key is required in personal-key mode")
-            return
-        }
-        if (provider !in setOf("personal", "shared_server")) {
+        val provider = try {
+            effectiveVisionProvider(requestedProvider, apiKey)
+        } catch (_: IllegalArgumentException) {
             call.reject("Unknown vision provider")
             return
         }
@@ -322,6 +369,119 @@ class DriveModePlugin : Plugin() {
                 call.resolve(ret)
             } catch (e: Exception) {
                 call.reject("Failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Cache the already-routed native email draft without replacing concurrent sync state. */
+    @PluginMethod
+    fun saveComplaintPreparation(call: PluginCall) {
+        val id = call.getLong("id", -1L)
+        if (id == null || id < 0) { call.reject("Report ID required"); return }
+        val emailTo = call.getString("emailTo")?.trim()?.take(320)
+        val emailSubject = call.getString("emailSubject")?.take(998)
+        val emailBody = call.getString("emailBody")?.take(65_536)
+        if (emailTo.isNullOrBlank() || emailSubject.isNullOrBlank() || emailBody.isNullOrBlank()) {
+            call.reject("A complete routed email draft is required")
+            return
+        }
+        val officerTitle = call.getString("officerTitle")?.trim()?.take(240)
+        val address = call.getString("address")?.trim()?.take(1_000)
+        val bodyLgd = call.getString("bodyLgd")?.trim()?.take(64)
+        val bodyName = call.getString("bodyName")?.trim()?.take(300)
+        val roadOwnership = call.getString("roadOwnership")?.trim()
+        val roadOwnershipSource = call.getString("roadOwnershipSource")?.trim()
+        if (roadOwnership != "municipal" || roadOwnershipSource != "central_v1") {
+            call.reject("Verified municipal road ownership is required")
+            return
+        }
+        val tenderNumber = call.getString("tenderNumber")?.trim()?.take(160)
+        val contractor = call.getString("contractor")?.trim()?.take(300)
+        val tenderNote = call.getString("tenderNote")?.trim()?.take(2_000)
+        val expectedRoadOwnership = call.getString("expectedRoadOwnership")?.trim()
+        val expectedTenderResolutionCheckedAt = call.getDouble("expectedTenderResolutionCheckedAt")
+        val expectedTenderNumber = call.getString("expectedTenderNumber")
+        val expectedServerPotholeId = call.getLong("expectedServerPotholeId")
+        val expectedAddress = call.getString("expectedAddress")
+        val expectedBodyLgd = call.getString("expectedBodyLgd")
+        val expectedBodyName = call.getString("expectedBodyName")
+        val expectedEmailTo = call.getString("expectedEmailTo")
+        val expectedOfficerTitle = call.getString("expectedOfficerTitle")
+        val expectedContractor = call.getString("expectedContractor")
+        val expectedTenderNote = call.getString("expectedTenderNote")
+        val appContext = context ?: run { call.reject("Context not available"); return }
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val db = com.gauravsen.potholereporter.db.AppDatabase.getInstance(appContext)
+                val saved = db.withTransaction {
+                    // Re-read inside the transaction so a just-completed central sync is
+                    // never overwritten by a stale object returned to the WebView.
+                    val current = db.reportDao().getById(id)
+                        ?: throw IllegalArgumentException("Report not found")
+                    val hasPendingCentralObservation =
+                        db.centralObservationDao().hasPendingForReport(id)
+                    if (!canSaveComplaintPreparation(
+                            decision = current.decision,
+                            status = current.status,
+                            serverDuplicate = current.server_duplicate,
+                            unroutedReason = current.unrouted_reason,
+                            hasPendingCentralObservation = hasPendingCentralObservation,
+                            current = ComplaintCivicSnapshot(
+                                roadOwnership = current.road_ownership,
+                                tenderResolutionCheckedAt = current.tender_resolution_checked_at,
+                                tenderNumber = current.tender_number,
+                                serverPotholeId = current.server_pothole_id,
+                                address = current.address,
+                                bodyLgd = current.body_lgd,
+                                bodyName = current.body_name,
+                                emailTo = current.email_to,
+                                officerTitle = current.officer_title,
+                                contractor = current.contractor,
+                                tenderNote = current.tender_note,
+                            ),
+                            expected = ComplaintCivicSnapshot(
+                                roadOwnership = expectedRoadOwnership,
+                                tenderResolutionCheckedAt = expectedTenderResolutionCheckedAt,
+                                tenderNumber = expectedTenderNumber,
+                                serverPotholeId = expectedServerPotholeId,
+                                address = expectedAddress,
+                                bodyLgd = expectedBodyLgd,
+                                bodyName = expectedBodyName,
+                                emailTo = expectedEmailTo,
+                                officerTitle = expectedOfficerTitle,
+                                contractor = expectedContractor,
+                                tenderNote = expectedTenderNote,
+                            ),
+                        )
+                    ) {
+                        throw IllegalStateException(
+                            "Report authority or complaint state changed before email preparation",
+                        )
+                    }
+                    val updated = current.copy(
+                        email_to = emailTo,
+                        officer_title = officerTitle,
+                        email_subject = emailSubject,
+                        email_body = emailBody,
+                        address = address,
+                        body_lgd = bodyLgd,
+                        body_name = bodyName,
+                        road_ownership = roadOwnership,
+                        // The resolver's no-tender result is authoritative too. Null
+                        // clears legacy local matches instead of silently preserving a
+                        // stale contractor in the email draft/history row.
+                        tender_number = tenderNumber,
+                        contractor = contractor,
+                        tender_note = tenderNote,
+                        tender_resolution_checked_at = current.tender_resolution_checked_at
+                            ?: System.currentTimeMillis() / 1000.0,
+                    )
+                    db.reportDao().update(updated)
+                    updated
+                }
+                call.resolve(JSObject(reportToJson(saved).toString()))
+            } catch (e: Exception) {
+                call.reject("Failed to save email preparation: ${e.message}")
             }
         }
     }
@@ -501,6 +661,8 @@ class DriveModePlugin : Plugin() {
         obj.put("address", r.address ?: org.json.JSONObject.NULL)
         obj.put("body_lgd", r.body_lgd ?: org.json.JSONObject.NULL)
         obj.put("body_name", r.body_name ?: org.json.JSONObject.NULL)
+        obj.put("road_ownership", r.road_ownership ?: org.json.JSONObject.NULL)
+        obj.put("road_ownership_detail", r.road_ownership_detail ?: org.json.JSONObject.NULL)
         obj.put("email_subject", r.email_subject ?: org.json.JSONObject.NULL)
         obj.put("email_body", r.email_body ?: org.json.JSONObject.NULL)
         obj.put("email_to", r.email_to ?: org.json.JSONObject.NULL)

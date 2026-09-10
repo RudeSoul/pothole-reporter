@@ -28,6 +28,7 @@ data class CentralObservationEntity(
     val damage_type: String,
     val size: String?,
     val image_hash: String,
+    val detection_receipt: String?,
     val detector_provider: String,
     val detector_model: String,
     val image_detail: String,

@@ -1,10 +1,25 @@
 package com.gauravsen.potholereporter.drivemode
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DetectionDispatcherPolicyTest {
+    @Test
+    fun missingPersonalKeyFallsBackToSharedWhileExplicitChoicesRemainStable() {
+        assertEquals("shared_server", effectiveVisionProvider(null, ""))
+        assertEquals("personal", effectiveVisionProvider(null, "sk-test"))
+        assertEquals("shared_server", effectiveVisionProvider("personal", ""))
+        assertEquals("personal", effectiveVisionProvider("personal", "sk-test"))
+        assertEquals("shared_server", effectiveVisionProvider("shared_server", "sk-test"))
+        assertEquals("shared_server", effectiveVisionProvider("shared", "sk-test"))
+        assertEquals("shared_server", effectiveVisionProvider("shared_server", ""))
+        assertEquals("personal", effectiveVisionProvider("personal_openai", "sk-test"))
+        assertEquals("personal", effectiveVisionProvider("own_key", "sk-test"))
+        assertEquals("shared_server", effectiveVisionProvider("personal_openai", ""))
+    }
+
     @Test
     fun miniKeepsMinimalReasoningWhileGpt56UsesNone() {
         assertEquals(
@@ -47,6 +62,29 @@ class DetectionDispatcherPolicyTest {
         )
         assertEquals(originalDetail, detection["image_detail"])
         assertEquals(LlmContractGenerated.DETECT_PROMPT_VERSION, detection["prompt_version"])
+    }
+
+    @Test
+    fun sharedDetectionBindsStableObservationAndCoordinates() {
+        val fields = sharedVisionObservationFields(
+            clientObservationId = "drive:session-7:42",
+            lat = 12.9716,
+            lng = 77.5946,
+        )
+        assertEquals("drive:session-7:42", fields["client_observation_id"])
+        assertEquals(12.9716, fields["lat"])
+        assertEquals(77.5946, fields["lng"])
+
+        val first = sharedVisionIdempotencyKey("drive:session-7:42")
+        assertEquals(first, sharedVisionIdempotencyKey("drive:session-7:42"))
+        assertTrue(first.startsWith("vision-"))
+        assertNotEquals(first, sharedVisionIdempotencyKey("drive:session-7:43"))
+
+        val receipt = "A1".repeat(32)
+        assertEquals(receipt.lowercase(), normalizeDetectionReceipt("  $receipt  "))
+        assertEquals(null, normalizeDetectionReceipt("not-a-server-receipt"))
+        assertEquals("MG Road, Bengaluru", normalizeCentralAddressHint("  MG Road, Bengaluru "))
+        assertEquals(null, normalizeCentralAddressHint("   "))
     }
 
     @Test

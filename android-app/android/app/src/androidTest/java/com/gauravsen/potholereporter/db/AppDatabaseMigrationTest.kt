@@ -29,24 +29,27 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun migrate1To4_preservesLegacyRowsAndUsesPrivacySafeDefaults() {
+    fun migrate1To6_preservesLegacyRowsAndUsesPrivacySafeDefaults() {
         createVersionOneDatabase().use { database ->
             insertLegacyReport(database)
         }
 
         migrationHelper.runMigrationsAndValidate(
             TEST_DATABASE,
-            4,
+            6,
             true,
             AppDatabase.MIGRATION_1_2,
             AppDatabase.MIGRATION_2_3,
             AppDatabase.MIGRATION_3_4,
+            AppDatabase.MIGRATION_4_5,
+            AppDatabase.MIGRATION_5_6,
         ).use { database ->
             database.query(
                 """
                 SELECT id,damage_type,lat,lng,length(photo),length(photo_full),body_name,
                   server_pothole_id,server_duplicate,central_sync_eligible,
-                  detection_provider,tender_resolution_checked_at
+                  detection_provider,tender_resolution_checked_at,
+                  road_ownership,road_ownership_detail
                 FROM reports WHERE id = 7
                 """.trimIndent(),
             ).use { cursor ->
@@ -60,16 +63,15 @@ class AppDatabaseMigrationTest {
                 assertEquals(77.5946, cursor.getDouble(cursor.getColumnIndexOrThrow("lng")), 0.0)
                 assertEquals(3, cursor.getInt(cursor.getColumnIndexOrThrow("length(photo)")))
                 assertEquals(3, cursor.getInt(cursor.getColumnIndexOrThrow("length(photo_full)")))
-                assertEquals(
-                    "Legacy civic body",
-                    cursor.getString(cursor.getColumnIndexOrThrow("body_name")),
-                )
+                assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("body_name")))
                 assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("server_pothole_id")))
                 assertEquals(0, cursor.getInt(cursor.getColumnIndexOrThrow("server_duplicate")))
                 // Existing precise locations must not be uploaded merely because the app upgraded.
                 assertEquals(0, cursor.getInt(cursor.getColumnIndexOrThrow("central_sync_eligible")))
                 assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("detection_provider")))
                 assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("tender_resolution_checked_at")))
+                assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("road_ownership")))
+                assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("road_ownership_detail")))
                 assertFalse(cursor.moveToNext())
             }
 
@@ -391,6 +393,160 @@ class AppDatabaseMigrationTest {
             }
             database.execSQL("DELETE FROM reports WHERE id = 7")
             assertEquals(0L, scalarLong(database, "SELECT COUNT(*) FROM central_observation_outbox"))
+        }
+    }
+
+    @Test
+    fun migrate4To5_preservesOutboxAndAddsNullableDetectionReceipt() {
+        migrationHelper.createDatabase(TEST_DATABASE, 4).use { database ->
+            database.execSQL(
+                """
+                INSERT INTO reports (
+                  id,decision,status,capture_source,created_at,seen_count,server_duplicate,
+                  central_sync_eligible,dedupe_eligible,schema_version,evidence_count
+                ) VALUES (7,'accept','draft','drive_live',1725000001,1,0,1,1,4,1)
+                """.trimIndent(),
+            )
+            database.execSQL(
+                """
+                INSERT INTO central_observation_outbox (
+                  client_observation_id,report_id,observed_at_ms,lat,lng,damage_type,
+                  image_hash,detector_provider,detector_model,image_detail,evidence_count,
+                  attempt_count
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """.trimIndent(),
+                arrayOf<Any>(
+                    "receipt-migration-observation", 7, 1_725_000_000_000L,
+                    12.9716, 77.5946, "pothole_cavity", "b".repeat(64),
+                    "shared_server", "gpt-5-mini", "high", 1, 0,
+                ),
+            )
+        }
+
+        migrationHelper.runMigrationsAndValidate(
+            TEST_DATABASE,
+            5,
+            true,
+            AppDatabase.MIGRATION_4_5,
+        ).use { database ->
+            database.query(
+                """
+                SELECT client_observation_id,image_hash,detection_receipt
+                FROM central_observation_outbox
+                """.trimIndent(),
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(
+                    "receipt-migration-observation",
+                    cursor.getString(cursor.getColumnIndexOrThrow("client_observation_id")),
+                )
+                assertEquals(
+                    "b".repeat(64),
+                    cursor.getString(cursor.getColumnIndexOrThrow("image_hash")),
+                )
+                assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("detection_receipt")))
+                assertFalse(cursor.moveToNext())
+            }
+        }
+    }
+
+    @Test
+    fun migrate5To6_addsOwnershipProofAndInvalidatesAllLegacyAcceptedCivicCaches() {
+        migrationHelper.createDatabase(TEST_DATABASE, 5).use { database ->
+            database.execSQL(
+                """
+                INSERT INTO reports (
+                  id,decision,status,capture_source,created_at,seen_count,server_duplicate,
+                  central_sync_eligible,dedupe_eligible,schema_version,evidence_count,
+                  detection_provider,body_lgd,body_name,email_subject,email_body,email_to,
+                  officer_title,tender_number,contractor,tender_note,
+                  tender_resolution_reason,tender_resolution_checked_at
+                ) VALUES (
+                  7,'accept','queued','drive_live',1725000001,1,0,1,1,4,1,
+                  'shared_server','276600','BBMP','subject','body','commissioner@example.gov.in',
+                  'Commissioner','TENDER-7','Road Works Ltd','old match',
+                  'no_confident_match',1725000200
+                )
+                """.trimIndent(),
+            )
+            database.execSQL(
+                """
+                INSERT INTO reports (
+                  id,decision,status,capture_source,created_at,seen_count,server_duplicate,
+                  central_sync_eligible,dedupe_eligible,schema_version,evidence_count,
+                  detection_provider,body_lgd,body_name,email_to,
+                  tender_resolution_reason,tender_resolution_checked_at
+                ) VALUES (
+                  8,'accept','duplicate','drive_live',1725000002,1,1,1,1,4,1,
+                  'shared_server','276600','BBMP','commissioner@example.gov.in',
+                  'state_highway',1725000201
+                )
+                """.trimIndent(),
+            )
+            database.execSQL(
+                """
+                INSERT INTO reports (
+                  id,decision,status,capture_source,created_at,seen_count,server_duplicate,
+                  central_sync_eligible,dedupe_eligible,schema_version,evidence_count,
+                  detection_provider,body_lgd,body_name,email_to,
+                  tender_resolution_reason,tender_resolution_checked_at
+                ) VALUES (
+                  9,'accept','queued','manual',1725000003,1,0,1,1,4,1,
+                  'personal_openai','276600','BBMP','commissioner@example.gov.in',
+                  'no_confident_match',1725000202
+                )
+                """.trimIndent(),
+            )
+        }
+
+        migrationHelper.runMigrationsAndValidate(
+            TEST_DATABASE,
+            6,
+            true,
+            AppDatabase.MIGRATION_5_6,
+        ).use { database ->
+            database.query("SELECT * FROM reports WHERE id = 7").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("queued", cursor.getString(cursor.getColumnIndexOrThrow("status")))
+                assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("unrouted_reason")))
+                listOf(
+                    "road_ownership",
+                    "road_ownership_detail",
+                    "tender_resolution_reason",
+                    "tender_resolution_checked_at",
+                    "body_lgd",
+                    "body_name",
+                    "email_subject",
+                    "email_body",
+                    "email_to",
+                    "officer_title",
+                    "tender_number",
+                    "contractor",
+                    "tender_note",
+                ).forEach { column ->
+                    assertTrue("$column must be invalidated", cursor.isNull(cursor.getColumnIndexOrThrow(column)))
+                }
+                assertFalse(cursor.moveToNext())
+            }
+
+            database.query("SELECT * FROM reports WHERE id = 8").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("duplicate", cursor.getString(cursor.getColumnIndexOrThrow("status")))
+                assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("unrouted_reason")))
+                assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("road_ownership")))
+                assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("email_to")))
+            }
+
+            database.query("SELECT * FROM reports WHERE id = 9").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("queued", cursor.getString(cursor.getColumnIndexOrThrow("status")))
+                listOf(
+                    "body_lgd", "body_name", "email_to", "tender_resolution_reason",
+                    "tender_resolution_checked_at", "road_ownership", "road_ownership_detail",
+                ).forEach { column ->
+                    assertTrue("$column must be invalidated", cursor.isNull(cursor.getColumnIndexOrThrow(column)))
+                }
+            }
         }
     }
 

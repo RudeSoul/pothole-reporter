@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS observations (
   image_hash            TEXT NOT NULL,
   detector_provider     TEXT CHECK (detector_provider IN
                               ('shared_server','personal_openai','own_key')),
+  verification_state    TEXT NOT NULL DEFAULT 'client_attested'
+                            CHECK (verification_state IN
+                              ('server_verified_shared','client_attested')),
   detector_model        TEXT,
   prompt_version        TEXT,
   schema_version        INTEGER,
@@ -147,4 +150,40 @@ CREATE TABLE IF NOT EXISTS usage_counters (
   used        INTEGER NOT NULL DEFAULT 0,
   updated_at  INTEGER NOT NULL,
   PRIMARY KEY(scope, counter_key)
+);
+
+-- A successful shared-server verdict authorizes exactly one factual observation.
+-- The image itself is never retained: the receipt binds only its SHA-256 digest,
+-- the canonical verdict, the signed installation, and (when supplied) coordinates.
+CREATE TABLE IF NOT EXISTS shared_detection_receipts (
+  receipt_id                    TEXT PRIMARY KEY,
+  install_id                   TEXT NOT NULL REFERENCES installations(id),
+  client_observation_id        TEXT NOT NULL,
+  image_hash                   TEXT NOT NULL,
+  detection_lat                REAL,
+  detection_lng                REAL,
+  damage_type                  TEXT NOT NULL
+                                   CHECK (damage_type IN ('pothole_cavity','failed_patch',
+                                     'surface_breakup','rut_or_depression','other_road_damage')),
+  size                         TEXT CHECK (size IS NULL OR size IN ('small','medium','large')),
+  backend_provider             TEXT NOT NULL,
+  detector_model               TEXT,
+  prompt_version               TEXT NOT NULL,
+  schema_version               INTEGER NOT NULL,
+  issued_at                    INTEGER NOT NULL,
+  expires_at                   INTEGER NOT NULL,
+  consumed_at                  INTEGER,
+  consumed_request_id          TEXT,
+  consumed_client_observation_id TEXT
+);
+CREATE INDEX IF NOT EXISTS shared_detection_receipts_expiry
+  ON shared_detection_receipts(expires_at);
+CREATE INDEX IF NOT EXISTS shared_detection_receipts_observation
+  ON shared_detection_receipts(install_id, client_observation_id);
+
+-- Public Nominatim permits at most one request per second for an entire application.
+-- This shared D1 lease is a correctness gate across Worker isolates, not a cache.
+CREATE TABLE IF NOT EXISTS external_rate_gates (
+  name            TEXT PRIMARY KEY,
+  next_allowed_at INTEGER NOT NULL
 );

@@ -11,7 +11,7 @@ import com.gauravsen.potholereporter.db.entities.ReportEntity
 
 @Database(
     entities = [ReportEntity::class, DriveSessionEntity::class, CentralObservationEntity::class],
-    version = 4,
+    version = 6,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -29,7 +29,13 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "pothole_reporter.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                ).addMigrations(
+                    MIGRATION_1_2,
+                    MIGRATION_2_3,
+                    MIGRATION_3_4,
+                    MIGRATION_4_5,
+                    MIGRATION_5_6,
+                )
                     .build()
                     .also { INSTANCE = it }
             }
@@ -207,6 +213,51 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS index_central_observation_outbox_report_id " +
                         "ON central_observation_outbox(report_id)",
+                )
+            }
+        }
+
+        /** Persist the server's proof that a shared detection produced this sighting. */
+        @JvmField
+        val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE central_observation_outbox " +
+                        "ADD COLUMN detection_receipt TEXT",
+                )
+            }
+        }
+
+        /**
+         * Persist authoritative ownership separately from tender-match diagnostics.
+         *
+         * Older rows in both detector modes have no durable proof that a populated civic
+         * body was resolved by the current central policy. Keep them retryable but clear
+         * every attribution so neither Room nor the WebView can name an old recipient.
+         */
+        @JvmField
+        val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE reports ADD COLUMN road_ownership TEXT")
+                db.execSQL("ALTER TABLE reports ADD COLUMN road_ownership_detail TEXT")
+                db.execSQL(
+                    """
+                    UPDATE reports SET
+                      tender_resolution_checked_at = NULL,
+                      tender_resolution_reason = NULL,
+                      body_lgd = NULL,
+                      body_name = NULL,
+                      email_subject = NULL,
+                      email_body = NULL,
+                      email_to = NULL,
+                      officer_title = NULL,
+                      tender_number = NULL,
+                      contractor = NULL,
+                      tender_note = NULL,
+                      unrouted_reason = NULL,
+                      status = CASE WHEN server_duplicate = 1 THEN 'duplicate' ELSE 'queued' END
+                    WHERE decision = 'accept'
+                    """.trimIndent(),
                 )
             }
         }
