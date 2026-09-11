@@ -72,7 +72,7 @@
   <header>
     <p class="meta">Pothole Reporter · Android package <code>com.gauravsen.potholereporter</code></p>
     <h1>Privacy Policy</h1>
-    <p class="meta">Effective and last updated: 6 September 2026</p>
+    <p class="meta">Effective and last updated: 11 September 2026</p>
     <nav aria-label="Related pages">
       <a href="sources.html">Data sources</a>
       <a href="https://github.com/coding-parrot/pothole-reporter">Source code</a>
@@ -104,8 +104,13 @@
         <tbody>
           <tr>
             <td>Road photos and video frames</td>
-            <td>A manual photo, or one still selected from Drive Mode or saved drive video, is resized for each vision request. In shared mode that image passes through the project service to its configured detector and is not retained by the project service. The default detector is OpenAI; an operator may instead configure an in-house YOLO gateway for detection. In personal mode the image goes directly from the app to OpenAI. Images are not blurred first and may contain faces, number plates, people, vehicles, or shopfronts. The complete saved video file is not uploaded.</td>
+            <td>A manual photo, or one still selected from Drive Mode, saved drive video, or an imported road video, is resized for each vision request. In shared mode that image passes through the project service to its configured detector and is not retained by the project service. The default detector is OpenAI; an operator may instead configure an in-house YOLO gateway for detection. In personal mode the image goes directly from the app to OpenAI. Images are not blurred first and may contain faces, number plates, people, vehicles, or shopfronts. The complete video and its audio are not uploaded.</td>
             <td>Assess visible road damage and create an editable local report.</td>
+          </tr>
+          <tr>
+            <td>Imported videos and optional GPS sidecars</td>
+            <td>Videos chosen in the app remain at their original location and are sampled locally. Android retains read access to selected media while it is needed. A video shared in from another app may be copied temporarily to bounded app-private cache because the sender's grant can expire. An optional timestamped GPX file is parsed locally to associate sample times with coordinates; the GPX file itself is not uploaded. Without a matching track or explicit current-location choice, imported frames have no location.</td>
+            <td>Accept recorded road footage without uploading the complete recording or inventing where it was captured.</td>
           </tr>
           <tr>
             <td>Precise location and drive motion data</td>
@@ -178,6 +183,7 @@
     <h2>Retention and deletion</h2>
     <ul>
       <li>Drive recording is off by default. If you enable it, clips are written to app-private storage on the device.</li>
+      <li>Picked imported videos are read from their existing location. Temporary copies created for Android Share imports are removed when analysis consumes or discards them and are automatically pruned after 24 hours. One shared clip is capped at 512 MiB, all pending shared clips at 768 MiB, and at least 256 MiB of device free space is reserved.</li>
       <li>Reports, report photos, drive summaries, and recorded footage remain in app-private storage until the app deletes them automatically or you delete them.</li>
       <li>A failed project-service upload for an accepted pothole stays in the device's retry queue and is attempted again when the app starts or connectivity returns. Deleting that local report, or using <strong>Delete all app data</strong>, also deletes its pending retry. Deletion cannot recall an observation that the project service already accepted.</li>
       <li>A successful tender-resolution response, including its resolved road address, is retained by the project service for idempotent retry for no more than 24 hours. Scheduled pruning removes older tender replay records.</li>

@@ -83,6 +83,24 @@
     <button class="ghost" id="dashBtn" style="width:100%;margin-bottom:14px">&#128506;&#65039; &nbsp;Your contribution</button>
     <button class="primary" id="driveBtn" style="background:#26272c;color:#f2f2f4;margin-top:-8px">&#128663; &nbsp;Drive mode</button>
     <input type="file" id="fileInput" accept="image/*" capture="environment" class="hidden">
+    <div class="card" id="videoImportCard">
+      <button class="ghost" id="videoImportBtn" style="width:100%">&#127909; &nbsp;Import Meta glasses / dashcam video</button>
+      <div class="meta" id="videoImportHint" style="margin-top:8px"></div>
+      <div id="nativeVideoImports" class="hidden" style="margin-top:10px"></div>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="ghost" id="gpxImportBtn" style="padding:10px">Add GPS track (.gpx)</button>
+        <button class="ghost danger hidden" id="gpxClearBtn" style="padding:10px">Remove GPS track</button>
+      </div>
+      <div class="meta" id="gpxImportStatus" style="margin-top:6px"></div>
+      <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:13px;color:#f2f2f4">
+        <input type="checkbox" id="videoUseCurrentLocation" style="width:18px;height:18px;accent-color:var(--accent);flex:none;margin-top:1px">
+        <span id="videoCurrentLocationLabel">Use this phone's current position for every frame (only when the video was recorded here)</span>
+      </label>
+    </div>
+    <input type="file" id="videoInput"
+      accept="video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.m4v,.mov,.webm,.mkv,.avi"
+      multiple class="hidden">
+    <input type="file" id="gpxInput" accept="application/gpx+xml,.gpx" class="hidden">
     <h2 id="reportsTitle">Your reports</h2>
     <div id="list"><div class="empty">No reports yet.</div></div>
   </div>
@@ -90,6 +108,7 @@
   <div id="progress" class="hidden">
     <img id="progressPhoto" class="big-photo" alt="">
     <div class="status"><div class="spin"></div><div id="progressText">Working...</div></div>
+    <button class="ghost danger hidden" id="progressCancel" style="width:100%">Cancel video analysis</button>
   </div>
 
   <div id="detail" class="hidden"></div>
@@ -269,6 +288,39 @@ const I18N = {
     sub: "Capture it. Verify the damage. Email the responsible authority.",
     report_btn: "&#128247; &nbsp;Report road damage",
     drive_btn: "&#128663; &nbsp;Drive mode",
+    video_import_btn: "&#127909; &nbsp;Import Meta glasses / dashcam video",
+    video_import_hint: "Choose one video or several dashcam clips in recording order. MP4/MOV (H.264) and WebM work on most devices; an unsupported codec gets a clear error. Files chosen with Import are read in place. A video shared directly into the Android app may use an app-private temporary copy for at most 24 hours. Only sampled JPEG frames are sent for checking.",
+    gpx_add: "Add GPS track (.gpx)", gpx_remove: "Remove GPS track",
+    gpx_none: "No GPS track selected. Imported frames have no route location by default.",
+    gpx_ready: "GPS: {name} · {n} timestamped points. It is used only where absolute GPX time overlaps embedded MP4/MOV recording time.",
+    gpx_bad: "That GPX file needs at least two valid track points with UTC timestamps.",
+    video_current_location: "Use this phone's current position for every frame (only when the video was recorded here)",
+    video_no_location_confirm: "No timestamp-matched GPX track or current-position opt-in is available. Continue without a location? Damage can still be detected, but the responsible authority, contractor and tender cannot be matched.",
+    video_current_location_failed: "The current position was selected, but the phone could not get a GPS fix. No video was analysed.",
+    video_import_preparing: "Reading video {i} of {n} without copying it into app storage...",
+    video_import_confirm: "Analyse {files} video file(s)? The full timeline will be covered by {frames} sampled checks (about one every {step} seconds). Only those JPEG frames are uploaded. Files chosen with Import stay in place; a direct Android Share can leave a private temporary copy until analysis, discard, deletion, or the 24-hour limit.",
+    video_import_repeat: "These exact video clips and location source were analysed before. Analyse them again and spend another {frames} checks?",
+    video_import_too_many: "Select at most {n} video clips at once.",
+    video_import_progress: "Imported frame {i} of {n} · {found} new",
+    video_import_cancel: "Cancel video analysis", video_import_cancelling: "Stopping after the current frame...",
+    video_import_cancelled: "Video analysis stopped after {checked} of {n} sampled frames. Completed detections were kept. A pending source remains available for retry until you discard or delete it.",
+    video_import_done: "Video analysis complete: {found} new road-damage events from {checked} sampled frames.",
+    video_import_partial: "Video analysis finished with {failed} failed checks out of {n}. Completed detections were kept. Last error: {err}",
+    video_import_stopped: "Video analysis stopped after {checked} of {n} sampled checks: {err} Completed detections were kept and no further requests were sent.",
+    video_import_skipped: "Skipped {n} video file(s) that this device could not decode. The remaining clips will still be analysed.",
+    video_codec_error: "{name} could not be decoded on this device. Meta glasses exports should be original MP4; for dashcams, export or convert to MP4 with H.264/AVC video. HEVC/H.265, AVI and some MKV files are not supported by many Android browsers.",
+    video_gpx_unaligned: "The GPX timestamps do not overlap trustworthy embedded recording timestamps in these MP4/MOV clips. The app will not guess their locations. Remove the GPX track to analyse without routing, or use the current-position option only if the footage was recorded here.",
+    video_location_gpx: "Video location: timestamp-matched GPX track.",
+    video_location_current: "Video location: current phone position explicitly applied to every frame.",
+    video_location_none: "Video location: none; authority, contractor and tender matching is unavailable.",
+    video_import_group: "Imported video · {summary}",
+    video_import_history: "{date} · imported video · {found}{known} · {checked} sampled frames checked",
+    native_video_pending: "Videos ready to analyse",
+    native_video_analyse: "Analyse", native_video_analyse_all: "Analyse all", native_video_discard: "Discard",
+    native_video_meta: "{mb} MB · {duration} · {codec}",
+    native_video_temporary_copy: "Direct Android Share: app-private temporary copy, removed after analysis/discard/delete or within 24 hours.",
+    native_video_unknown_duration: "unknown duration", native_video_unknown_codec: "codec unknown",
+    native_video_error: "Video import problem: {err}",
     your_reports: "Your reports",
     no_reports: "No reports yet.",
     banner_setup: "Shared pothole checking is unavailable right now. Retry later, or use your own OpenAI API key in Settings.",
@@ -289,7 +341,7 @@ const I18N = {
     independent_note: "Independent, unofficial app. It is not affiliated with or endorsed by any government body. Routing is best-effort and must be reviewed before sending.",
     privacy_title: "Before camera and location access",
     privacy_body: "If you continue, the app will use camera images and precise location. Shared vision routes selected images through the project service to its configured detector without project retention. Personal vision sends your key and images directly to OpenAI; the key never goes to the project service.",
-    privacy_local: "In both modes, accepted pothole coordinates and small metadata, including an image hash and pseudonymous installation ID, go to the project service for tender resolution, nearby deduplication, aggregate impact and the general map. If that accepted-metadata upload fails, it stays queued on this device and retries when the app starts or reconnects, until you delete the report. Reports, evidence photos and optional drive video stay on this device until deleted.",
+    privacy_local: "In both modes, accepted pothole coordinates and small metadata, including an image hash and pseudonymous installation ID, go to the project service for tender resolution, nearby deduplication, aggregate impact and the general map. If that accepted-metadata upload fails, it stays queued on this device and retries when the app starts or reconnects, until you delete the report. Reports, evidence photos and optional drive video stay on this device until deleted. Videos chosen through Import are read in place; a video shared directly into Android may be held as an app-private temporary copy for at most 24 hours and is removed sooner after successful analysis, discard, or Delete all app data.",
     privacy_government: "Exact detected pothole coordinates appear on the general map and service logs contain request IDs. This independent app is not a government service. Email is its only complaint-filing option; it opens a draft addressed to the routed authority and never presses Send. Network processing can occur outside India.",
     privacy_link: "Privacy policy", sources_link: "Data sources and limits",
     privacy_accept: "Continue", privacy_decline: "Not now",
@@ -421,6 +473,39 @@ const I18N = {
     sub: "ಚಿತ್ರ ಸೆರೆಹಿಡಿಯಿರಿ. ಹಾನಿ ಪರಿಶೀಲಿಸಿ. ಜವಾಬ್ದಾರ ಅಧಿಕಾರಿಗೆ ಇಮೇಲ್ ಮಾಡಿ.",
     report_btn: "&#128247; &nbsp;ರಸ್ತೆ ಹಾನಿ ವರದಿ ಮಾಡಿ",
     drive_btn: "&#128663; &nbsp;ಡ್ರೈವ್ ಮೋಡ್",
+    video_import_btn: "&#127909; &nbsp;Meta glasses / ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್ ವಿಡಿಯೋ ಆಮದು",
+    video_import_hint: "ಒಂದು ವಿಡಿಯೋ ಅಥವಾ ಹಲವಾರು ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್ ತುಣುಕುಗಳನ್ನು ಚಿತ್ರೀಕರಣ ಕ್ರಮದಲ್ಲಿ ಆಯ್ಕೆಮಾಡಿ. MP4/MOV (H.264) ಮತ್ತು WebM ಸಾಮಾನ್ಯವಾಗಿ ಕೆಲಸ ಮಾಡುತ್ತವೆ. Import ಮೂಲಕ ಆಯ್ದ ಫೈಲ್‌ಗಳನ್ನು ಅದೇ ಸ್ಥಳದಿಂದ ಓದಲಾಗುತ್ತದೆ. Android ಗೆ ನೇರವಾಗಿ Share ಮಾಡಿದ ವಿಡಿಯೋವನ್ನು ಆ್ಯಪ್‌ನ ಖಾಸಗಿ ತಾತ್ಕಾಲಿಕ ಪ್ರತಿಯಾಗಿ ಗರಿಷ್ಠ 24 ಗಂಟೆ ಇಡಬಹುದು. ಆಯ್ದ JPEG ಫ್ರೇಮ್‌ಗಳನ್ನು ಮಾತ್ರ ಪರಿಶೀಲನೆಗೆ ಕಳುಹಿಸಲಾಗುತ್ತದೆ.",
+    gpx_add: "GPS ಟ್ರ್ಯಾಕ್ ಸೇರಿಸಿ (.gpx)", gpx_remove: "GPS ಟ್ರ್ಯಾಕ್ ತೆಗೆದುಹಾಕಿ",
+    gpx_none: "GPS ಟ್ರ್ಯಾಕ್ ಆಯ್ಕೆ ಆಗಿಲ್ಲ. ಆಮದು ಫ್ರೇಮ್‌ಗಳಿಗೆ ಪೂರ್ವನಿಯೋಜಿತವಾಗಿ ಮಾರ್ಗ ಸ್ಥಳ ಇರುವುದಿಲ್ಲ.",
+    gpx_ready: "GPS: {name} · ಸಮಯ ಹೊಂದಿದ {n} ಪಾಯಿಂಟ್‌ಗಳು. GPX ಸಮಯವು MP4/MOV ದಾಖಲೆಯ ಸಮಯಕ್ಕೆ ಹೊಂದಿದಲ್ಲಿ ಮಾತ್ರ ಬಳಸಲಾಗುತ್ತದೆ.",
+    gpx_bad: "GPX ಫೈಲ್‌ನಲ್ಲಿ UTC ಸಮಯ ಹೊಂದಿರುವ ಕನಿಷ್ಠ ಎರಡು ಮಾನ್ಯ ಟ್ರ್ಯಾಕ್ ಪಾಯಿಂಟ್‌ಗಳು ಬೇಕು.",
+    video_current_location: "ವಿಡಿಯೋ ಇಲ್ಲಿಯೇ ಚಿತ್ರೀಕರಿಸಿದ್ದರೆ ಮಾತ್ರ ಪ್ರತಿಯೊಂದು ಫ್ರೇಮ್‌ಗೆ ಈ ಫೋನ್‌ನ ಈಗಿನ ಸ್ಥಳ ಬಳಸಿ",
+    video_no_location_confirm: "ಸಮಯಕ್ಕೆ ಹೊಂದಿದ GPX ಅಥವಾ ಈಗಿನ ಸ್ಥಳ ಬಳಸುವ ಆಯ್ಕೆ ಇಲ್ಲ. ಸ್ಥಳವಿಲ್ಲದೆ ಮುಂದುವರಿಸಬೇಕೆ? ಹಾನಿ ಪತ್ತೆಯಾಗಬಹುದು, ಆದರೆ ಪ್ರಾಧಿಕಾರ, ಗುತ್ತಿಗೆದಾರ ಮತ್ತು ಟೆಂಡರ್ ಹೊಂದಿಸಲಾಗುವುದಿಲ್ಲ.",
+    video_current_location_failed: "ಈಗಿನ ಸ್ಥಳ ಆಯ್ಕೆ ಆಗಿದೆ, ಆದರೆ GPS ಸ್ಥಳ ಸಿಗಲಿಲ್ಲ. ಯಾವುದೇ ವಿಡಿಯೋ ವಿಶ್ಲೇಷಿಸಲಾಗಿಲ್ಲ.",
+    video_import_preparing: "ಆ್ಯಪ್ ಸಂಗ್ರಹಕ್ಕೆ ನಕಲಿಸದೆ ವಿಡಿಯೋ {i}/{n} ಓದಲಾಗುತ್ತಿದೆ...",
+    video_import_confirm: "{files} ವಿಡಿಯೋ ಫೈಲ್ ವಿಶ್ಲೇಷಿಸಬೇಕೆ? ಪೂರ್ಣ ಸಮಯರೇಖೆಯನ್ನು {frames} ಮಾದರಿ ಪರಿಶೀಲನೆಗಳು ಒಳಗೊಳ್ಳುತ್ತವೆ (ಸುಮಾರು ಪ್ರತಿ {step} ಸೆಕೆಂಡಿಗೆ ಒಂದು). ಆ JPEG ಫ್ರೇಮ್‌ಗಳು ಮಾತ್ರ ಅಪ್‌ಲೋಡ್ ಆಗುತ್ತವೆ. ನೇರ Android Share ತಾತ್ಕಾಲಿಕ ಖಾಸಗಿ ಪ್ರತಿಯನ್ನು ವಿಶ್ಲೇಷಣೆ, ತ್ಯಜಿಸುವಿಕೆ, ಅಳಿಸುವಿಕೆ ಅಥವಾ 24 ಗಂಟೆಯ ಮಿತಿವರೆಗೆ ಇಡಬಹುದು.",
+    video_import_repeat: "ಇದೇ ವಿಡಿಯೋ ತುಣುಕುಗಳು ಮತ್ತು ಸ್ಥಳ ಮೂಲವನ್ನು ಮೊದಲು ವಿಶ್ಲೇಷಿಸಲಾಗಿದೆ. ಇನ್ನೂ {frames} ಪರಿಶೀಲನೆಗಳನ್ನು ಖರ್ಚುಮಾಡಿ ಮತ್ತೆ ವಿಶ್ಲೇಷಿಸಬೇಕೆ?",
+    video_import_too_many: "ಒಮ್ಮೆ ಗರಿಷ್ಠ {n} ವಿಡಿಯೋ ತುಣುಕುಗಳನ್ನು ಆಯ್ಕೆಮಾಡಿ.",
+    video_import_progress: "ಆಮದು ಫ್ರೇಮ್ {i}/{n} · {found} ಹೊಸದು",
+    video_import_cancel: "ವಿಡಿಯೋ ವಿಶ್ಲೇಷಣೆ ರದ್ದುಮಾಡಿ", video_import_cancelling: "ಈಗಿನ ಫ್ರೇಮ್ ನಂತರ ನಿಲ್ಲಿಸಲಾಗುತ್ತಿದೆ...",
+    video_import_cancelled: "{n}ರಲ್ಲಿ {checked} ಮಾದರಿ ಫ್ರೇಮ್‌ಗಳ ನಂತರ ವಿಶ್ಲೇಷಣೆ ನಿಂತಿದೆ. ಪೂರ್ಣಗೊಂಡ ಪತ್ತೆಗಳು ಉಳಿದಿವೆ. ಬಾಕಿ ಮೂಲವನ್ನು ನೀವು ತ್ಯಜಿಸುವ ಅಥವಾ ಅಳಿಸುವವರೆಗೆ ಮರುಪ್ರಯತ್ನಕ್ಕೆ ಬಳಸಬಹುದು.",
+    video_import_done: "ವಿಡಿಯೋ ವಿಶ್ಲೇಷಣೆ ಪೂರ್ಣ: {checked} ಮಾದರಿ ಫ್ರೇಮ್‌ಗಳಿಂದ {found} ಹೊಸ ರಸ್ತೆ ಹಾನಿ ಘಟನೆಗಳು.",
+    video_import_partial: "{n}ರಲ್ಲಿ {failed} ಪರಿಶೀಲನೆಗಳು ವಿಫಲವಾದವು. ಪೂರ್ಣಗೊಂಡ ಪತ್ತೆಗಳು ಉಳಿದಿವೆ. ಕೊನೆಯ ದೋಷ: {err}",
+    video_import_stopped: "{n}ರಲ್ಲಿ {checked} ಮಾದರಿ ಪರಿಶೀಲನೆಗಳ ನಂತರ ವಿಡಿಯೋ ವಿಶ್ಲೇಷಣೆ ನಿಂತಿದೆ: {err} ಪೂರ್ಣಗೊಂಡ ಪತ್ತೆಗಳು ಉಳಿದಿವೆ ಮತ್ತು ಇನ್ನಷ್ಟು ವಿನಂತಿಗಳನ್ನು ಕಳುಹಿಸಲಿಲ್ಲ.",
+    video_import_skipped: "ಈ ಸಾಧನದಲ್ಲಿ ಡಿಕೋಡ್ ಆಗದ {n} ವಿಡಿಯೋ ಫೈಲ್‌ಗಳನ್ನು ಬಿಟ್ಟುಬಿಡಲಾಗಿದೆ. ಉಳಿದ ತುಣುಕುಗಳನ್ನು ವಿಶ್ಲೇಷಿಸಲಾಗುತ್ತದೆ.",
+    video_codec_error: "ಈ ಸಾಧನದಲ್ಲಿ {name} ಡಿಕೋಡ್ ಆಗಲಿಲ್ಲ. Meta glasses ಮೂಲ MP4 ಬಳಸಿ; ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್ ವಿಡಿಯೋವನ್ನು H.264/AVC ಇರುವ MP4ಗೆ ರಫ್ತು ಅಥವಾ ಪರಿವರ್ತಿಸಿ. HEVC/H.265, AVI ಮತ್ತು ಕೆಲವು MKV ಫೈಲ್‌ಗಳಿಗೆ ಅನೇಕ Android ಬ್ರೌಸರ್‌ಗಳಲ್ಲಿ ಬೆಂಬಲವಿಲ್ಲ.",
+    video_gpx_unaligned: "GPX ಸಮಯಗಳು ಈ MP4/MOV ತುಣುಕುಗಳ ವಿಶ್ವಾಸಾರ್ಹ ಒಳನಿರ್ಮಿತ ದಾಖಲೆಯ ಸಮಯಕ್ಕೆ ಹೊಂದುವುದಿಲ್ಲ. ಆ್ಯಪ್ ಸ್ಥಳವನ್ನು ಊಹಿಸುವುದಿಲ್ಲ. ಸ್ಥಳವಿಲ್ಲದೆ ವಿಶ್ಲೇಷಿಸಲು GPX ತೆಗೆದುಹಾಕಿ, ಅಥವಾ ವಿಡಿಯೋ ಇಲ್ಲಿಯೇ ತೆಗೆದಿದ್ದರೆ ಮಾತ್ರ ಈಗಿನ ಸ್ಥಳ ಆಯ್ಕೆ ಬಳಸಿ.",
+    video_location_gpx: "ವಿಡಿಯೋ ಸ್ಥಳ: ಸಮಯಕ್ಕೆ ಹೊಂದಿದ GPX ಟ್ರ್ಯಾಕ್.",
+    video_location_current: "ವಿಡಿಯೋ ಸ್ಥಳ: ಪ್ರತಿಯೊಂದು ಫ್ರೇಮ್‌ಗೆ ಸ್ಪಷ್ಟವಾಗಿ ಅನ್ವಯಿಸಿದ ಈಗಿನ ಫೋನ್ ಸ್ಥಳ.",
+    video_location_none: "ವಿಡಿಯೋ ಸ್ಥಳ: ಇಲ್ಲ; ಪ್ರಾಧಿಕಾರ, ಗುತ್ತಿಗೆದಾರ ಮತ್ತು ಟೆಂಡರ್ ಹೊಂದಾಣಿಕೆ ಲಭ್ಯವಿಲ್ಲ.",
+    video_import_group: "ಆಮದು ವಿಡಿಯೋ · {summary}",
+    video_import_history: "{date} · ಆಮದು ವಿಡಿಯೋ · {found}{known} · {checked} ಮಾದರಿ ಫ್ರೇಮ್ ಪರಿಶೀಲನೆ",
+    native_video_pending: "ವಿಶ್ಲೇಷಣೆಗೆ ಸಿದ್ಧವಾಗಿರುವ ವಿಡಿಯೋಗಳು",
+    native_video_analyse: "ವಿಶ್ಲೇಷಿಸಿ", native_video_analyse_all: "ಎಲ್ಲವನ್ನೂ ವಿಶ್ಲೇಷಿಸಿ", native_video_discard: "ತ್ಯಜಿಸಿ",
+    native_video_meta: "{mb} MB · {duration} · {codec}",
+    native_video_temporary_copy: "ನೇರ Android Share: ಆ್ಯಪ್‌ನ ಖಾಸಗಿ ತಾತ್ಕಾಲಿಕ ಪ್ರತಿ; ವಿಶ್ಲೇಷಣೆ/ತ್ಯಜಿಸುವಿಕೆ/ಅಳಿಸುವಿಕೆ ನಂತರ ಅಥವಾ 24 ಗಂಟೆಯೊಳಗೆ ತೆಗೆದುಹಾಕಲಾಗುತ್ತದೆ.",
+    native_video_unknown_duration: "ಅವಧಿ ತಿಳಿದಿಲ್ಲ", native_video_unknown_codec: "ಕೋಡೆಕ್ ತಿಳಿದಿಲ್ಲ",
+    native_video_error: "ವಿಡಿಯೋ ಆಮದು ಸಮಸ್ಯೆ: {err}",
     your_reports: "ನಿಮ್ಮ ವರದಿಗಳು",
     no_reports: "ಇನ್ನೂ ವರದಿಗಳಿಲ್ಲ. ಗುಂಡಿ ಹುಡುಕಲು ಹೊರಡಿ.",
     banner_setup: "ಹಂಚಿದ ರಸ್ತೆ ಹಾನಿ ಪರಿಶೀಲನೆ ಈಗ ಲಭ್ಯವಿಲ್ಲ. ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ, ಅಥವಾ ಸೆಟ್ಟಿಂಗ್‌ಗಳಲ್ಲಿ ನಿಮ್ಮ OpenAI API ಕೀ ಬಳಸಿ.",
@@ -441,7 +526,7 @@ const I18N = {
     independent_note: "ಇದು ಸ್ವತಂತ್ರ, ಅನಧಿಕೃತ ಆ್ಯಪ್. ಯಾವುದೇ ಸರ್ಕಾರಿ ಸಂಸ್ಥೆಯೊಂದಿಗೆ ಸಂಬಂಧ ಅಥವಾ ಅನುಮೋದನೆ ಇಲ್ಲ. ಕಚೇರಿ ಸೂಚನೆ ಅತ್ಯುತ್ತಮ ಪ್ರಯತ್ನ ಮಾತ್ರ; ಕಳುಹಿಸುವ ಮೊದಲು ಪರಿಶೀಲಿಸಿ.",
     privacy_title: "ಕ್ಯಾಮೆರಾ ಮತ್ತು ಸ್ಥಳ ಅನುಮತಿಯ ಮೊದಲು",
     privacy_body: "ಮುಂದುವರಿಸಿದರೆ ಆ್ಯಪ್ ಕ್ಯಾಮೆರಾ ಚಿತ್ರಗಳು ಮತ್ತು ನಿಖರ ಸ್ಥಳ ಬಳಸುತ್ತದೆ. ಹಂಚಿದ ವಿಷನ್‌ನಲ್ಲಿ ಆಯ್ದ ಚಿತ್ರಗಳು ಯೋಜನೆಯ ಸೇವೆಯಲ್ಲಿ ಉಳಿಯದೆ, ಅದು ಸಂರಚಿಸಿರುವ ಪತ್ತೆ ವ್ಯವಸ್ಥೆಗೆ ಹೋಗುತ್ತವೆ. ವೈಯಕ್ತಿಕ ವಿಷನ್‌ನಲ್ಲಿ ಕೀ ಮತ್ತು ಚಿತ್ರಗಳು ನೇರವಾಗಿ OpenAI ಗೆ ಹೋಗುತ್ತವೆ; ಕೀ ಯೋಜನೆಯ ಸೇವೆಗೆ ಎಂದಿಗೂ ಹೋಗುವುದಿಲ್ಲ.",
-    privacy_local: "ಎರಡೂ ಮೋಡ್‌ಗಳಲ್ಲಿ ದೃಢಪಟ್ಟ ಗುಂಡಿಯ ನಿಖರ ಸ್ಥಳ ಮತ್ತು ಚಿತ್ರ ಹ್ಯಾಶ್ ಹಾಗೂ ಅನಾಮಧೇಯ ಸ್ಥಾಪನೆ ID ಸೇರಿದಂತೆ ಸಣ್ಣ ಮೆಟಾಡೇಟಾ ಟೆಂಡರ್ ಪರಿಹಾರ, ಹತ್ತಿರದ ನಕಲು ತಡೆ, ಒಟ್ಟು ಪರಿಣಾಮ ಮತ್ತು ಸಾಮಾನ್ಯ ನಕ್ಷೆಗಾಗಿ ಯೋಜನೆಯ ಸೇವೆಗೆ ಹೋಗುತ್ತದೆ. ಈ ಮೆಟಾಡೇಟಾ ಅಪ್‌ಲೋಡ್ ವಿಫಲವಾದರೆ, ಆ ವರದಿಯನ್ನು ಅಳಿಸುವವರೆಗೆ ಅದು ಸಾಧನದಲ್ಲಿ ಬಾಕಿ ಉಳಿದು ಆಪ್ ಆರಂಭವಾದಾಗ ಅಥವಾ ಸಂಪರ್ಕ ಮರಳಿದಾಗ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸುತ್ತದೆ. ವರದಿಗಳು, ಸಾಕ್ಷ್ಯ ಫೋಟೋ ಮತ್ತು ಐಚ್ಛಿಕ ವಿಡಿಯೋ ಅಳಿಸುವವರೆಗೆ ಸಾಧನದಲ್ಲೇ ಇರುತ್ತವೆ.",
+    privacy_local: "ಎರಡೂ ಮೋಡ್‌ಗಳಲ್ಲಿ ದೃಢಪಟ್ಟ ಗುಂಡಿಯ ನಿಖರ ಸ್ಥಳ ಮತ್ತು ಚಿತ್ರ ಹ್ಯಾಶ್ ಹಾಗೂ ಅನಾಮಧೇಯ ಸ್ಥಾಪನೆ ID ಸೇರಿದಂತೆ ಸಣ್ಣ ಮೆಟಾಡೇಟಾ ಟೆಂಡರ್ ಪರಿಹಾರ, ಹತ್ತಿರದ ನಕಲು ತಡೆ, ಒಟ್ಟು ಪರಿಣಾಮ ಮತ್ತು ಸಾಮಾನ್ಯ ನಕ್ಷೆಗಾಗಿ ಯೋಜನೆಯ ಸೇವೆಗೆ ಹೋಗುತ್ತದೆ. ಈ ಮೆಟಾಡೇಟಾ ಅಪ್‌ಲೋಡ್ ವಿಫಲವಾದರೆ, ಆ ವರದಿಯನ್ನು ಅಳಿಸುವವರೆಗೆ ಅದು ಸಾಧನದಲ್ಲಿ ಬಾಕಿ ಉಳಿದು ಆಪ್ ಆರಂಭವಾದಾಗ ಅಥವಾ ಸಂಪರ್ಕ ಮರಳಿದಾಗ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸುತ್ತದೆ. ವರದಿಗಳು, ಸಾಕ್ಷ್ಯ ಫೋಟೋ ಮತ್ತು ಐಚ್ಛಿಕ ವಿಡಿಯೋ ಅಳಿಸುವವರೆಗೆ ಸಾಧನದಲ್ಲೇ ಇರುತ್ತವೆ. Import ಮೂಲಕ ಆಯ್ದ ವಿಡಿಯೋ ಅದೇ ಸ್ಥಳದಿಂದ ಓದಲಾಗುತ್ತದೆ; Android ಗೆ ನೇರವಾಗಿ Share ಮಾಡಿದ ವಿಡಿಯೋವನ್ನು ಆ್ಯಪ್‌ನ ಖಾಸಗಿ ತಾತ್ಕಾಲಿಕ ಪ್ರತಿಯಾಗಿ ಗರಿಷ್ಠ 24 ಗಂಟೆ ಇಡಬಹುದು ಮತ್ತು ಯಶಸ್ವಿ ವಿಶ್ಲೇಷಣೆ, ತ್ಯಜಿಸುವಿಕೆ ಅಥವಾ ಎಲ್ಲ ಡೇಟಾ ಅಳಿಸುವಿಕೆಯ ನಂತರ ಬೇಗ ತೆಗೆದುಹಾಕಲಾಗುತ್ತದೆ.",
     privacy_government: "ಪತ್ತೆಯಾದ ಗುಂಡಿಯ ನಿಖರ ಸ್ಥಳ ಸಾಮಾನ್ಯ ನಕ್ಷೆಯಲ್ಲಿ ಕಾಣುತ್ತದೆ ಮತ್ತು ಸೇವೆಯ ಲಾಗ್‌ಗಳಲ್ಲಿ ವಿನಂತಿ ID ಇರುತ್ತದೆ. ಇದು ಸರ್ಕಾರಿ ಸೇವೆಯಲ್ಲ. ದೂರು ಸಲ್ಲಿಸಲು ಆ್ಯಪ್‌ನಲ್ಲಿ ಇರುವ ಏಕೈಕ ಆಯ್ಕೆ ಇಮೇಲ್; ಅದು ಸರಿಯಾದ ಅಧಿಕಾರಿಗೆ ಕರಡು ತೆರೆಯುತ್ತದೆ ಮತ್ತು ಸ್ವತಃ ಕಳುಹಿಸುವುದಿಲ್ಲ. ಸಂಸ್ಕರಣೆ ಭಾರತದ ಹೊರಗೆ ನಡೆಯಬಹುದು.",
     privacy_link: "ಗೌಪ್ಯತಾ ನೀತಿ", sources_link: "ಡೇಟಾ ಮೂಲಗಳು ಮತ್ತು ಮಿತಿಗಳು",
     privacy_accept: "ಮುಂದುವರಿಸಿ", privacy_decline: "ಈಗ ಬೇಡ",
@@ -638,6 +723,13 @@ function applyLang() {
   $("subTitle").textContent = t("sub");
   $("captureBtn").innerHTML = t("report_btn");
   $("driveBtn").innerHTML = t("drive_btn");
+  $("videoImportBtn").innerHTML = t("video_import_btn");
+  $("videoImportHint").textContent = t("video_import_hint");
+  $("gpxImportBtn").textContent = t("gpx_add");
+  $("gpxClearBtn").textContent = t("gpx_remove");
+  if (!$("gpxImportStatus").dataset.selected) $("gpxImportStatus").textContent = t("gpx_none");
+  $("videoCurrentLocationLabel").textContent = t("video_current_location");
+  $("progressCancel").textContent = t("video_import_cancel");
   $("reportsTitle").textContent = t("your_reports");
   $("settingsTitle").textContent = t("settings_title");
   $("providerLabel").textContent = t("provider_label");
@@ -890,10 +982,14 @@ async function loadReports() {
       ? t("drive_video_suffix", { n: rec.analysis_checked }) : "";
     // "frames checked" is only known from the drive record: rejected frames are not
     // stored unless debug mode is on, so older drives can only report what was kept.
-    const label = rec
+    const summary = rec
       ? t("drive_group", { date: fmtDate(start), found: foundTxt, known: knownTxt,
           checked: rec.checked, video: videoTxt })
       : t("drive_group_partial", { date: fmtDate(start), found: foundTxt, kept: g.items.length });
+    const label = rec && rec.capture_source === "imported_video"
+      ? t("video_import_history", { date: fmtDate(start), found: foundTxt,
+          known: knownTxt, checked: Math.max(rec.checked | 0, rec.analysis_checked | 0) })
+      : summary;
     const open = expandedDrives.has(String(g.driveId));
     const footageRow = footageRowHtml(g.driveId, fo, open);
     return `<div class="group-head ${open ? "open" : ""}" data-drive="${g.driveId}">
@@ -995,7 +1091,7 @@ async function prefetchManualPosition() {
 
 async function handleFile(file) {
   if (!file) return;
-  if (manualAnalysisActive) {
+  if (manualAnalysisActive || importedVideoJob) {
     alert(t("manual_analysis_active"));
     return;
   }
@@ -1114,6 +1210,14 @@ function detectionVerdict(r) {
   return t("verdict_detected", { type: tDamage(r), assessment: tAssessment(r) });
 }
 
+function importedLocationHtml(r) {
+  if (!r || r.capture_source !== "imported_video") return "";
+  const note = r.location_source === "gpx_timestamp" ? t("video_location_gpx")
+    : r.location_source === "current_position_confirmed" ? t("video_location_current")
+      : t("video_location_none");
+  return `<div class="meta">${escapeHtml(note)}</div>`;
+}
+
 function openDetail(r, list) {
   if (list) { detailList = list; detailIdx = list.findIndex((x) => x.id === r.id); }
   else if (!detailList.some((x) => x.id === r.id)) { detailList = [r]; detailIdx = 0; }
@@ -1123,6 +1227,7 @@ function openDetail(r, list) {
     d.innerHTML = `
       <div class="card">
         ${photoBlock(r)}
+        ${importedLocationHtml(r)}
         <div class="verdict" style="color:#b9c2ff">${escapeHtml(t("duplicate_title"))}</div>
         ${r.address ? `<div class="meta">&#128205; ${escapeHtml(r.address)}</div>` : ""}
         <div class="meta">${escapeHtml(t("duplicate_help"))}</div>
@@ -1138,6 +1243,7 @@ function openDetail(r, list) {
     d.innerHTML = `
       <div class="card">
         ${photoBlock(r)}
+        ${importedLocationHtml(r)}
         <div class="verdict" style="color:var(--accent)">
           ${escapeHtml(detectionVerdict(r))}
         </div>
@@ -1153,6 +1259,7 @@ function openDetail(r, list) {
     d.innerHTML = `
       <div class="card">
         ${photoBlock(r)}
+        ${importedLocationHtml(r)}
         <div class="verdict" style="color:${r.status === "review" ? "var(--accent)" : "var(--bad)"}">${escapeHtml(detectionVerdict(r))}</div>
         <div class="meta">${escapeHtml(r.description || "")}</div>
         <div class="meta">${escapeHtml(tDamage(r))} · ${escapeHtml(tAssessment(r))}${r.image_quality ? ` · ${escapeHtml(r.image_quality)}` : ""}</div>
@@ -1170,6 +1277,7 @@ function openDetail(r, list) {
     d.innerHTML = `
       <div class="card">
         ${photoBlock(r)}
+        ${importedLocationHtml(r)}
         <div class="verdict" style="color:var(--accent)">${escapeHtml(detectionVerdict(r))}</div>
         ${r.address ? `<div class="meta">&#128205; ${escapeHtml(r.address)}</div>` : ""}
         ${showCivicAttribution && r.body_name ? `<div class="meta">${escapeHtml(r.body_name)}</div>` : ""}
@@ -1194,6 +1302,7 @@ function openDetail(r, list) {
     d.innerHTML = `
       <div class="card">
         ${photoBlock(r)}
+        ${importedLocationHtml(r)}
         <div class="verdict" style="color:var(--accent)">
           ${escapeHtml(verdictText)}
         </div>
@@ -1528,7 +1637,7 @@ async function removeNativeDriveListener() {
 async function startDrive() {
   // Synchronous reentry guard: a second tap during the camera permission prompt
   // must not start a parallel drive session and leak the first camera stream.
-  if (drive || driveStarting || driveFinalizing || window._nativeDriveActive) return;
+  if (drive || driveStarting || driveFinalizing || window._nativeDriveActive || importedVideoJob) return;
   driveStarting = true;
   if (!(await ensureDataConsent())) { driveStarting = false; return; }
   if (!(await ensureVisionAvailable())) { driveStarting = false; return; }
@@ -1947,7 +2056,7 @@ document.addEventListener("visibilitychange", () => {
 // Opening the camera is the cue that a call is coming: warm the connection now
 // so the photo does not also pay for a TLS handshake.
 $("captureBtn").onclick = async () => {
-  if (manualAnalysisActive) {
+  if (manualAnalysisActive || importedVideoJob) {
     alert(t("manual_analysis_active"));
     return;
   }
@@ -2346,9 +2455,997 @@ function releaseVideoDecoder(v) {
   } catch (e) {}
 }
 
+// ---------- imported Meta-glasses / dashcam video ----------
+// Imported media is deliberately different from recorded Drive footage. A File is read
+// through one decoder, in place, and is never copied into IndexedDB. Only the sampled
+// JPEG currently being checked crosses the network boundary. This keeps multi-GB files
+// practical and makes closing/cancelling the analysis release the operating-system file
+// handle immediately.
+let IMPORT_VIDEO_SAMPLE_SECONDS = 1;
+let IMPORT_VIDEO_MAX_SAMPLES = 900;
+const IMPORT_VIDEO_SHARED_MAX_SAMPLES = 200;
+let IMPORT_VIDEO_METADATA_TIMEOUT_MS = 10000;
+const IMPORT_VIDEO_MAX_FILES = 64;
+const IMPORT_VIDEO_METADATA_SCAN_BYTES = 4 * 1024 * 1024;
+const IMPORT_VIDEO_FINGERPRINT_SLICE_BYTES = 64 * 1024;
+const IMPORT_GPX_MAX_BYTES = 20 * 1024 * 1024;
+const IMPORT_GPX_MAX_POINTS = 200000;
+const QUICKTIME_TO_UNIX_SECONDS = 2082844800;
+let importedGpx = null;
+let importedVideoJob = null;
+let videoImportPickerActive = false;
+
+const videoFileName = (file) => (file && file.name) || "video";
+const looksLikeVideo = (file) => !!file && ((file.type || "").startsWith("video/")
+  || /\.(?:mp4|m4v|mov|webm|mkv|avi)$/i.test(videoFileName(file)));
+
+function videoCodecError(file) {
+  const error = new Error(t("video_codec_error", { name: videoFileName(file) }));
+  error.code = "video_codec_unsupported";
+  return error;
+}
+
+function bearingDegrees(a, b) {
+  const rad = Math.PI / 180;
+  const y = Math.sin((b.lng - a.lng) * rad) * Math.cos(b.lat * rad);
+  const x = Math.cos(a.lat * rad) * Math.sin(b.lat * rad)
+    - Math.sin(a.lat * rad) * Math.cos(b.lat * rad)
+      * Math.cos((b.lng - a.lng) * rad);
+  return (Math.atan2(y, x) / rad + 360) % 360;
+}
+
+function parseGpxTrack(text) {
+  const source = String(text || "");
+  if (source.length > IMPORT_GPX_MAX_BYTES || /<!DOCTYPE/i.test(source)) {
+    throw new Error(t("gpx_bad"));
+  }
+  const doc = new DOMParser().parseFromString(source, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) throw new Error(t("gpx_bad"));
+  const nodes = [...doc.getElementsByTagNameNS("*", "trkpt")];
+  if (nodes.length > IMPORT_GPX_MAX_POINTS) throw new Error(t("gpx_bad"));
+  const points = nodes.map((node) => {
+    const lat = Number(node.getAttribute("lat")), lng = Number(node.getAttribute("lon"));
+    const timeNode = [...node.childNodes].find((child) => child.localName === "time");
+    const timeText = timeNode ? timeNode.textContent.trim() : "";
+    // Date.parse treats a timezone-less value as local time. That would shift the route
+    // by the phone's timezone while still claiming an absolute match.
+    const hasUtcOffset = /(?:Z|[+-]\d{2}:\d{2})$/i.test(timeText);
+    const atMs = hasUtcOffset ? Date.parse(timeText) : NaN;
+    return { atMs, lat, lng };
+  }).filter((point) => Number.isFinite(point.atMs)
+    && Number.isFinite(point.lat) && point.lat >= -90 && point.lat <= 90
+    && Number.isFinite(point.lng) && point.lng >= -180 && point.lng <= 180)
+    .sort((a, b) => a.atMs - b.atMs);
+  const unique = points.filter((point, index) => !index || point.atMs > points[index - 1].atMs);
+  if (unique.length < 2) throw new Error(t("gpx_bad"));
+  return { points: unique, startMs: unique[0].atMs, endMs: unique[unique.length - 1].atMs };
+}
+
+// Map a video frame to GPX by absolute UTC time, never by file-selection order or file
+// modification time. Interpolating only across short gaps avoids drawing a fictional
+// route through a recorder/GPS outage.
+function gpxPositionAt(gpx, atMs) {
+  const points = gpx && gpx.points;
+  if (!points || points.length < 2 || atMs < points[0].atMs
+      || atMs > points[points.length - 1].atMs) return null;
+  let low = 0, high = points.length - 1;
+  while (low + 1 < high) {
+    const mid = (low + high) >> 1;
+    if (points[mid].atMs <= atMs) low = mid; else high = mid;
+  }
+  const left = points[low], right = points[Math.min(low + 1, points.length - 1)];
+  const gapMs = right.atMs - left.atMs;
+  if (!(gapMs > 0) || gapMs > 30000) return atMs === left.atMs
+    ? { lat: left.lat, lng: left.lng, accuracy: null, speed: null, heading: null }
+    : null;
+  const ratio = Math.max(0, Math.min(1, (atMs - left.atMs) / gapMs));
+  const lat = left.lat + (right.lat - left.lat) * ratio;
+  const lng = left.lng + (right.lng - left.lng) * ratio;
+  return { lat, lng, accuracy: null,
+    speed: distMeters(left, right) / (gapMs / 1000),
+    heading: bearingDegrees(left, right) };
+}
+
+function quickTimeCreationMsFromBuffer(buffer) {
+  const bytes = new Uint8Array(buffer), view = new DataView(buffer);
+  for (let i = 4; i + 20 < bytes.length; i++) {
+    if (bytes[i] !== 0x6d || bytes[i + 1] !== 0x76
+        || bytes[i + 2] !== 0x68 || bytes[i + 3] !== 0x64) continue; // mvhd
+    const boxStart = i - 4;
+    const size = view.getUint32(boxStart, false);
+    const version = bytes[i + 4];
+    if (size < (version === 1 ? 32 : 20)) continue;
+    let seconds;
+    if (version === 1) {
+      const high = view.getUint32(i + 8, false), low = view.getUint32(i + 12, false);
+      seconds = high * 0x100000000 + low;
+    } else if (version === 0) seconds = view.getUint32(i + 8, false);
+    else continue;
+    const atMs = (seconds - QUICKTIME_TO_UNIX_SECONDS) * 1000;
+    const year = new Date(atMs).getUTCFullYear();
+    if (Number.isFinite(atMs) && year >= 1990 && year <= new Date().getUTCFullYear() + 2) {
+      return atMs;
+    }
+  }
+  return null;
+}
+
+// The standard MP4/MOV movie-header creation timestamp is a recording-time candidate.
+// Scan bounded head/tail slices because `moov` may sit at either end; never read a whole
+// dashcam file just to find metadata. A candidate is trusted for routing only when it
+// actually overlaps the selected GPX time range below.
+async function embeddedVideoStartMs(file) {
+  if (!file || !/\.(?:mp4|m4v|mov)$/i.test(videoFileName(file))
+      && !/^(?:video\/mp4|video\/quicktime|video\/x-m4v)$/i.test(file.type || "")) return null;
+  const size = Number(file.size) || 0;
+  const ranges = [[0, Math.min(size, IMPORT_VIDEO_METADATA_SCAN_BYTES)]];
+  if (size > IMPORT_VIDEO_METADATA_SCAN_BYTES) {
+    ranges.push([Math.max(0, size - IMPORT_VIDEO_METADATA_SCAN_BYTES), size]);
+  }
+  for (const [start, end] of ranges) {
+    try {
+      const found = quickTimeCreationMsFromBuffer(await file.slice(start, end).arrayBuffer());
+      if (found != null) return found;
+    } catch (e) {}
+  }
+  return null;
+}
+
+async function openImportedVideo(file) {
+  if (!looksLikeVideo(file)) throw videoCodecError(file);
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.muted = true; video.playsInline = true; video.preload = "metadata"; video.src = url;
+  const meta = await waitForVideoMetadata(video, IMPORT_VIDEO_METADATA_TIMEOUT_MS);
+  if (meta.error) {
+    releaseVideoDecoder(video);
+    URL.revokeObjectURL(url);
+    throw videoCodecError(file);
+  }
+  let duration = meta.dur;
+  if (!isFinite(duration) || duration <= 0) duration = await resolveDuration(video);
+  if (!isFinite(duration) || duration <= 0) {
+    releaseVideoDecoder(video);
+    URL.revokeObjectURL(url);
+    throw videoCodecError(file);
+  }
+  return { video, url, duration };
+}
+
+function closeImportedVideo(opened) {
+  if (!opened) return;
+  releaseVideoDecoder(opened.video);
+  try { URL.revokeObjectURL(opened.url); } catch (e) {}
+}
+
+async function grabImportedVideoFrame(video, canvas, at, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    let settled = false, timer;
+    const finish = (blob) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      video.onseeked = null;
+      video.onerror = null;
+      resolve(blob || null);
+    };
+    const draw = () => {
+      try {
+        if (!video.videoWidth || !video.videoHeight) return finish(null);
+        const scale = Math.min(1, 2000 / Math.max(video.videoWidth, video.videoHeight));
+        canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+        canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+        canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(finish, "image/jpeg", 0.85);
+      } catch (e) { finish(null); }
+    };
+    video.onseeked = draw;
+    video.onerror = () => finish(null);
+    timer = setTimeout(() => finish(null), timeoutMs);
+    try {
+      const target = Math.max(0, Math.min(at, Math.max(0, video.duration - 0.01)));
+      if (video.readyState >= 2 && Math.abs(video.currentTime - target) < 0.001) draw();
+      else video.currentTime = target;
+    } catch (e) { finish(null); }
+  });
+}
+
+function allocateImportedSamples(clips, requestedMax = IMPORT_VIDEO_MAX_SAMPLES) {
+  if (clips.length > IMPORT_VIDEO_MAX_FILES) {
+    throw new Error(t("video_import_too_many", { n: IMPORT_VIDEO_MAX_FILES }));
+  }
+  const totalDuration = clips.reduce((sum, clip) => sum + clip.duration, 0);
+  const maximum = Math.max(clips.length, Math.min(IMPORT_VIDEO_MAX_SAMPLES, requestedMax));
+  const desired = Math.min(maximum, Math.max(clips.length,
+    Math.ceil(totalDuration / IMPORT_VIDEO_SAMPLE_SECONDS)));
+  let remainingBudget = desired, remainingDuration = totalDuration;
+  for (let i = 0; i < clips.length; i++) {
+    const clip = clips[i];
+    const clipsLeft = clips.length - i - 1;
+    const share = i === clips.length - 1 ? remainingBudget
+      : Math.round(remainingBudget * clip.duration / Math.max(clip.duration, remainingDuration));
+    const count = Math.max(1, Math.min(remainingBudget - clipsLeft, share));
+    clip.times = Array.from({ length: count }, (_, index) =>
+      Math.min(Math.max(0.01, (index + 0.5) * clip.duration / count),
+        Math.max(0.01, clip.duration - 0.01)));
+    remainingBudget -= count;
+    remainingDuration -= clip.duration;
+  }
+  const frames = clips.reduce((sum, clip) => sum + clip.times.length, 0);
+  return { frames, totalDuration, step: totalDuration / Math.max(1, frames) };
+}
+
+async function boundedVideoContentFingerprint(file) {
+  const size = Math.max(0, Number(file && file.size) || 0);
+  const ranges = size <= IMPORT_VIDEO_FINGERPRINT_SLICE_BYTES * 2
+    ? [[0, size]]
+    : [[0, IMPORT_VIDEO_FINGERPRINT_SLICE_BYTES],
+      [size - IMPORT_VIDEO_FINGERPRINT_SLICE_BYTES, size]];
+  const chunks = [];
+  let total = 0;
+  for (const [start, end] of ranges) {
+    const bytes = new Uint8Array(await file.slice(start, end).arrayBuffer());
+    chunks.push(bytes); total += bytes.length;
+  }
+  const sample = new Uint8Array(total);
+  let offset = 0;
+  for (const bytes of chunks) { sample.set(bytes, offset); offset += bytes.length; }
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", sample);
+    return [...new Uint8Array(digest)].slice(0, 16)
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch (error) {
+    let hash = 2166136261;
+    for (const byte of sample) hash = Math.imul(hash ^ byte, 16777619);
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  }
+}
+
+async function stableImportedDriveId(clips, locationFingerprint) {
+  const identity = clips.map((clip, batchIndex) => {
+    const file = clip.file;
+    return [batchIndex, videoFileName(file), file.size || 0,
+      file.lastModified || 0, file.type || "", clip.contentFingerprint || ""].join(":");
+  })
+    .concat([locationFingerprint || "none"]).join("|");
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity));
+    return "import-" + [...new Uint8Array(digest)].slice(0, 12)
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch (e) {
+    let hash = 2166136261;
+    for (let i = 0; i < identity.length; i++) hash = Math.imul(hash ^ identity.charCodeAt(i), 16777619);
+    return "import-" + (hash >>> 0).toString(16).padStart(8, "0");
+  }
+}
+
+async function browserImportedClipSourceId(clip, locationFingerprint) {
+  const file = clip.file;
+  const digest = await fingerprintText([clip.index, videoFileName(file), file.size || 0,
+    file.lastModified || 0, file.type || "", clip.contentFingerprint || "",
+    locationFingerprint].join(":"));
+  // The explicit ordinal prevents two identical clips in one segmented batch from
+  // sharing an observation key. The bounded head/tail digest above distinguishes two
+  // different files whose camera-generated names, sizes and timestamps all collide.
+  return `clip-${clip.index}-${digest.slice(0, 24)}`;
+}
+
+async function fingerprintText(value) {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return [...new Uint8Array(digest)].slice(0, 16)
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch (e) { return `${String(value).length}:${String(value).slice(0, 64)}`; }
+}
+
+async function checkImportedFrame(fd) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await api("/api/frame", { method: "POST", body: fd }); }
+    catch (error) {
+      const retryable = !!(error && !error.fatal && (error.timeout
+        || error.status === 408 || error.status === 425 || error.status >= 500));
+      if (attempt || !retryable) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}
+
+function terminalVideoAnalysisError(error) {
+  if (!error) return false;
+  if (error.fatal) return true;
+  if ([401, 402, 403, 429].includes(Number(error.status))) return true;
+  return new Set(["daily_vision_limit", "shared_credits_exhausted", "shared_budget_reached",
+    "shared_daily_budget_reached", "shared_rate_limit", "shared_vision_not_configured",
+    "invalid_installation", "invalid_signature", "bad_signature", "service_401",
+    "service_402", "service_403", "service_429", "insufficient_quota",
+    "billing_hard_limit_reached", "rate_limit_exceeded"]).has(String(error.code || ""));
+}
+
+function exhaustedSharedQuota(result) {
+  if (visionProvider() !== "shared") return null;
+  const quota = result && result.quota;
+  const used = Number(quota && quota.used), limit = Number(quota && quota.limit);
+  if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0 || used < limit) return null;
+  const error = new Error(`Shared checking reached its daily limit (${used}/${limit}). Try tomorrow or use your own OpenAI key.`);
+  error.code = "daily_vision_limit";
+  error.fatal = true;
+  return error;
+}
+
+function cancelImportedVideoAnalysis(silent = false) {
+  const job = importedVideoJob;
+  if (!job || job.token.cancelled) return false;
+  job.token.cancelled = true;
+  job.token.silent = !!silent;
+  if (!silent && !$("progress").classList.contains("hidden")) {
+    $("progressText").textContent = t("video_import_cancelling");
+    $("progressCancel").disabled = true;
+  }
+  return true;
+}
+
+async function clearImportedVideosBeforeWipe() {
+  // Back deliberately detaches the UI while the current frame finishes. Settings can
+  // therefore be opened with an import still alive. Wait for that exact job before the
+  // database is erased, otherwise its late /api/frame or /api/drives write can recreate
+  // data immediately after a supposedly complete wipe.
+  const activeJob = importedVideoJob;
+  if (activeJob) {
+    activeJob.token.cancelled = true;
+    activeJob.token.silent = true;
+    try { await Promise.resolve(activeJob.promise); } catch (error) {}
+    if (importedVideoJob === activeJob) importedVideoJob = null;
+  }
+  const videoImport = getVideoImportPlugin();
+  if (!videoImport) return;
+  if (typeof videoImport.clearAllImports !== "function") {
+    throw new Error("The app cannot clear pending imported videos on this build.");
+  }
+  // Native owns persisted Files grants, decoder sessions and private direct-share
+  // copies. Its coordinated clear rejects if any one of those cannot be removed.
+  await videoImport.clearAllImports();
+}
+
+async function runImportedVideoAnalysis(files, options, token) {
+  if (files.length > IMPORT_VIDEO_MAX_FILES) {
+    throw new Error(t("video_import_too_many", { n: IMPORT_VIDEO_MAX_FILES }));
+  }
+  if (!(await ensureDataConsent()) || !(await ensureVisionAvailable())) return { started: false };
+  const gpx = Object.prototype.hasOwnProperty.call(options, "gpx") ? options.gpx : importedGpx;
+  const useCurrent = Object.prototype.hasOwnProperty.call(options, "useCurrentLocation")
+    ? !!options.useCurrentLocation : $("videoUseCurrentLocation").checked;
+  if (!gpx && !useCurrent && !confirm(t("video_no_location_confirm"))) return { started: false };
+
+  let currentPosition = null;
+  if (!gpx && useCurrent) {
+    await requestNativeLocationPermission();
+    currentPosition = await getPosition(8000);
+    if (!currentPosition) throw new Error(t("video_current_location_failed"));
+  }
+
+  show("progress");
+  $("progressPhoto").removeAttribute("src");
+  $("progressCancel").classList.remove("hidden");
+  $("progressCancel").disabled = false;
+  const clips = [], rejected = [];
+  for (let index = 0; index < files.length; index++) {
+    if (token.cancelled) break;
+    const file = files[index];
+    $("progressText").textContent = t("video_import_preparing", { i: index + 1, n: files.length });
+    let opened = null, clip = null;
+    try {
+      opened = await openImportedVideo(file);
+      clip = { file, index, duration: opened.duration };
+    } catch (error) { rejected.push({ file, error }); }
+    finally { closeImportedVideo(opened); }
+    if (clip) {
+      // Both reads are bounded and happen after the decoder was released. Even a
+      // multi-gigabyte dashcam file contributes at most two small fingerprint slices
+      // plus the bounded MP4 metadata scan; the media itself is never retained.
+      [clip.recordingStartMs, clip.contentFingerprint] = await Promise.all([
+        embeddedVideoStartMs(file), boundedVideoContentFingerprint(file),
+      ]);
+      clips.push(clip);
+    }
+  }
+  if (token.cancelled) {
+    if (!token.silent) {
+      show("home");
+      alert(t("video_import_cancelled", { checked: 0, n: 0 }));
+    }
+    return { cancelled: true, checked: 0, total: 0 };
+  }
+  if (!clips.length) throw (rejected[0] && rejected[0].error) || videoCodecError(files[0]);
+  if (rejected.length) alert(t("video_import_skipped", { n: rejected.length }));
+
+  if (gpx) {
+    const overlaps = clips.some((clip) => Number.isFinite(clip.recordingStartMs)
+      && clip.recordingStartMs <= gpx.endMs
+      && clip.recordingStartMs + clip.duration * 1000 >= gpx.startMs);
+    if (!overlaps) throw new Error(t("video_gpx_unaligned"));
+  }
+
+  const plan = allocateImportedSamples(clips, visionProvider() === "shared"
+    ? IMPORT_VIDEO_SHARED_MAX_SAMPLES : IMPORT_VIDEO_MAX_SAMPLES);
+  const locationSource = gpx ? "gpx_timestamp"
+    : currentPosition ? "current_position_confirmed" : "none";
+  const locationFingerprint = gpx ? `gpx:${gpx.fingerprint || `${gpx.startMs}:${gpx.endMs}`}`
+    : currentPosition ? `current:${currentPosition.lat.toFixed(5)}:${currentPosition.lng.toFixed(5)}`
+      : "none";
+  const driveId = await stableImportedDriveId(clips, locationFingerprint);
+  for (const clip of clips) {
+    clip.sourceId = await browserImportedClipSourceId(clip, locationFingerprint);
+  }
+  const priorDrive = (await api("/api/drives").catch(() => []))
+    .find((item) => String(item.id) === driveId);
+  if (priorDrive && (priorDrive.checked > 0 || priorDrive.analysis_checked > 0)
+      && !confirm(t("video_import_repeat", { frames: plan.frames }))) {
+    show("home");
+    return { started: false, repeated: true, driveId };
+  }
+  if (!priorDrive && !confirm(t("video_import_confirm", { files: clips.length, frames: plan.frames,
+      step: Math.max(0.1, plan.step).toFixed(1) }))) {
+    show("home");
+    return { started: false };
+  }
+  if (token.cancelled) {
+    if (!token.silent) {
+      show("home");
+      alert(t("video_import_cancelled", { checked: 0, n: plan.frames }));
+    }
+    return { cancelled: true, checked: 0, total: plan.frames };
+  }
+  const importStartedAtMs = Date.now();
+  try {
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      token.wakeLock = await navigator.wakeLock.request("screen");
+    }
+  } catch (e) { token.wakeLock = null; }
+  const duplicateIds = new Set(), usedGpsTrack = [];
+  let done = 0, checked = 0, found = 0, failed = 0, elapsed = 0, lastErr = "";
+  let terminalError = null;
+  let previewUrl = null;
+  const paint = () => {
+    if (token.cancelled || token.silent) return;
+    $("progressText").textContent = t("video_import_progress", {
+      i: done, n: plan.frames, found,
+    }) + " · " + (locationSource === "gpx_timestamp" ? t("video_location_gpx")
+      : locationSource === "current_position_confirmed" ? t("video_location_current")
+        : t("video_location_none"));
+  };
+  paint();
+
+  outer: for (const clip of clips) {
+    if (token.cancelled) break;
+    let opened = null;
+    try {
+      opened = await openImportedVideo(clip.file);
+      const canvas = document.createElement("canvas");
+      let decodedAny = false, earlyDecodeFailures = 0;
+      for (let sampleIndex = 0; sampleIndex < clip.times.length; sampleIndex++) {
+        if (token.cancelled) break outer;
+        const at = clip.times[sampleIndex];
+        const blob = await grabImportedVideoFrame(opened.video, canvas, at);
+        if (token.cancelled) break outer;
+        if (!blob) {
+          failed++; done++; earlyDecodeFailures++; lastErr = videoCodecError(clip.file).message;
+          paint();
+          // Some files cannot seek their first timestamp before decoder warm-up. Probe a
+          // later timestamp once before declaring the codec unusable, but do not spend
+          // minutes attempting every sample of an unsupported HEVC/AVI file.
+          if (!decodedAny && earlyDecodeFailures >= 2) {
+            const remaining = clip.times.length - sampleIndex - 1;
+            failed += remaining; done += remaining;
+            paint();
+            break;
+          }
+          continue;
+        }
+        decodedAny = true;
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = URL.createObjectURL(blob);
+        token.previewUrl = previewUrl;
+        $("progressPhoto").src = previewUrl;
+        const absoluteAtMs = Number.isFinite(clip.recordingStartMs)
+          ? Math.round(clip.recordingStartMs + at * 1000)
+          : null;
+        const pos = gpx ? (absoluteAtMs == null ? null : gpxPositionAt(gpx, absoluteAtMs))
+          : currentPosition;
+        const fd = new FormData();
+        fd.append("photo", blob, "imported-video-frame.jpg");
+        fd.append("drive_id", driveId);
+        fd.append("capture_source", "imported_video");
+        fd.append("location_source", pos ? locationSource : "none");
+        fd.append("source_event_key", `import:${clip.sourceId}:${Math.round(at * 1000)}`);
+        fd.append("source_offset_ms", String(Math.round((elapsed + at) * 1000)));
+        if (absoluteAtMs != null) fd.append("captured_at_ms", String(absoluteAtMs));
+        if (pos) {
+          fd.append("lat", String(pos.lat)); fd.append("lng", String(pos.lng));
+          if (pos.accuracy != null) fd.append("gps_accuracy", String(pos.accuracy));
+          if (pos.speed != null) fd.append("speed", String(pos.speed));
+          if (pos.heading != null) fd.append("heading", String(pos.heading));
+          usedGpsTrack.push([elapsed + at, pos.lat, pos.lng,
+            pos.accuracy, pos.speed, pos.heading]);
+        }
+        try {
+          const result = await checkImportedFrame(fd);
+          checked++;
+          if (result && result.found) found++;
+          else if (result && result.duplicate && result.duplicate_of != null) {
+            duplicateIds.add(String(result.duplicate_of));
+          }
+          terminalError = exhaustedSharedQuota(result);
+          if (terminalError) lastErr = terminalError.message;
+        } catch (error) {
+          failed++;
+          lastErr = error && error.message || String(error);
+          if (terminalVideoAnalysisError(error)) terminalError = error;
+        }
+        done++;
+        paint();
+        if (terminalError) break outer;
+      }
+    } catch (error) {
+      const remaining = clip.times.length;
+      failed += remaining; done += remaining; lastErr = error && error.message || String(error);
+      paint();
+    } finally {
+      closeImportedVideo(opened);
+      elapsed += clip.duration;
+    }
+  }
+
+  if (previewUrl) {
+    URL.revokeObjectURL(previewUrl);
+    token.previewUrl = null;
+    previewUrl = null;
+    $("progressPhoto").removeAttribute("src");
+  }
+  if (done || checked) {
+    const existing = (await api("/api/drives").catch(() => []))
+      .find((item) => String(item.id) === driveId);
+    if (existing) {
+      await api(`/api/drives/${encodeURIComponent(driveId)}/analysis`, {
+        method: "POST", body: JSON.stringify({ checked, found, already: duplicateIds.size,
+          already_ids: [...duplicateIds] }),
+      }).catch(() => {});
+    } else {
+      const earliest = clips.map((clip) => clip.recordingStartMs)
+        .filter(Number.isFinite).sort((a, b) => a - b)[0];
+      await api("/api/drives", { method: "POST", body: JSON.stringify({
+        id: driveId, started_at: Number.isFinite(earliest) ? earliest / 1000 : importStartedAtMs / 1000,
+        checked, found, already: duplicateIds.size, already_ids: [...duplicateIds],
+        gps_track: usedGpsTrack, capture_source: "imported_video",
+      }) }).catch(() => {});
+    }
+  }
+  await loadReports().catch(() => {});
+  if (token.cancelled) {
+    if (!token.silent) {
+      show("home");
+      alert(t("video_import_cancelled", { checked, n: plan.frames }));
+    }
+    return { cancelled: true, checked, total: plan.frames, found, failed, driveId };
+  }
+  show("home");
+  alert(terminalError ? t("video_import_stopped", { checked, n: plan.frames, err: lastErr })
+    : failed ? t("video_import_partial", { failed, n: plan.frames,
+    err: lastErr || t("decoder_failed") })
+    : t("video_import_done", { found, checked }));
+  return { cancelled: false, checked, total: plan.frames, found, failed, driveId };
+}
+
+function analyseImportedVideos(selectedFiles, options = {}) {
+  const files = Array.from(selectedFiles || []).filter(Boolean);
+  if (!files.length) return Promise.resolve({ started: false });
+  if (importedVideoJob) {
+    alert(t("manual_analysis_active"));
+    return importedVideoJob.promise;
+  }
+  const token = { cancelled: false, silent: false };
+  const job = { token, promise: null };
+  importedVideoJob = job;
+  job.promise = runImportedVideoAnalysis(files, options, token).catch((error) => {
+    if (!token.silent) {
+      alert(error && error.message || String(error));
+      show("home");
+    }
+    return { error, cancelled: token.cancelled };
+  }).finally(() => {
+    if (token.previewUrl) {
+      try { URL.revokeObjectURL(token.previewUrl); } catch (e) {}
+      token.previewUrl = null;
+      $("progressPhoto").removeAttribute("src");
+    }
+    if (token.wakeLock) {
+      try { Promise.resolve(token.wakeLock.release()).catch(() => {}); } catch (e) {}
+      token.wakeLock = null;
+    }
+    if (importedVideoJob === job) importedVideoJob = null;
+    $("progressCancel").classList.add("hidden");
+    $("progressCancel").disabled = false;
+  });
+  return job.promise;
+}
+
+let videoImportPluginCache = null;
+let videoImportListener = null;
+let nativePendingVideos = [];
+
+function getVideoImportPlugin() {
+  if (!isNativeApp()) return null;
+  if (videoImportPluginCache) return videoImportPluginCache;
+  const plugins = Capacitor.Plugins || {};
+  videoImportPluginCache = plugins.VideoImport || (Capacitor.registerPlugin
+    ? Capacitor.registerPlugin("VideoImport") : null);
+  return videoImportPluginCache;
+}
+
+function nativeVideoDisplayName(video) {
+  return video && video.display_name || "video";
+}
+
+function renderNativeVideoImports(snapshot) {
+  if (!isNativeApp()) return;
+  nativePendingVideos = Array.isArray(snapshot && snapshot.imports) ? snapshot.imports : [];
+  const host = $("nativeVideoImports"), error = snapshot && snapshot.error;
+  if (!nativePendingVideos.length && !error) {
+    host.classList.add("hidden");
+    host.innerHTML = "";
+    return;
+  }
+  const rows = nativePendingVideos.map((video) => {
+    const bytes = Number(video.bytes);
+    const durationMs = Number(video.duration_ms);
+    const mb = Number.isFinite(bytes) && bytes >= 0 ? (bytes / 1048576).toFixed(0) : "?";
+    const duration = Number.isFinite(durationMs) && durationMs > 0
+      ? `${Math.ceil(durationMs / 60000)} min` : t("native_video_unknown_duration");
+    const codec = video.codec_mime || t("native_video_unknown_codec");
+    const temporaryCopy = video.storage_mode === "temporary_cache_copy"
+      ? `<div class="meta" style="color:#ffcc80;margin-top:4px">${escapeHtml(t("native_video_temporary_copy"))}</div>`
+      : "";
+    return `<div class="card" style="padding:9px;margin:8px 0 0">
+      <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(nativeVideoDisplayName(video))}</div>
+      <div class="meta">${escapeHtml(t("native_video_meta", { mb, duration, codec }))}</div>
+      ${temporaryCopy}
+      <div class="btn-row" style="margin-top:7px">
+        <button class="ghost" style="padding:9px" data-native-video-analyse="${escapeAttr(video.id)}">${escapeHtml(t("native_video_analyse"))}</button>
+        <button class="ghost danger" style="padding:9px" data-native-video-discard="${escapeAttr(video.id)}">${escapeHtml(t("native_video_discard"))}</button>
+      </div>
+    </div>`;
+  }).join("");
+  host.innerHTML = `<div class="row" style="justify-content:space-between">
+      <div class="meta" style="color:#f2f2f4;font-weight:600">${escapeHtml(t("native_video_pending"))}</div>
+      ${nativePendingVideos.length > 1 ? `<button class="ghost" id="nativeVideoAnalyseAll" style="flex:none;padding:8px 10px">${escapeHtml(t("native_video_analyse_all"))}</button>` : ""}
+    </div>`
+    + (error ? `<div class="meta" style="color:var(--bad);margin-top:6px">${escapeHtml(t("native_video_error", { err: error.message || error.code || "unknown" }))}</div>` : "")
+    + rows;
+  host.classList.remove("hidden");
+  const analyseAll = $("nativeVideoAnalyseAll");
+  if (analyseAll) analyseAll.onclick = () => analyseNativeImportedVideos(nativePendingVideos.slice());
+  for (const button of host.querySelectorAll("[data-native-video-analyse]")) {
+    button.onclick = () => {
+      const video = nativePendingVideos.find((item) => String(item.id) === button.dataset.nativeVideoAnalyse);
+      if (video) void analyseNativeImportedVideos([video]);
+    };
+  }
+  for (const button of host.querySelectorAll("[data-native-video-discard]")) {
+    button.onclick = async () => {
+      const plugin = getVideoImportPlugin();
+      if (!plugin || importedVideoJob) return;
+      button.disabled = true;
+      try {
+        const next = await plugin.discardPendingImport({ id: button.dataset.nativeVideoDiscard });
+        renderNativeVideoImports(next);
+      } catch (error) { alert(error && error.message || String(error)); button.disabled = false; }
+    };
+  }
+}
+
+async function initNativeVideoImports() {
+  const plugin = getVideoImportPlugin();
+  if (!plugin) return;
+  try {
+    if (!videoImportListener && plugin.addListener) {
+      videoImportListener = await plugin.addListener("videoImportReady", (snapshot) => {
+        renderNativeVideoImports(snapshot || {});
+      });
+    }
+    renderNativeVideoImports(await plugin.getPendingImports());
+  } catch (error) {
+    renderNativeVideoImports({ imports: [], error: { message: error && error.message || String(error) } });
+  }
+}
+
+function jpegBlobFromBase64(value) {
+  const source = String(value || "");
+  // Native extraction is bounded to a 1080px JPEG. Refuse an unexpected bridge payload
+  // rather than allocating an attacker-sized base64 string twice in the WebView.
+  if (!source || source.length > 16 * 1024 * 1024) throw new Error("The extracted frame was invalid.");
+  const binary = atob(source), bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: "image/jpeg" });
+}
+
+function nativeVideoStableSource(video) {
+  // Native derives content_token/source_fingerprint without exposing a raw SAF URI to
+  // the server. Fall back only for older APKs, and never mix the random pending-record
+  // id into a newer stable token (which would defeat the repeat-spend warning).
+  return video && (video.content_token || video.source_fingerprint
+    || video.file_uri || video.id) || "";
+}
+
+async function stableNativeImportedDriveId(videos, locationFingerprint) {
+  const identity = videos.map((video, batchIndex) => [batchIndex, nativeVideoStableSource(video),
+    nativeVideoDisplayName(video), video.bytes || 0,
+    video.duration_ms || 0, video.recorded_at_ms || 0, video.codec_mime || "",
+    video.width || 0, video.height || 0].join(":"))
+    .concat([locationFingerprint || "none"]).join("|");
+  return "import-native-" + (await fingerprintText(identity)).slice(0, 24);
+}
+
+async function nativeImportedClipSourceId(clip, locationFingerprint) {
+  const video = clip.video;
+  const digest = await fingerprintText([clip.index, nativeVideoStableSource(video),
+    nativeVideoDisplayName(video), video.bytes || 0, video.duration_ms || 0,
+    video.recorded_at_ms || 0, video.codec_mime || "", locationFingerprint].join(":"));
+  return `clip-${clip.index}-${digest.slice(0, 24)}`;
+}
+
+async function runNativeVideoAnalysis(videos, options, token) {
+  const plugin = getVideoImportPlugin();
+  if (!plugin) throw new Error("Native video import is unavailable.");
+  if (!(await ensureDataConsent()) || !(await ensureVisionAvailable())) return { started: false };
+  if (videos.length > IMPORT_VIDEO_MAX_FILES) {
+    throw new Error(t("video_import_too_many", { n: IMPORT_VIDEO_MAX_FILES }));
+  }
+  const clips = videos.map((video, index) => ({ video, index,
+    duration: Number(video.duration_ms) / 1000,
+    recordingStartMs: Number.isFinite(Number(video.recorded_at_ms))
+      && Number(video.recorded_at_ms) > 0 ? Number(video.recorded_at_ms) : null,
+  })).filter((clip) => Number.isFinite(clip.duration) && clip.duration > 0);
+  if (!clips.length) throw videoCodecError({ name: nativeVideoDisplayName(videos[0]) });
+
+  const gpx = Object.prototype.hasOwnProperty.call(options, "gpx") ? options.gpx : importedGpx;
+  const useCurrent = Object.prototype.hasOwnProperty.call(options, "useCurrentLocation")
+    ? !!options.useCurrentLocation : $("videoUseCurrentLocation").checked;
+  if (gpx) {
+    const overlaps = clips.some((clip) => clip.recordingStartMs != null
+      && clip.recordingStartMs <= gpx.endMs
+      && clip.recordingStartMs + clip.duration * 1000 >= gpx.startMs);
+    if (!overlaps) throw new Error(t("video_gpx_unaligned"));
+  }
+  // Android exposes at most one file-level coordinate, not a timed moving route. Never
+  // stamp that static point onto a dashcam journey. A timed GPX or an explicit current
+  // stationary position is required for routing; otherwise every frame stays unrouted.
+  if (!gpx && !useCurrent && !confirm(t("video_no_location_confirm"))) return { started: false };
+
+  let currentPosition = null;
+  if (!gpx && useCurrent) {
+    await requestNativeLocationPermission();
+    currentPosition = await getPosition(8000);
+    if (!currentPosition) throw new Error(t("video_current_location_failed"));
+  }
+  const plan = allocateImportedSamples(clips, visionProvider() === "shared"
+    ? IMPORT_VIDEO_SHARED_MAX_SAMPLES : IMPORT_VIDEO_MAX_SAMPLES);
+  const locationFingerprint = gpx ? `gpx:${gpx.fingerprint || `${gpx.startMs}:${gpx.endMs}`}`
+    : currentPosition ? `current:${currentPosition.lat.toFixed(5)}:${currentPosition.lng.toFixed(5)}`
+      : "none";
+  const driveId = await stableNativeImportedDriveId(clips.map((clip) => clip.video), locationFingerprint);
+  for (const clip of clips) {
+    clip.sourceId = await nativeImportedClipSourceId(clip, locationFingerprint);
+  }
+  const priorDrive = (await api("/api/drives").catch(() => []))
+    .find((item) => String(item.id) === driveId);
+  const accepted = priorDrive && (priorDrive.checked > 0 || priorDrive.analysis_checked > 0)
+    ? confirm(t("video_import_repeat", { frames: plan.frames }))
+    : confirm(t("video_import_confirm", { files: clips.length, frames: plan.frames,
+        step: Math.max(0.1, plan.step).toFixed(1) }));
+  if (!accepted) return { started: false, repeated: !!priorDrive, driveId };
+
+  show("progress");
+  $("progressPhoto").removeAttribute("src");
+  $("progressCancel").classList.remove("hidden");
+  $("progressCancel").disabled = false;
+  try {
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      token.wakeLock = await navigator.wakeLock.request("screen");
+    }
+  } catch (error) { token.wakeLock = null; }
+
+  const duplicateIds = new Set(), usedGpsTrack = [];
+  const consumedIds = [];
+  let done = 0, checked = 0, found = 0, failed = 0, elapsed = 0, lastErr = "";
+  let terminalError = null;
+  let previewUrl = null;
+  const paint = (where = "none") => {
+    if (token.cancelled || token.silent) return;
+    $("progressText").textContent = t("video_import_progress", { i: done, n: plan.frames, found })
+      + " · " + (where === "gpx_timestamp" ? t("video_location_gpx")
+        : where === "current_position_confirmed" ? t("video_location_current")
+          : t("video_location_none"));
+  };
+  paint();
+
+  outer: for (const clip of clips) {
+    if (token.cancelled) break;
+    let sessionId = null, clipFailed = false, decodedAny = false, earlyDecodeFailures = 0;
+    try {
+      const opened = await plugin.openAnalysis({ id: clip.video.id, maxHeight: 1080, seekMode: "exact" });
+      sessionId = opened && opened.session_id;
+      if (!sessionId) throw videoCodecError({ name: nativeVideoDisplayName(clip.video) });
+      for (let sampleIndex = 0; sampleIndex < clip.times.length; sampleIndex++) {
+        if (token.cancelled) break outer;
+        const at = clip.times[sampleIndex];
+        let extracted;
+        try {
+          extracted = await plugin.extractFrame({ sessionId,
+            positionMs: Math.max(0, Math.round(at * 1000)), quality: 82 });
+        } catch (error) {
+          clipFailed = true; failed++; done++; earlyDecodeFailures++;
+          lastErr = error && error.message || videoCodecError({ name: nativeVideoDisplayName(clip.video) }).message;
+          paint();
+          if (!decodedAny && earlyDecodeFailures >= 2) {
+            const remaining = clip.times.length - sampleIndex - 1;
+            failed += remaining; done += remaining;
+            break;
+          }
+          continue;
+        }
+        if (token.cancelled) break outer;
+        decodedAny = true;
+        const blob = jpegBlobFromBase64(extracted && extracted.jpeg_base64);
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = URL.createObjectURL(blob);
+        token.previewUrl = previewUrl;
+        $("progressPhoto").src = previewUrl;
+        const absoluteAtMs = clip.recordingStartMs == null ? null
+          : Math.round(clip.recordingStartMs + at * 1000);
+        let pos = null, frameLocationSource = "none";
+        if (gpx && absoluteAtMs != null) {
+          pos = gpxPositionAt(gpx, absoluteAtMs);
+          if (pos) frameLocationSource = "gpx_timestamp";
+        } else if (currentPosition) {
+          pos = currentPosition; frameLocationSource = "current_position_confirmed";
+        }
+        const fd = new FormData();
+        fd.append("photo", blob, "imported-video-frame.jpg");
+        fd.append("drive_id", driveId);
+        fd.append("capture_source", "imported_video");
+        fd.append("location_source", frameLocationSource);
+        fd.append("source_event_key", `import:${clip.sourceId}:${Math.round(at * 1000)}`);
+        fd.append("source_offset_ms", String(Math.round((elapsed + at) * 1000)));
+        if (absoluteAtMs != null) fd.append("captured_at_ms", String(absoluteAtMs));
+        if (pos) {
+          fd.append("lat", String(pos.lat)); fd.append("lng", String(pos.lng));
+          if (pos.accuracy != null) fd.append("gps_accuracy", String(pos.accuracy));
+          if (pos.speed != null) fd.append("speed", String(pos.speed));
+          if (pos.heading != null) fd.append("heading", String(pos.heading));
+          usedGpsTrack.push([elapsed + at, pos.lat, pos.lng,
+            pos.accuracy, pos.speed, pos.heading]);
+        }
+        try {
+          const result = await checkImportedFrame(fd);
+          checked++;
+          if (result && result.found) found++;
+          else if (result && result.duplicate && result.duplicate_of != null) {
+            duplicateIds.add(String(result.duplicate_of));
+          }
+          terminalError = exhaustedSharedQuota(result);
+          if (terminalError) lastErr = terminalError.message;
+        } catch (error) {
+          clipFailed = true; failed++; lastErr = error && error.message || String(error);
+          if (terminalVideoAnalysisError(error)) terminalError = error;
+        }
+        done++;
+        paint(frameLocationSource);
+        if (terminalError) break outer;
+      }
+    } catch (error) {
+      clipFailed = true;
+      const remaining = clip.times.length;
+      failed += remaining; done += remaining; lastErr = error && error.message || String(error);
+      paint();
+    } finally {
+      if (sessionId) {
+        try { await plugin.closeAnalysis({ sessionId }); }
+        catch (error) {
+          clipFailed = true; terminalError = error;
+          lastErr = error && error.message || String(error);
+        }
+      }
+      elapsed += clip.duration;
+    }
+    if (terminalError) break;
+    if (!token.cancelled && !clipFailed) {
+      try {
+        await plugin.consumePendingImport({ id: clip.video.id });
+        consumedIds.push(String(clip.video.id));
+      } catch (error) {
+        failed++; lastErr = error && error.message || String(error);
+      }
+    }
+  }
+
+  if (previewUrl) {
+    URL.revokeObjectURL(previewUrl); previewUrl = null; token.previewUrl = null;
+    $("progressPhoto").removeAttribute("src");
+  }
+  if (done || checked) {
+    const existing = (await api("/api/drives").catch(() => []))
+      .find((item) => String(item.id) === driveId);
+    if (existing) {
+      await api(`/api/drives/${encodeURIComponent(driveId)}/analysis`, {
+        method: "POST", body: JSON.stringify({ checked, found, already: duplicateIds.size,
+          already_ids: [...duplicateIds] }),
+      }).catch(() => {});
+    } else {
+      const earliest = clips.map((clip) => clip.recordingStartMs)
+        .filter(Number.isFinite).sort((a, b) => a - b)[0];
+      await api("/api/drives", { method: "POST", body: JSON.stringify({ id: driveId,
+        started_at: Number.isFinite(earliest) ? earliest / 1000 : Date.now() / 1000,
+        checked, found, already: duplicateIds.size, already_ids: [...duplicateIds],
+        gps_track: usedGpsTrack, capture_source: "imported_video",
+      }) }).catch(() => {});
+    }
+  }
+  await loadReports().catch(() => {});
+  if (token.cancelled) {
+    if (!token.silent) {
+      show("home");
+      alert(t("video_import_cancelled", { checked, n: plan.frames }));
+    }
+    return { cancelled: true, checked, total: plan.frames, found, failed, driveId, consumedIds };
+  }
+  show("home");
+  alert(terminalError ? t("video_import_stopped", { checked, n: plan.frames, err: lastErr })
+    : failed ? t("video_import_partial", { failed, n: plan.frames,
+    err: lastErr || t("decoder_failed") })
+    : t("video_import_done", { found, checked }));
+  return { cancelled: false, checked, total: plan.frames, found, failed, driveId, consumedIds };
+}
+
+function analyseNativeImportedVideos(selectedVideos, options = {}) {
+  const videos = Array.from(selectedVideos || []).filter((video) => video && video.id);
+  if (!videos.length) return Promise.resolve({ started: false });
+  if (importedVideoJob) {
+    alert(t("manual_analysis_active"));
+    return importedVideoJob.promise;
+  }
+  const token = { cancelled: false, silent: false };
+  const job = { token, promise: null };
+  importedVideoJob = job;
+  job.promise = runNativeVideoAnalysis(videos, options, token).catch((error) => {
+    if (!token.silent) {
+      alert(error && error.message || String(error));
+      show("home");
+    }
+    return { error, cancelled: token.cancelled };
+  }).finally(() => {
+    if (token.previewUrl) {
+      try { URL.revokeObjectURL(token.previewUrl); } catch (error) {}
+      token.previewUrl = null;
+      $("progressPhoto").removeAttribute("src");
+    }
+    if (token.wakeLock) {
+      try { Promise.resolve(token.wakeLock.release()).catch(() => {}); } catch (error) {}
+      token.wakeLock = null;
+    }
+    if (importedVideoJob === job) importedVideoJob = null;
+    $("progressCancel").classList.add("hidden");
+    $("progressCancel").disabled = false;
+    void initNativeVideoImports();
+  });
+  return job.promise;
+}
+
 const footageAnalysisJobs = new Map();
 
 async function analyseFootage(driveId, driveRec) {
+  if (importedVideoJob) {
+    alert(t("manual_analysis_active"));
+    return importedVideoJob.promise;
+  }
   const jobKey = String(driveId);
   const existingJob = footageAnalysisJobs.get(jobKey);
   if (existingJob) {
@@ -2888,6 +3985,82 @@ async function shareZip(zip) {
 }
 $("fileInput").onchange = (e) => { handleFile(e.target.files[0]); e.target.value = ""; };
 
+function renderImportedGpxStatus() {
+  const status = $("gpxImportStatus"), clear = $("gpxClearBtn");
+  if (importedGpx) {
+    status.dataset.selected = "1";
+    status.textContent = t("gpx_ready", { name: importedGpx.name, n: importedGpx.points.length });
+    clear.classList.remove("hidden");
+    $("videoUseCurrentLocation").checked = false;
+    $("videoUseCurrentLocation").disabled = true;
+  } else {
+    delete status.dataset.selected;
+    status.textContent = t("gpx_none");
+    clear.classList.add("hidden");
+    $("videoUseCurrentLocation").disabled = false;
+  }
+}
+
+$("gpxImportBtn").onclick = () => $("gpxInput").click();
+$("gpxClearBtn").onclick = () => {
+  importedGpx = null;
+  $("gpxInput").value = "";
+  renderImportedGpxStatus();
+};
+$("gpxInput").onchange = async (event) => {
+  const file = event.target.files && event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    if (file.size > IMPORT_GPX_MAX_BYTES) throw new Error(t("gpx_bad"));
+    const source = await file.text();
+    const parsed = parseGpxTrack(source);
+    importedGpx = { ...parsed, name: file.name || "track.gpx",
+      fingerprint: await fingerprintText(source) };
+    renderImportedGpxStatus();
+  } catch (error) {
+    importedGpx = null;
+    renderImportedGpxStatus();
+    alert(error && error.message || t("gpx_bad"));
+  }
+};
+
+$("videoImportBtn").onclick = async () => {
+  if (videoImportPickerActive || importedVideoJob || manualAnalysisActive || footageAnalysisJobs.size) {
+    alert(t("manual_analysis_active"));
+    return;
+  }
+  const nativeImport = getVideoImportPlugin();
+  if (nativeImport) {
+    videoImportPickerActive = true;
+    try {
+      const picked = await nativeImport.pickVideo();
+      if (!picked || picked.cancelled) return;
+      renderNativeVideoImports(picked);
+      const selected = Array.isArray(picked.videos) && picked.videos.length
+        ? picked.videos : picked.video ? [picked.video] : [];
+      if (selected.length) void analyseNativeImportedVideos(selected);
+    } catch (error) { alert(error && error.message || String(error)); }
+    finally { videoImportPickerActive = false; }
+    return;
+  }
+  // Keep this as a direct click: a browser can revoke file-picker activation after an
+  // awaited health request. Consent and service checks still happen before decoding or
+  // uploading the first frame.
+  $("videoInput").click();
+};
+$("videoInput").onchange = (event) => {
+  // File objects are lightweight handles. Clear the picker immediately so choosing the
+  // same dashcam clips later fires another change event; the handles live only until this
+  // sequential analysis completes.
+  const files = Array.from(event.target.files || []);
+  event.target.value = "";
+  StandaloneAPI.prewarm();
+  void analyseImportedVideos(files);
+};
+$("progressCancel").onclick = () => cancelImportedVideoAnalysis(false);
+renderImportedGpxStatus();
+
 // Live pipeline progress from the standalone engine (stage-by-stage updates).
 window.addEventListener("pipeline-progress", (e) => {
   if (!$("progress").classList.contains("hidden")) $("progressText").textContent = e.detail;
@@ -2913,6 +4086,14 @@ window.handleAppBack = () => {
   if (driveFinalizing) return true;
   if (!$("dataConsent").classList.contains("hidden")) { finishDataConsent(false); return true; }
   if (!$("viewer").classList.contains("hidden")) { closeViewer(); return true; }
+  if (importedVideoJob && !$("progress").classList.contains("hidden")) {
+    // Detach the long-running job from the screen immediately. The current request may
+    // finish and save its real result, but no late progress/alert may steal Home back.
+    cancelImportedVideoAnalysis(true);
+    show("home");
+    void loadReports().catch(() => {});
+    return true;
+  }
   if (manualAnalysisActive && !$("progress").classList.contains("hidden")) {
     manualAnalysisSequence++; // the in-flight request may save, but cannot retake the UI
     clearManualPreview();
@@ -2978,12 +4159,17 @@ $("setSave").onclick = async () => {
 $("wipeBtn").onclick = async () => {
   if (!confirm(t("confirm_wipe"))) return;
   const plugins = window.Capacitor && Capacitor.Plugins;
+  $("wipeBtn").disabled = true;
   try {
+    // This is both a write barrier and the authoritative cleanup for Android import
+    // grants/private share copies. It must complete before any browser/native database
+    // is cleared, and a failure must be visible rather than claiming a full deletion.
+    await clearImportedVideosBeforeWipe();
     if (plugins && plugins.DriveMode && typeof plugins.DriveMode.clearAllData === "function") {
       await plugins.DriveMode.clearAllData();
     }
     await api("/api/reports", { method: "DELETE" });
-  } catch (e) { alert(e.message); return; }
+  } catch (e) { $("wipeBtn").disabled = false; alert(e.message); return; }
   try {
     if (plugins && plugins.Filesystem && plugins.Filesystem.rmdir) {
       await plugins.Filesystem.rmdir({ path: FRAME_DIR, directory: "DOCUMENTS", recursive: true });
@@ -2994,6 +4180,7 @@ $("wipeBtn").onclick = async () => {
 };
 
 applyLang();
+void initNativeVideoImports();
 
 // #report-<id> deep link opens that report's detail screen directly.
 (async () => {

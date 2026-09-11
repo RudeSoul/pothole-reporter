@@ -84,17 +84,21 @@ npx wrangler d1 execute pothole-reporter --local --file=./schema.sql
 npx wrangler d1 execute pothole-reporter --remote --file=./schema.sql
 ```
 
-Do not run `upgrade-v1-receipts.sql` on a fresh database. For a database that was
-already created from this service's pre-receipt `schema.sql`, take an operator
-backup, stop writes or otherwise arrange a controlled rollout, and apply this
-non-idempotent migration exactly once **before** deploying code that reads the new
-columns and tables:
+Do not run either upgrade file on a fresh database. For an existing database, take
+an operator backup, stop writes or otherwise arrange a controlled rollout, and apply
+each required non-idempotent migration exactly once **before** deploying code that
+reads its columns and tables. A pre-receipt database needs v1 followed by v2; a
+database already running the receipt schema needs only v2:
 
 ```sh
 npx wrangler d1 execute pothole-reporter --local \
   --file=./upgrade-v1-receipts.sql
 npx wrangler d1 execute pothole-reporter --remote \
   --file=./upgrade-v1-receipts.sql
+npx wrangler d1 execute pothole-reporter --local \
+  --file=./upgrade-v2-capture-provenance.sql
+npx wrangler d1 execute pothole-reporter --remote \
+  --file=./upgrade-v2-capture-provenance.sql
 ```
 
 The migration adds `observations.verification_state`,
@@ -102,6 +106,10 @@ The migration adds `observations.verification_state`,
 conservatively labelled `client_attested`; the migration cannot retroactively prove
 that the server saw their images. It does not transform the incompatible
 experimental `pothole` database described above and it does not import tenders.
+The v2 migration adds allowlisted `capture_source` and `location_source` columns to
+observations plus aggregate-only `capture_metrics_daily`. Existing observations are
+labelled `manual` / `device_gps` because their historical capture path cannot be
+reconstructed. Do not present those migrated labels as measured Meta/dashcam usage.
 
 ### Reverse geocoder
 
@@ -322,12 +330,13 @@ returned receipt, and include it with the matching report.
 Older released clients may perform shared detection without those receipt fields. On
 an existing service, use this rollout order:
 
-1. Apply `upgrade-v1-receipts.sql` exactly once.
-2. Initially deploy with `REQUIRE_SHARED_DETECTION_RECEIPT=false` if old clients must
+1. Apply `upgrade-v1-receipts.sql` exactly once when the database predates receipts.
+2. Apply `upgrade-v2-capture-provenance.sql` exactly once.
+3. Initially deploy with `REQUIRE_SHARED_DETECTION_RECEIPT=false` if old clients must
    remain able to report.
-3. Release receipt-capable browser and Android clients and verify their reports are
+4. Release receipt-capable browser and Android clients and verify their reports are
    counted as `server_verified_shared`.
-4. Change the flag to `true`, deploy again, and confirm
+5. Change the flag to `true`, deploy again, and confirm
    `shared_detection_receipts_required: true` on `/v1/health`.
 
 The compatibility setting affects only a missing receipt. When it is `false`, a
@@ -466,6 +475,13 @@ is logged with the request ID and does not replace the API response. These are
 request and participating-installation measures, not unique people or successful
 complaints.
 
+Successful fresh detector checks also increment `capture_metrics_daily` inside the
+same D1 idempotency-finalization batch. Its dimensions are only the allowlisted
+capture source, location source, vision mode and verdict/activity outcome. It has no
+installation ID, request ID, coordinates, filenames or video identifiers. Therefore
+an undamaged imported frame and a personal-key check with no report still count, while
+a cached retry cannot increment the aggregate again.
+
 Register once:
 
 ```text
@@ -537,6 +553,14 @@ YOLO deployment accepts only the universal `high` setting and does not forward t
 OpenAI-only detail field to the YOLO gateway. An OpenAI-primary deployment uses the
 requested detail; if it falls back to YOLO, the gateway request omits it.
 
+`capture_source` is `manual`, `drive_live`, `drive_vod` or `imported_video`.
+It defaults to `manual` for manual mode and `drive_live` for drive mode; the two
+fields must agree. `location_source` is `device_gps`, `gpx_timestamp`,
+`current_position_confirmed` or `none`, defaults to `device_gps` when coordinates
+are present and `none` otherwise, and must agree with coordinate presence. GPX and
+confirmed-current-position labels are valid only for imported video. These bounded
+labels feed aggregate impact accounting; they do not change the detection prompt.
+
 The endpoint returns the flat v4 verdict plus `detector`, per-installation `quota`,
 and `request_id`. When the verdict is both `image_quality="acceptable"` and
 `assessment="damaged"` and a `client_observation_id` was supplied, it also returns
@@ -570,10 +594,13 @@ Personal-key calls do not otherwise reach this server when the model finds no
 damage. After every personal OpenAI vision attempt, send only:
 
 ```json
-{"event":"vision_check","vision_provider":"personal_openai","capture_mode":"manual"}
+{"event":"vision_check","vision_provider":"personal_openai","capture_mode":"manual","capture_source":"manual","location_source":"device_gps"}
 ```
 
-`capture_mode` may also be `drive`; extra fields (including coordinates) are
+`capture_mode` may also be `drive`. The two source labels use the same allowlists and
+capture-mode rules as shared detection, but this privacy-preserving endpoint accepts
+the categorical location label without coordinates. Missing legacy labels default to
+`manual`/`drive_live` and `none`; all other extra fields (including coordinates) are
 rejected. `POST /v1/activity` returns
 `202 {request_id, accepted: true, event: "vision_check"}` and records only an
 aggregate own-key check. Do not send it for shared-server vision calls, which are
@@ -670,6 +697,8 @@ accepting arbitrary map edits.
   "gps_accuracy_m": 5,
   "heading_deg": 90,
   "speed_mps": 8,
+  "capture_source": "imported_video",
+  "location_source": "gpx_timestamp",
   "damage_type": "pothole_cavity",
   "size": "medium",
   "image_hash": "64-lowercase-hex-characters",
@@ -690,6 +719,12 @@ The response is `201` for a new canonical pothole and `200` for a duplicate:
 increments `pothole.seen_count` once; repeated sightings remain audit records but
 do not inflate that impact count. Personal provider `personal_openai` (and legacy
 `own_key`) is normalized to aggregate metric `own_key`.
+
+Report provenance uses the same allowlists. Because a public-map report always needs
+coordinates, `location_source` cannot be `none`; GPX and confirmed-current-position
+labels require `capture_source: "imported_video"`. Legacy reports with neither label
+default to `manual` / `device_gps`. A later request may not reuse the same
+`client_observation_id` to relabel stored provenance.
 
 With receipt enforcement enabled, a `shared_server` report must carry the receipt
 from its corresponding detection. The server validates installation ownership,
@@ -751,6 +786,9 @@ the row and its stored facts are reconciled on resubmission.
   when at least one distinct observer has a receipt-verified observation; otherwise
   it is `client_attested`.
 - `GET /v1/impact?from=YYYY-MM-DD&to=YYYY-MM-DD` returns aggregate requests,
+  exactly-once `capture_checks` grouped by source/location/vision mode/outcome,
+  plus `video_checks_total` (all drive/video sources) and
+  `imported_video_checks_total` for the public dashboard,
   active installations, new potholes, observations, and distinct observers. Its
   observation totals split `server_verified_shared` from `client_attested` and
   include `verified_distinct_observers`. The default window is the last 30 UTC days.

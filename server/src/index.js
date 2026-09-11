@@ -67,6 +67,19 @@ const ALLOWED_IMAGE_DETAILS = new Set(MODEL_CONFIG.allowedImageDetails);
 const ORIGINAL_DETAIL_MODELS = new Set(MODEL_CONFIG.originalDetailModels);
 const ALLOWED_LANGUAGES = new Set(MODEL_CONFIG.allowedLanguages);
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const CAPTURE_SOURCES = new Set([
+  "manual",
+  "drive_live",
+  "drive_vod",
+  "imported_video",
+]);
+const LOCATION_SOURCES = new Set([
+  "device_gps",
+  "gpx_timestamp",
+  "current_position_confirmed",
+  "none",
+]);
+const DRIVE_CAPTURE_SOURCES = new Set(["drive_live", "drive_vod", "imported_video"]);
 const schemaStrings = (field) => new Set(
   DETECT_SCHEMA.properties[field].enum.filter((value) => typeof value === "string"));
 const DAMAGE_TYPES = schemaStrings("damage_type");
@@ -141,6 +154,49 @@ const NON_MUNICIPAL_ROAD_OWNERSHIPS = new Set([
   "national_highway", "state_highway", "district_highway",
   "rural", "outside_state",
 ]);
+
+function captureProvenance(
+  body,
+  captureMode,
+  hasCoordinates,
+  { allowLocationLabelWithoutCoordinates = false } = {},
+) {
+  const defaultCaptureSource = captureMode === "drive" ? "drive_live" : "manual";
+  const captureSource = Object.prototype.hasOwnProperty.call(body, "capture_source")
+    ? boundedString(body.capture_source, 32) : defaultCaptureSource;
+  if (!CAPTURE_SOURCES.has(captureSource)) {
+    throw new HttpError(400, "bad_capture_source",
+      "capture_source must be manual, drive_live, drive_vod or imported_video.");
+  }
+  if (captureMode === "manual" && captureSource !== "manual") {
+    throw new HttpError(400, "bad_capture_source",
+      "Manual capture_mode requires capture_source manual.");
+  }
+  if (captureMode === "drive" && !DRIVE_CAPTURE_SOURCES.has(captureSource)) {
+    throw new HttpError(400, "bad_capture_source",
+      "Drive capture_mode requires drive_live, drive_vod or imported_video.");
+  }
+
+  const defaultLocationSource = hasCoordinates ? "device_gps" : "none";
+  const locationSource = Object.prototype.hasOwnProperty.call(body, "location_source")
+    ? boundedString(body.location_source, 40) : defaultLocationSource;
+  if (!LOCATION_SOURCES.has(locationSource)) {
+    throw new HttpError(400, "bad_location_source",
+      "location_source must be device_gps, gpx_timestamp, current_position_confirmed or none.");
+  }
+  if (!allowLocationLabelWithoutCoordinates
+      && ((hasCoordinates && locationSource === "none")
+        || (!hasCoordinates && locationSource !== "none"))) {
+    throw new HttpError(400, "bad_location_source",
+      "location_source must be none without coordinates and non-none when coordinates are supplied.");
+  }
+  if (["gpx_timestamp", "current_position_confirmed"].includes(locationSource)
+      && captureSource !== "imported_video") {
+    throw new HttpError(400, "bad_location_source",
+      "GPX and confirmed-current-position provenance is valid only for imported_video.");
+  }
+  return { captureSource, locationSource };
+}
 
 // Only server-side KGIS resolution can change the public ownership projection.
 // Nonmunicipal results deliberately have source="unresolved" because they do not
@@ -984,7 +1040,40 @@ async function recordMetrics(env, context, response, elapsedMs) {
     openai_error_code: context.openaiErrorCode || null,
     yolo_error_code: context.yoloErrorCode || null,
     detector_fallback_reason: context.detectorFallbackReason || null,
+    capture_source: context.captureSource || null,
+    location_source: context.locationSource || null,
   }));
+}
+
+function captureMetricStatement(env, context, {
+  captureSource,
+  locationSource,
+  visionMode,
+  outcome,
+}) {
+  // Tie this aggregate to the still-owned idempotency lease. Cached retries return
+  // before reaching this statement; a lost/replaced lease cannot increment a row.
+  return env.DB.prepare(
+    `INSERT INTO capture_metrics_daily
+       (day,capture_source,location_source,vision_mode,outcome,request_count)
+     SELECT ?1,?2,?3,?4,?5,1
+      WHERE EXISTS (
+        SELECT 1 FROM idempotency_claims
+         WHERE install_id=?6 AND route=?7 AND idempotency_key=?8 AND claim_token=?9
+      )
+     ON CONFLICT(day,capture_source,location_source,vision_mode,outcome)
+     DO UPDATE SET request_count = capture_metrics_daily.request_count + 1`
+  ).bind(
+    isoDay(),
+    captureSource,
+    locationSource,
+    visionMode,
+    outcome,
+    context.installId,
+    context.idempotencyRoute,
+    context.idempotencyKey,
+    context.idempotencyClaimToken,
+  );
 }
 
 async function handleInstallation(request, env, context) {
@@ -1019,22 +1108,37 @@ async function handleActivity(request, env, context) {
   const body = await parseJsonBody(request, context);
   const cached = await idempotentResult(env, context);
   if (cached) return cached;
-  const allowedKeys = new Set(["event", "vision_provider", "capture_mode"]);
+  const allowedKeys = new Set([
+    "event", "vision_provider", "capture_mode", "capture_source", "location_source",
+  ]);
   if (!body || typeof body !== "object" || Array.isArray(body)
       || Object.keys(body).some((key) => !allowedKeys.has(key))) {
     throw new HttpError(400, "bad_activity",
-      "Activity accepts only event, vision_provider and capture_mode.");
+      "Activity accepts only event, vision_provider, capture_mode and aggregate provenance labels.");
   }
   if (body.event !== "vision_check" || body.vision_provider !== "personal_openai"
       || !["manual", "drive"].includes(body.capture_mode)) {
     throw new HttpError(400, "bad_activity",
       "Activity must describe a personal_openai vision_check in manual or drive mode.");
   }
+  const provenance = captureProvenance(body, body.capture_mode, false, {
+    // This privacy-preserving endpoint deliberately accepts only the categorical
+    // location label, never the coordinates themselves.
+    allowLocationLabelWithoutCoordinates: true,
+  });
   await rejectReplay(env, context);
   context.visionMode = "own_key";
   context.outcome = `vision_check_${body.capture_mode}`;
+  context.captureSource = provenance.captureSource;
+  context.locationSource = provenance.locationSource;
   const payload = { accepted: true, event: "vision_check" };
-  await rememberIdempotency(env, context, payload, 202);
+  await rememberIdempotency(env, context, payload, 202, [
+    captureMetricStatement(env, context, {
+      ...provenance,
+      visionMode: "own_key",
+      outcome: "vision_check",
+    }),
+  ]);
   return jsonResponse(payload, 202, context.requestId);
 }
 
@@ -1568,6 +1672,7 @@ function prepareSharedDetection(body, env) {
     throw new HttpError(400, "bad_detection_location",
       "Detection receipt coordinates must be valid lat and lng values.");
   }
+  const provenance = captureProvenance(body, captureMode, hasLat);
   return {
     body,
     images,
@@ -1578,6 +1683,7 @@ function prepareSharedDetection(body, env) {
     clientObservationId,
     lat,
     lng,
+    ...provenance,
   };
 }
 
@@ -1618,6 +1724,8 @@ async function handleVisionDetect(request, env, context) {
   const cached = await idempotentResult(env, context);
   if (cached) return cached;
   const prepared = prepareSharedDetection(body, env);
+  context.captureSource = prepared.captureSource;
+  context.locationSource = prepared.locationSource;
   await rejectReplay(env, context);
   const { payload, verdict, detection } = await runSharedDetection(env, context, prepared);
   const beforeFinalize = [];
@@ -1683,9 +1791,16 @@ async function handleVisionDetect(request, env, context) {
       expiresAt,
     ));
   }
-  await rememberIdempotency(env, context, payload, 200, beforeFinalize);
-  context.outcome = verdict.image_quality === "rejected"
+  const detectionOutcome = verdict.image_quality === "rejected"
     ? "image_rejected" : verdict.assessment;
+  beforeFinalize.push(captureMetricStatement(env, context, {
+    captureSource: prepared.captureSource,
+    locationSource: prepared.locationSource,
+    visionMode: "shared_detect",
+    outcome: detectionOutcome,
+  }));
+  await rememberIdempotency(env, context, payload, 200, beforeFinalize);
+  context.outcome = detectionOutcome;
   return jsonResponse(payload, 200, context.requestId);
 }
 
@@ -1924,6 +2039,8 @@ function observationMatchesCandidate(stored, candidate, potholeId, toleranceMetr
   return stored.damage_type === candidate.damageType
     && storedSize === candidate.size
     && stored.image_hash === candidate.imageHash
+    && stored.capture_source === candidate.captureSource
+    && stored.location_source === candidate.locationSource
     && stored.detector_provider === candidate.detector.provider
     && storedModel === candidate.detector.model
     && stored.prompt_version === candidate.detector.prompt_version
@@ -1960,32 +2077,33 @@ async function commitReportObservation(
   // that both completed this read before either inserted its observation.
   const before = await env.DB.prepare(
     `SELECT pothole_id,lat,lng,damage_type,size,image_hash,detector_provider,
-            detector_model,prompt_version,schema_version
+            detector_model,prompt_version,schema_version,capture_source,location_source
        FROM observations
       WHERE install_id=?1 AND client_observation_id=?2`
   ).bind(context.installId, candidate.clientObservationId).first();
   if (before && !observationMatchesCandidate(
     before, candidate, potholeId, locationTolerance)) {
     throw new HttpError(409, "observation_id_conflict",
-      "That client_observation_id already belongs to different evidence or location.");
+      "That client_observation_id already belongs to different evidence, location or provenance.");
   }
   const observationInsert = receipt
     ? env.DB.prepare(
       `INSERT OR IGNORE INTO observations
          (pothole_id,install_id,request_id,client_observation_id,observed_at,
-          lat,lng,gps_accuracy_m,heading_deg,speed_mps,damage_type,size,image_hash,
+          lat,lng,gps_accuracy_m,heading_deg,speed_mps,capture_source,location_source,
+          damage_type,size,image_hash,
           detector_provider,verification_state,detector_model,prompt_version,schema_version,
           duplicate_distance_m)
-       SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,
-              'server_verified_shared',?15,?16,?17,?18
+       SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,
+              'server_verified_shared',?17,?18,?19,?20
         WHERE EXISTS (
           SELECT 1 FROM shared_detection_receipts r
-           WHERE r.receipt_id=?19 AND r.install_id=?2
-             AND r.client_observation_id=?4 AND r.image_hash=?13
-             AND r.damage_type=?11
-             AND (r.size=?12 OR (r.size IS NULL AND ?12 IS NULL))
-             AND r.prompt_version=?16 AND r.schema_version=?17
-             AND r.expires_at>=?20
+           WHERE r.receipt_id=?21 AND r.install_id=?2
+             AND r.client_observation_id=?4 AND r.image_hash=?15
+             AND r.damage_type=?13
+             AND (r.size=?14 OR (r.size IS NULL AND ?14 IS NULL))
+             AND r.prompt_version=?18 AND r.schema_version=?19
+             AND r.expires_at>=?22
              AND (r.consumed_at IS NULL OR r.consumed_client_observation_id=?4)
         )`
     ).bind(
@@ -1999,6 +2117,8 @@ async function commitReportObservation(
       candidate.gpsAccuracy,
       candidate.heading,
       candidate.speed,
+      candidate.captureSource,
+      candidate.locationSource,
       candidate.damageType,
       candidate.size,
       candidate.imageHash,
@@ -2013,11 +2133,12 @@ async function commitReportObservation(
     : env.DB.prepare(
       `INSERT OR IGNORE INTO observations
          (pothole_id,install_id,request_id,client_observation_id,observed_at,
-          lat,lng,gps_accuracy_m,heading_deg,speed_mps,damage_type,size,image_hash,
+          lat,lng,gps_accuracy_m,heading_deg,speed_mps,capture_source,location_source,
+          damage_type,size,image_hash,
           detector_provider,verification_state,detector_model,prompt_version,schema_version,
           duplicate_distance_m)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,
-               'client_attested',?15,?16,?17,?18)`
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,
+               'client_attested',?17,?18,?19,?20)`
     ).bind(
       potholeId,
       context.installId,
@@ -2029,6 +2150,8 @@ async function commitReportObservation(
       candidate.gpsAccuracy,
       candidate.heading,
       candidate.speed,
+      candidate.captureSource,
+      candidate.locationSource,
       candidate.damageType,
       candidate.size,
       candidate.imageHash,
@@ -2059,10 +2182,11 @@ async function commitReportObservation(
                AND o.image_hash=?6 AND o.damage_type=?7
                AND (o.size=?8 OR (o.size IS NULL AND ?8 IS NULL))
                AND o.pothole_id=?9 AND o.lat=?10 AND o.lng=?11
+               AND o.capture_source=?12 AND o.location_source=?13
                AND o.detector_provider='shared_server'
                AND o.verification_state='server_verified_shared'
-               AND (o.detector_model=?12 OR (o.detector_model IS NULL AND ?12 IS NULL))
-               AND o.prompt_version=?13 AND o.schema_version=?14
+               AND (o.detector_model=?14 OR (o.detector_model IS NULL AND ?14 IS NULL))
+               AND o.prompt_version=?15 AND o.schema_version=?16
           )`
     ).bind(
       commitAt,
@@ -2076,6 +2200,8 @@ async function commitReportObservation(
       potholeId,
       candidate.lat,
       candidate.lng,
+      candidate.captureSource,
+      candidate.locationSource,
       candidate.detector.model,
       candidate.detector.prompt_version,
       candidate.detector.schema_version,
@@ -2093,10 +2219,11 @@ async function commitReportObservation(
                AND accepted.image_hash=?4 AND accepted.damage_type=?5
                AND (accepted.size=?6 OR (accepted.size IS NULL AND ?6 IS NULL))
                AND accepted.lat=?7 AND accepted.lng=?8
-               AND accepted.detector_provider=?9
-               AND (accepted.detector_model=?10
-                 OR (accepted.detector_model IS NULL AND ?10 IS NULL))
-               AND accepted.prompt_version=?11 AND accepted.schema_version=?12
+               AND accepted.capture_source=?9 AND accepted.location_source=?10
+               AND accepted.detector_provider=?11
+               AND (accepted.detector_model=?12
+                 OR (accepted.detector_model IS NULL AND ?12 IS NULL))
+               AND accepted.prompt_version=?13 AND accepted.schema_version=?14
           )
         GROUP BY o.pothole_id,o.install_id
        ON CONFLICT(pothole_id,install_id) DO UPDATE SET
@@ -2111,6 +2238,8 @@ async function commitReportObservation(
       candidate.size,
       candidate.lat,
       candidate.lng,
+      candidate.captureSource,
+      candidate.locationSource,
       candidate.detector.provider,
       candidate.detector.model,
       candidate.detector.prompt_version,
@@ -2142,10 +2271,11 @@ async function commitReportObservation(
                AND accepted.image_hash=?8 AND accepted.damage_type=?9
                AND (accepted.size=?10 OR (accepted.size IS NULL AND ?10 IS NULL))
                AND accepted.lat=?11 AND accepted.lng=?12
-               AND accepted.detector_provider=?13
-               AND (accepted.detector_model=?14
-                 OR (accepted.detector_model IS NULL AND ?14 IS NULL))
-               AND accepted.prompt_version=?15 AND accepted.schema_version=?16
+               AND accepted.capture_source=?13 AND accepted.location_source=?14
+               AND accepted.detector_provider=?15
+               AND (accepted.detector_model=?16
+                 OR (accepted.detector_model IS NULL AND ?16 IS NULL))
+               AND accepted.prompt_version=?17 AND accepted.schema_version=?18
           )`
     ).bind(
       potholeId,
@@ -2160,6 +2290,8 @@ async function commitReportObservation(
       candidate.size,
       candidate.lat,
       candidate.lng,
+      candidate.captureSource,
+      candidate.locationSource,
       candidate.detector.provider,
       candidate.detector.model,
       candidate.detector.prompt_version,
@@ -2169,7 +2301,8 @@ async function commitReportObservation(
 
   const stored = await env.DB.prepare(
     `SELECT pothole_id,lat,lng,damage_type,size,image_hash,detector_provider,
-            detector_model,prompt_version,schema_version FROM observations
+            detector_model,prompt_version,schema_version,capture_source,location_source
+       FROM observations
       WHERE install_id=?1 AND client_observation_id=?2`
   ).bind(context.installId, candidate.clientObservationId).first();
   if (!stored) {
@@ -2177,7 +2310,7 @@ async function commitReportObservation(
   }
   if (!observationMatchesCandidate(stored, candidate, potholeId, locationTolerance)) {
     throw new HttpError(409, "observation_id_conflict",
-      "That client_observation_id already belongs to different evidence or location.");
+      "That client_observation_id already belongs to different evidence, location or provenance.");
   }
   if (receipt) {
     const consumed = await env.DB.prepare(
@@ -2223,6 +2356,7 @@ function reportCandidate(body) {
   if (!validLatLng(lat, lng)) {
     throw new HttpError(400, "bad_location", "A report needs valid lat and lng coordinates.");
   }
+  const provenance = captureProvenance(body, null, true);
   const clientObservationId = boundedString(body.client_observation_id, 180);
   if (!clientObservationId) {
     throw new HttpError(400, "bad_observation_id", "client_observation_id is required.");
@@ -2286,6 +2420,7 @@ function reportCandidate(body) {
     gpsAccuracy,
     heading,
     speed,
+    ...provenance,
     damageType,
     size,
     imageHash,
@@ -2443,6 +2578,8 @@ async function handlePotholeReport(request, env, context) {
   const cached = await idempotentResult(env, context);
   if (cached) return cached;
   const candidate = reportCandidate(body);
+  context.captureSource = candidate.captureSource;
+  context.locationSource = candidate.locationSource;
   await rejectReplay(env, context);
   candidate.detectionReceipt = await verifySharedDetectionReceipt(
     env, context, candidate);
@@ -3462,6 +3599,7 @@ async function handleImpact(request, env, context) {
   const toMs = Date.parse(to + "T23:59:59.999Z");
   const [
     requestRows,
+    captureRows,
     activeRow,
     potholeRow,
     observationRow,
@@ -3472,6 +3610,14 @@ async function handleImpact(request, env, context) {
         WHERE day BETWEEN ?1 AND ?2
         GROUP BY route,outcome,vision_mode
         ORDER BY route,outcome,vision_mode`
+    ).bind(from, to).all(),
+    env.DB.prepare(
+      `SELECT capture_source,location_source,vision_mode,outcome,
+              SUM(request_count) AS count
+         FROM capture_metrics_daily
+        WHERE day BETWEEN ?1 AND ?2
+        GROUP BY capture_source,location_source,vision_mode,outcome
+        ORDER BY capture_source,location_source,vision_mode,outcome`
     ).bind(from, to).all(),
     env.DB.prepare(
       `SELECT COUNT(DISTINCT install_id) AS count
@@ -3498,12 +3644,29 @@ async function handleImpact(request, env, context) {
     vision_mode: row.vision_mode,
     count: Number(row.count || 0),
   }));
+  const captureChecks = (captureRows.results || []).map((row) => ({
+    capture_source: row.capture_source,
+    location_source: row.location_source,
+    vision_mode: row.vision_mode,
+    outcome: row.outcome,
+    count: Number(row.count || 0),
+  }));
+  const videoChecksTotal = captureChecks
+    .filter((row) => DRIVE_CAPTURE_SOURCES.has(row.capture_source))
+    .reduce((sum, row) => sum + row.count, 0);
+  const importedVideoChecksTotal = captureChecks
+    .filter((row) => row.capture_source === "imported_video")
+    .reduce((sum, row) => sum + row.count, 0);
   context.outcome = "impact_read";
   return jsonResponse({
     period: { from, to },
     active_installations: Number(activeRow && activeRow.count || 0),
     requests_total: requests.reduce((sum, row) => sum + row.count, 0),
     requests,
+    capture_checks_total: captureChecks.reduce((sum, row) => sum + row.count, 0),
+    video_checks_total: videoChecksTotal,
+    imported_video_checks_total: importedVideoChecksTotal,
+    capture_checks: captureChecks,
     potholes: {
       total: Number(potholeRow && potholeRow.total || 0),
     },
@@ -3593,7 +3756,9 @@ const MAP_HTML = `<!doctype html>
       if (!response.ok) return;
       document.getElementById("stats").textContent =
         data.active_installations + " active installs · "
-        + data.potholes.total + " new potholes";
+        + data.potholes.total + " new potholes · "
+        + (data.video_checks_total || 0) + " video checks · "
+        + (data.imported_video_checks_total || 0) + " imported-video checks";
     }
     map.on("moveend", loadMap);
     loadMap().catch(console.error);
@@ -3719,6 +3884,8 @@ export default {
       openaiErrorCode: null,
       yoloErrorCode: null,
       detectorFallbackReason: null,
+      captureSource: null,
+      locationSource: null,
       rawBody: null,
       bodyHash: null,
       idempotencyKey: "",

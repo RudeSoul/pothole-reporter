@@ -872,6 +872,8 @@ def main():
                or body.get("model") != "gpt-5.6"
                or len(body.get("images") or []) != 1
                or set(body["images"][0]) != {"data_url"}
+               or body.get("capture_source") != "manual"
+               or body.get("location_source") != "device_gps"
                or not body.get("client_observation_id")
                or body.get("lat") != 12.9716
                or body.get("lng") != 77.5946
@@ -911,7 +913,8 @@ def main():
         activities = [request["body"] for request in harness.requests
                       if request["path"] == "/v1/activity"]
         if activities != [{"event": "vision_check", "vision_provider": "personal_openai",
-                           "capture_mode": "manual"}]:
+                           "capture_mode": "manual", "capture_source": "manual",
+                           "location_source": "device_gps"}]:
             failures.append(f"personal activity leaked extra data: {activities}")
         if paths.count("/v1/tenders/resolve") != 3 or paths.count("/v1/potholes/report") != 6:
             failures.append(f"shared tender or central report count changed: {paths}")

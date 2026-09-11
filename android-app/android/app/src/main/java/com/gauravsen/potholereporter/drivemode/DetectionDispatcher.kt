@@ -87,6 +87,11 @@ internal fun sharedVisionRequestConfig(
     "prompt_version" to promptVersion,
 )
 
+internal fun driveCaptureProvenanceFields(): Map<String, String> = mapOf(
+    "capture_source" to "drive_live",
+    "location_source" to "device_gps",
+)
+
 internal fun sharedVisionObservationFields(
     clientObservationId: String,
     lat: Double,
@@ -99,7 +104,7 @@ internal fun sharedVisionObservationFields(
         "client_observation_id" to clientObservationId,
         "lat" to lat,
         "lng" to lng,
-    )
+    ) + driveCaptureProvenanceFields()
 }
 
 internal fun sharedVisionIdempotencyKey(clientObservationId: String): String =

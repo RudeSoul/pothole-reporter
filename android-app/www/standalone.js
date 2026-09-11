@@ -635,6 +635,12 @@
       image_detail: selectedDetail,
       prompt_version: PROMPT_VERSION,
     };
+    if (observation && observation.capture_source) {
+      body.capture_source = String(observation.capture_source);
+    }
+    if (observation && observation.location_source) {
+      body.location_source = String(observation.location_source);
+    }
     // The server-issued receipt binds an accepted result to this stable observation and
     // location. The later map write repeats the same values, preventing a caller from
     // turning one paid detection into arbitrary impact-map points.
@@ -676,11 +682,18 @@
       // It intentionally runs in parallel and cannot change or delay the vision verdict.
       void probeProjectService().then((available) => {
         if (!available) return;
-        return signedServicePost("/v1/activity", {
+        const activity = {
           event: "vision_check",
           vision_provider: "personal_openai",
           capture_mode: captureMode === "drive" ? "drive" : "manual",
-        }, {
+        };
+        if (observation && observation.capture_source) {
+          activity.capture_source = String(observation.capture_source);
+        }
+        if (observation && observation.location_source) {
+          activity.location_source = String(observation.location_source);
+        }
+        return signedServicePost("/v1/activity", activity, {
           idempotencyKey: randomId(), timeout: 15000,
           fallback: "The anonymous activity count could not be recorded.",
         });
@@ -1803,6 +1816,9 @@
       gps_accuracy_m: Number.isFinite(rec.gps_accuracy) ? rec.gps_accuracy : null,
       heading_deg: Number.isFinite(rec.heading) ? rec.heading : null,
       speed_mps: Number.isFinite(rec.speed_mps) ? rec.speed_mps : null,
+      capture_source: rec.capture_source || "manual",
+      location_source: rec.location_source || (finiteCoord(rec.lat) && finiteCoord(rec.lng)
+        ? "device_gps" : "none"),
       damage_type: rec.damage_type,
       size: rec.size || null,
       image_hash: await imageHash(workingDataUrl),
@@ -2065,7 +2081,14 @@
     const headingRaw = parseFloat(fd.get("heading"));
     const requestedSource = String(fd.get("capture_source") || "");
     const captureSource = driveMode
-      ? (requestedSource === "drive_vod" ? "drive_vod" : "drive_live") : "manual";
+      ? (requestedSource === "drive_vod" || requestedSource === "imported_video"
+          ? requestedSource : "drive_live") : "manual";
+    const requestedLocationSource = String(fd.get("location_source") || "");
+    const allowedLocationSources = new Set([
+      "device_gps", "gpx_timestamp", "current_position_confirmed", "none",
+    ]);
+    const locationSource = allowedLocationSources.has(requestedLocationSource)
+      ? requestedLocationSource : (finiteCoord(lat) && finiteCoord(lng) ? "device_gps" : "none");
     const sourceEventKey = driveMode && fd.get("source_event_key")
       ? String(fd.get("source_event_key")).slice(0, 180) : null;
     // Bind the request to the mode in which it began. A Settings change while a slow
@@ -2118,7 +2141,8 @@
     const a = await analyzeImage(imageInputs, detectPrompt, "assessment", ASSESS_SCHEMA, detectionModel,
       driveMode ? null : emitVerdict, driveMode && !S.debug,
       detectionDetail, driveMode ? "drive" : "manual", `vision:${clientObservationId}`,
-      { client_observation_id: clientObservationId, lat, lng });
+      { client_observation_id: clientObservationId, lat, lng,
+        capture_source: captureSource, location_source: locationSource });
     const decision = decisionFor(a);
     const accepted = decision === "accept";
     const detector = {
@@ -2246,6 +2270,7 @@
       sent_at: null,
       drive_id: driveId,
       capture_source: captureSource,
+      location_source: locationSource,
       source_event_key: sourceEventKey,
       source_event_keys: sourceEventKey ? [sourceEventKey] : [],
       captured_at: Number.isFinite(capturedAtRaw) ? capturedAtRaw / 1000 : null,
@@ -2828,10 +2853,13 @@
       if (!d || !d.id) throw new Error("Drive id missing.");
       const alreadyIds = Array.isArray(d.already_ids)
         ? [...new Set(d.already_ids.map((x) => String(x).slice(0, 64)))] : [];
+      const captureSource = d.capture_source === "imported_video"
+        ? "imported_video" : "drive_live";
       await putDrive({ id: String(d.id), started_at: d.started_at || null,
                        ended_at: Date.now() / 1000, checked: d.checked | 0, found: d.found | 0,
                        already: Math.max(d.already | 0, alreadyIds.length), already_ids: alreadyIds,
-                       gps_track: Array.isArray(d.gps_track) ? d.gps_track : [] });
+                       gps_track: Array.isArray(d.gps_track) ? d.gps_track : [],
+                       capture_source: captureSource });
       return { ok: true };
     }
     if ((m = path.match(/^\/api\/drives\/([^/]+)\/analysis$/)) && method === "POST") {

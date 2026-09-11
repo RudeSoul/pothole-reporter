@@ -74,6 +74,12 @@ class DetectionDispatcherPolicyTest {
         assertEquals("drive:session-7:42", fields["client_observation_id"])
         assertEquals(12.9716, fields["lat"])
         assertEquals(77.5946, fields["lng"])
+        assertEquals("drive_live", fields["capture_source"])
+        assertEquals("device_gps", fields["location_source"])
+        assertEquals(
+            mapOf("capture_source" to "drive_live", "location_source" to "device_gps"),
+            driveCaptureProvenanceFields(),
+        )
 
         val first = sharedVisionIdempotencyKey("drive:session-7:42")
         assertEquals(first, sharedVisionIdempotencyKey("drive:session-7:42"))

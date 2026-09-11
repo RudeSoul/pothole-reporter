@@ -1,6 +1,6 @@
 # Scalable capture, inference, and email complaint routing
 
-Checked against the linked vendor and government material on 5 September 2026.
+Checked against the linked vendor and government material on 11 September 2026.
 
 ## Product boundary
 
@@ -63,15 +63,19 @@ endpoint rather than holding one HTTP request open for an entire video.
 
 ## Capture-device support
 
-The current release implements phone capture. Dashcam ingestion and the Meta companion
-adapter below are feasible targets behind the same contract, not features already shipped
-in this repository.
+The current release implements phone capture plus recorded-video import. A person can
+select multiple clips from Android's media/file picker, or share a clip into Pothole
+Reporter from Photos, Files, or a dashcam companion app. Android keeps a
+persisted content URI for picked media and samples frames natively; the browser retains
+a foreground-only HTML decoder fallback for short clips. Direct live Meta camera access
+remains a separate developer-preview pilot, not a public feature.
 
 | Source | Feasibility | Required adapter | Important limit |
 |---|---|---|---|
 | Android phone | Supported now | Existing WebView/CameraX paths | Must be safely mounted; each scheduled sample captures and uploads exactly one frame. |
-| Dashcam | Feasible | Vendor/file/RTSP adapter plus timestamped phone or camera GPS | Dashcams do not share one API or metadata format; build adapters behind the same envelope. |
-| Ray-Ban Meta / Meta AI glasses | Pilot feasible | Meta Wearables Device Access Toolkit in the Android companion app | Not ready for an unrestricted India production promise; see below. |
+| Dashcam recording | Common files supported now | Android media/file picker, direct Android share target, native frame sampler, optional timestamped GPX | Codec/profile and GPS telemetry vary by vendor; H.264 MP4 is the safest interchange format and proprietary telemetry is not guessed. |
+| Recorded Ray-Ban Meta / Meta AI clip | Supported now | Import to the phone with Meta AI, then pick or share the clip | The clip has no assumed per-frame GPS; add a timed track or analyse without routing. |
+| Live Ray-Ban Meta camera | Pilot only | Meta Wearables Device Access Toolkit in the Android companion app | Developer Preview is not a generally publishable integration; see below. |
 
 Every adapter should eventually produce the same versioned envelope:
 
@@ -87,11 +91,18 @@ Every adapter should eventually produce the same versioned envelope:
 }
 ```
 
-Each inference event contains exactly one selected road image. The public endpoint must
-never accept an arbitrary remote video URL. Accept signed
-device uploads, enforce decoded-byte and duration limits, and use short-lived object
-storage only when asynchronous processing requires it. Delete rejected raw media on a
-short retention schedule and retain only consented evidence for accepted complaints.
+Each inference event contains exactly one selected road image. The public endpoint does
+not accept an arbitrary remote video URL or a complete video upload. Picked videos stay
+behind a persisted Android content URI and are sampled locally. Only downscaled JPEG
+frames enter the existing signed detector/report flow. Clips received through another
+app's temporary Share grant may need a bounded app-private cache copy; partial/expired
+copies are deleted and oversized shares direct the user to the picker instead.
+
+Imported route location is deliberately fail-closed. A timestamped GPX track can provide
+per-frame coordinates when its time range aligns with trustworthy recording timestamps.
+The user may explicitly apply the current phone position only to footage recorded at that
+one location. With neither source, damage can still be detected and kept locally, but the
+app does not invent a coordinate, contractor, tender, map point, or complaint recipient.
 
 ## Shared inference migration
 
@@ -166,7 +177,13 @@ On Android, the published stream choices are portrait 720×1280, 504×896, or 36
 quality over Bluetooth. See the
 [official camera-streaming guide](https://github.com/facebook/meta-wearables-dat-android/blob/main/plugins/mwdat-android/skills/camera-streaming/SKILL.md).
 
-For this app the practical route is:
+For a public release, the practical route today is to import a recorded clip. Meta says a
+capture stays on the glasses until the user transfers it with Meta AI, after which it is
+stored in the phone's photo roll like other media. Pothole Reporter can then receive it
+through the Android picker or share sheet without linking a Meta account or embedding a
+Meta SDK. See [Meta's capture/privacy explanation](https://www.meta.com/actions/responsible-innovation/).
+
+For a controlled live-camera pilot, the later route is:
 
 1. stream low-rate frames from the glasses to the paired Android app;
 2. timestamp them against Android Fused Location (do not claim glasses-native GPS);

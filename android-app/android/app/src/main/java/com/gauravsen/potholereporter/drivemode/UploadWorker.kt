@@ -188,6 +188,8 @@ class UploadWorker(
                         model = observation.detector_model,
                         detail = observation.image_detail,
                         evidenceCount = observation.evidence_count,
+                        captureSource = "drive_live",
+                        locationSource = "device_gps",
                     )
 
                     // Resolve every server-confirmed duplicate at the candidate's exact

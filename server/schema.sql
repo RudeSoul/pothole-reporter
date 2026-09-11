@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS observations (
   gps_accuracy_m        REAL,
   heading_deg           REAL,
   speed_mps             REAL,
+  capture_source        TEXT NOT NULL DEFAULT 'manual'
+                            CHECK (capture_source IN
+                              ('manual','drive_live','drive_vod','imported_video')),
+  location_source       TEXT NOT NULL DEFAULT 'device_gps'
+                            CHECK (location_source IN
+                              ('device_gps','gpx_timestamp','current_position_confirmed','none')),
   damage_type           TEXT NOT NULL
                             CHECK (damage_type IN ('pothole_cavity','failed_patch',
                               'surface_breakup','rut_or_depression','other_road_damage')),
@@ -101,6 +107,23 @@ CREATE TABLE IF NOT EXISTS request_metrics_daily (
   vision_mode   TEXT NOT NULL DEFAULT 'none',
   request_count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(day, route, outcome, vision_mode)
+);
+
+-- Exactly-once aggregate detector activity by capture/location provenance. This table
+-- deliberately has no installation or request identifier; its increment commits in the
+-- same idempotency batch as a fresh shared detection or personal-key activity heartbeat.
+CREATE TABLE IF NOT EXISTS capture_metrics_daily (
+  day             TEXT NOT NULL,
+  capture_source  TEXT NOT NULL
+                       CHECK (capture_source IN
+                         ('manual','drive_live','drive_vod','imported_video')),
+  location_source TEXT NOT NULL
+                       CHECK (location_source IN
+                         ('device_gps','gpx_timestamp','current_position_confirmed','none')),
+  vision_mode     TEXT NOT NULL CHECK (vision_mode IN ('shared_detect','own_key')),
+  outcome         TEXT NOT NULL,
+  request_count   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(day, capture_source, location_source, vision_mode, outcome)
 );
 
 -- Enables daily/monthly active-install counts without storing raw analytics events.

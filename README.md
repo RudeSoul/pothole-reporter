@@ -33,6 +33,11 @@ emails. National, state and district highways, and rural roads are excluded.
   matched—the probable tender number.
 - Offers optional local Drive Mode recording, off by default. Saved footage can be
   analysed or deleted later from History.
+- Imports one or several road-video clips from a phone gallery or file picker. On
+  Android, videos can also be shared directly to Pothole Reporter from Photos, Files,
+  or a dashcam companion app. A Meta-glasses clip is first transferred to the phone
+  with Meta AI, then selected from the gallery. The original video remains local; the
+  app sends only sampled JPEG frames for detection.
 - Groups repeat Drive/footage observations into one event; Debug mode keeps every
   accepted observation.
 
@@ -49,7 +54,9 @@ published address.
    location access.
 3. For Drive Mode, mount the phone securely and keep the road inside the orange guide.
    Start the drive before moving and do not interact with the phone while driving.
-4. Alternatively, use **Report road damage** while safely stopped.
+4. Alternatively, use **Report road damage** while safely stopped, or choose
+   **Import Meta glasses / dashcam video**. Select segmented dashcam clips in recording
+   order. Add a timestamped GPX track when available so detections can be routed.
 5. Review the detected damage, location, recipient, and any probable contract match,
    then tap **Email complaint**. Review or edit the draft and press Send in your email app.
 
@@ -68,6 +75,14 @@ geocoding, and road classification.
 - Contract matches are probable matches, not proof of responsibility or warranty.
   Footpath-, drain-, utility-, and other non-road-only works are excluded even when
   their locality matches; a combined work must explicitly include road-surface work.
+- Imported footage needs trustworthy location data for authority, contractor, tender,
+  map, and email routing. The app never silently labels an old video with the phone's
+  current position. Use a timestamped GPX track, or explicitly opt into the current
+  position only when every clip was recorded at that location. Detection can continue
+  without location, but those results remain unrouted.
+- Video decoding is device- and codec-dependent. H.264/AVC in MP4 is the safest
+  dashcam interchange format; unsupported files fail visibly instead of being counted
+  as an analysed video.
 - The app does not send email automatically and is not affiliated with any government
   body.
 
@@ -79,6 +94,11 @@ geocoding, and road classification.
   image requests.
 - Drive recording uses roughly 18 MB per minute while enabled. Successful reanalysis
   deletes it unless Debug mode is keeping it.
+- Imported videos are sampled on the device under an explicit per-run request budget;
+  the complete video and its audio are never uploaded. A clip received through another
+  Android app's Share action may be copied temporarily into app-private cache so the
+  sender cannot revoke access midway through analysis; it is bounded and removed after
+  use, discard, or automatic expiry.
 - In shared mode, checked images pass through the project service without being retained
   there and go to its configured detector (OpenAI by default or an in-house YOLO
   gateway). In personal-key mode they go directly to OpenAI. Faces, number plates, and

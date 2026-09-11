@@ -721,6 +721,8 @@ class DriveModeService : LifecycleService() {
                         centralClient?.recordVisionActivity(
                             captureMode = "drive",
                             clientEventId = clientObservationId,
+                            captureSource = "drive_live",
+                            locationSource = "device_gps",
                         )
                     }.onFailure { Log.w(TAG, "Could not record personal vision activity", it) }
                 }

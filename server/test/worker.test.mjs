@@ -860,6 +860,78 @@ test("Cloudflare Worker API", async (t) => {
       "malformed coordinates reached an upstream model");
   });
 
+  await t.test("capture provenance is coherent and fresh negative detections count exactly once", async () => {
+    const base = {
+      images: [{ data_url: JPEG }],
+      capture_mode: "drive",
+      language: "en",
+      model: MODEL_CONFIG.defaultModel,
+      prompt_version: DETECT_PROMPT_VERSION,
+    };
+    const invalid = [
+      [{ ...base, capture_mode: "manual", capture_source: "imported_video" },
+        "bad_capture_source"],
+      [{ ...base, capture_source: "manual" }, "bad_capture_source"],
+      [{ ...base, capture_source: "camera_roll" }, "bad_capture_source"],
+      [{ ...base, capture_source: "imported_video", location_source: "device_gps" },
+        "bad_location_source"],
+      [{ ...base, capture_source: "imported_video", location_source: "none",
+        lat: 12.91, lng: 77.64 }, "bad_location_source"],
+      [{ ...base, capture_source: "drive_live", location_source: "gpx_timestamp",
+        lat: 12.91, lng: 77.64 }, "bad_location_source"],
+    ];
+    const callsBeforeInvalid = openAICalls.length;
+    for (const [index, [value, code]] of invalid.entries()) {
+      const response = await signedCall(deviceA, "/v1/vision/detect", value,
+        { idempotencyKey: `invalid-provenance-${index}` });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error, code);
+    }
+    assert.equal(openAICalls.length, callsBeforeInvalid,
+      "invalid provenance reached a paid detector");
+
+    const metricBefore = await DB.prepare(
+      `SELECT COALESCE(SUM(request_count),0) AS count FROM capture_metrics_daily
+        WHERE capture_source='imported_video' AND location_source='none'
+          AND vision_mode='shared_detect' AND outcome='undamaged'`).first("count");
+    const originalDetection = { ...DETECTION };
+    try {
+      Object.assign(DETECTION, {
+        image_quality: "acceptable",
+        assessment: "undamaged",
+        damage_type: null,
+        size: null,
+        description: "No road damage is visible in this sampled imported frame.",
+      });
+      const value = {
+        ...base,
+        capture_source: "imported_video",
+        location_source: "none",
+      };
+      const callsBefore = openAICalls.length;
+      const response = await signedCall(deviceA, "/v1/vision/detect", value,
+        { idempotencyKey: "imported-negative-capture-metric" });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).assessment, "undamaged");
+      assert.equal(openAICalls.length, callsBefore + 1);
+
+      const replay = await signedCall(deviceA, "/v1/vision/detect", value,
+        { idempotencyKey: "imported-negative-capture-metric" });
+      assert.equal(replay.status, 200);
+      assert.equal((await replay.json()).idempotent_replay, true);
+      assert.equal(openAICalls.length, callsBefore + 1,
+        "a cached imported-video detection spent another model call");
+    } finally {
+      Object.assign(DETECTION, originalDetection);
+    }
+    const metricAfter = await DB.prepare(
+      `SELECT COALESCE(SUM(request_count),0) AS count FROM capture_metrics_daily
+        WHERE capture_source='imported_video' AND location_source='none'
+          AND vision_mode='shared_detect' AND outcome='undamaged'`).first("count");
+    assert.equal(Number(metricAfter), Number(metricBefore) + 1,
+      "a negative/no-report check was absent or its cached replay inflated the aggregate");
+  });
+
   await t.test("tender replay records are pruned after the bounded retention window", async () => {
     assert.equal(__test.idempotencyClaimTtlMs({ IDEMPOTENCY_CLAIM_TTL_MS: "60000" }),
       3 * 60_000);
@@ -1730,6 +1802,32 @@ test("Cloudflare Worker API", async (t) => {
         WHERE route='/v1/activity' AND outcome='vision_check_drive'
           AND vision_mode='own_key'`).first();
     assert.equal(Number(metric.count), 1);
+    const legacyCaptureMetric = await DB.prepare(
+      `SELECT SUM(request_count) AS count FROM capture_metrics_daily
+        WHERE capture_source='drive_live' AND location_source='none'
+          AND vision_mode='own_key' AND outcome='vision_check'`).first();
+    assert.equal(Number(legacyCaptureMetric.count), 1,
+      "a legacy drive heartbeat did not receive safe aggregate defaults");
+
+    const imported = {
+      ...value,
+      capture_source: "imported_video",
+      location_source: "current_position_confirmed",
+    };
+    const importedResponse = await signedCall(deviceA, "/v1/activity", imported,
+      { idempotencyKey: "activity-imported-provenance" });
+    assert.equal(importedResponse.status, 202);
+    const importedReplay = await signedCall(deviceA, "/v1/activity", imported,
+      { idempotencyKey: "activity-imported-provenance" });
+    assert.equal(importedReplay.status, 202);
+    assert.equal((await importedReplay.json()).idempotent_replay, true);
+    const importedMetric = await DB.prepare(
+      `SELECT SUM(request_count) AS count FROM capture_metrics_daily
+        WHERE capture_source='imported_video'
+          AND location_source='current_position_confirmed'
+          AND vision_mode='own_key' AND outcome='vision_check'`).first();
+    assert.equal(Number(importedMetric.count), 1,
+      "a personal imported-video heartbeat was absent or replay-counted");
 
     const overShared = await signedCall(deviceA, "/v1/activity", {
       ...value,
@@ -1737,6 +1835,13 @@ test("Cloudflare Worker API", async (t) => {
     }, { idempotencyKey: "activity-a-private-field" });
     assert.equal(overShared.status, 400,
       "the aggregate heartbeat accepted a location field");
+    const forgedLabel = await signedCall(deviceA, "/v1/activity", {
+      ...value,
+      capture_source: "drive_live",
+      location_source: "gpx_timestamp",
+    }, { idempotencyKey: "activity-a-forged-provenance" });
+    assert.equal(forgedLabel.status, 400);
+    assert.equal((await forgedLabel.json()).error, "bad_location_source");
   });
 
   await t.test("shared detections issue map receipts bound to evidence, verdict and location", async () => {
@@ -1945,6 +2050,64 @@ test("Cloudflare Worker API", async (t) => {
     }
   });
 
+  await t.test("accepted observations persist provenance and cannot be relabelled", async () => {
+    const value = {
+      client_observation_id: "imported-provenance-observation",
+      observed_at: Date.now(),
+      lat: 15.12345,
+      lng: 76.12345,
+      gps_accuracy_m: 6,
+      capture_source: "imported_video",
+      location_source: "gpx_timestamp",
+      damage_type: "surface_breakup",
+      size: "medium",
+      image_hash: "9".repeat(64),
+      detector: {
+        provider: "personal_openai",
+        model: MODEL_CONFIG.defaultModel,
+        prompt_version: DETECT_PROMPT_VERSION,
+        schema_version: DETECT_SCHEMA_VERSION,
+      },
+    };
+    for (const [suffix, patch, code] of [
+      ["capture", { capture_source: "gallery_video" }, "bad_capture_source"],
+      ["location", { location_source: "none" }, "bad_location_source"],
+      ["cross", { capture_source: "drive_vod", location_source: "gpx_timestamp" },
+        "bad_location_source"],
+    ]) {
+      const invalid = await signedCall(deviceA, "/v1/potholes/report", {
+        ...value,
+        ...patch,
+        client_observation_id: `${value.client_observation_id}-${suffix}`,
+      }, { idempotencyKey: `invalid-report-provenance-${suffix}` });
+      assert.equal(invalid.status, 400);
+      assert.equal((await invalid.json()).error, code);
+    }
+
+    const accepted = await signedCall(deviceA, "/v1/potholes/report", value,
+      { idempotencyKey: "imported-provenance-report" });
+    assert.equal(accepted.status, 201);
+    const stored = await DB.prepare(
+      `SELECT capture_source,location_source FROM observations
+        WHERE install_id=?1 AND client_observation_id=?2`
+    ).bind(deviceA.installId, value.client_observation_id).first();
+    assert.equal(stored.capture_source, "imported_video");
+    assert.equal(stored.location_source, "gpx_timestamp");
+
+    const relabelled = await signedCall(deviceA, "/v1/potholes/report", {
+      ...value,
+      capture_source: "drive_vod",
+      location_source: "device_gps",
+    }, { idempotencyKey: "imported-provenance-relabel" });
+    assert.equal(relabelled.status, 409);
+    assert.equal((await relabelled.json()).error, "observation_id_conflict");
+    const after = await DB.prepare(
+      `SELECT capture_source,location_source FROM observations
+        WHERE install_id=?1 AND client_observation_id=?2`
+    ).bind(deviceA.installId, value.client_observation_id).first();
+    assert.deepEqual(after, stored, "a conflicting retry changed stored provenance");
+  });
+
   await t.test("cross-install reports deduplicate and count distinct observers", async () => {
     const firstValue = {
       client_observation_id: "device-a-observation-1",
@@ -1976,6 +2139,13 @@ test("Cloudflare Worker API", async (t) => {
       "the canonical pothole trusted the client jurisdiction hint");
     assert.equal(firstBody.pothole.town, "Bengaluru South City Corporation");
     potholeId = firstBody.pothole.id;
+    const legacyProvenance = await DB.prepare(
+      `SELECT capture_source,location_source FROM observations
+        WHERE install_id=?1 AND client_observation_id=?2`
+    ).bind(deviceA.installId, firstValue.client_observation_id).first();
+    assert.equal(legacyProvenance.capture_source, "manual");
+    assert.equal(legacyProvenance.location_source, "device_gps",
+      "a legacy report did not receive stable schema/API defaults");
 
     const firstReplay = await signedCall(deviceA, "/v1/potholes/report", firstValue,
       { idempotencyKey: "report-a-1" });
@@ -3234,6 +3404,9 @@ test("Cloudflare Worker API", async (t) => {
     assert.ok(nonce);
     assert.ok(dashboardHtml.includes(`nonce="${nonce[1]}"`));
     assert.ok(!dashboardHtml.includes("__CSP_NONCE__"));
+    assert.ok(dashboardHtml.includes("video_checks_total"));
+    assert.ok(dashboardHtml.includes("imported_video_checks_total"));
+    assert.ok(dashboardHtml.includes("imported-video checks"));
 
     const map = await request(
       "/v1/map?bbox=77.60,12.88,77.70,12.95&limit=100");
@@ -3260,6 +3433,28 @@ test("Cloudflare Worker API", async (t) => {
       "a zero-observer canonical inflated public impact");
     assert.deepEqual(Object.keys(impactBody.potholes), ["total"]);
     assert.ok(impactBody.observations.distinct_observers >= 2);
+    assert.ok(impactBody.capture_checks_total >= 3);
+    assert.equal(impactBody.video_checks_total,
+      impactBody.capture_checks
+        .filter((row) => row.capture_source !== "manual")
+        .reduce((sum, row) => sum + row.count, 0));
+    assert.equal(impactBody.imported_video_checks_total,
+      impactBody.capture_checks
+        .filter((row) => row.capture_source === "imported_video")
+        .reduce((sum, row) => sum + row.count, 0));
+    assert.ok(impactBody.capture_checks.some((row) =>
+      row.capture_source === "imported_video" && row.location_source === "none"
+        && row.vision_mode === "shared_detect" && row.outcome === "undamaged"));
+    assert.ok(impactBody.capture_checks.some((row) =>
+      row.capture_source === "imported_video"
+        && row.location_source === "current_position_confirmed"
+        && row.vision_mode === "own_key"));
+    assert.ok(impactBody.capture_checks.every((row) =>
+      Object.keys(row).sort().join(",")
+        === "capture_source,count,location_source,outcome,vision_mode"));
+    const impactSerialized = JSON.stringify(impactBody);
+    assert.ok(!impactSerialized.includes(deviceA.installId));
+    assert.ok(!impactSerialized.includes(deviceB.installId));
     await DB.prepare("DELETE FROM potholes WHERE id=?1").bind(orphanId).run();
   });
 

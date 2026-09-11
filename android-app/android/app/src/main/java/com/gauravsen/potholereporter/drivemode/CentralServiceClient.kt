@@ -124,7 +124,11 @@ class CentralServiceClient(
         model: String,
         detail: String,
         evidenceCount: Int,
+        captureSource: String,
+        locationSource: String,
     ): PotholeSync {
+        require(captureSource == "drive_live") { "Bad capture source" }
+        require(locationSource == "device_gps") { "Bad location source" }
         val detector = JSONObject()
             .put("provider", detectorProvider)
             .put("model", model)
@@ -143,6 +147,8 @@ class CentralServiceClient(
             .put("damage_type", damageType)
             .put("size", size ?: JSONObject.NULL)
             .put("image_hash", imageHash)
+            .put("capture_source", captureSource)
+            .put("location_source", locationSource)
             .put("detector", detector)
         if (!detectionReceipt.isNullOrBlank()) {
             body.put("detection_receipt", detectionReceipt)
@@ -261,12 +267,21 @@ class CentralServiceClient(
     }
 
     /** Count a personal-key vision attempt without sending the key, image or location. */
-    fun recordVisionActivity(captureMode: String, clientEventId: String): String? {
+    fun recordVisionActivity(
+        captureMode: String,
+        clientEventId: String,
+        captureSource: String,
+        locationSource: String,
+    ): String? {
         require(captureMode in setOf("manual", "drive")) { "Bad capture mode" }
+        require(captureSource == "drive_live") { "Bad capture source" }
+        require(locationSource == "device_gps") { "Bad location source" }
         val body = JSONObject()
             .put("event", "vision_check")
             .put("vision_provider", "personal_openai")
             .put("capture_mode", captureMode)
+            .put("capture_source", captureSource)
+            .put("location_source", locationSource)
         val (_, requestId) = post("/v1/activity", body, "activity-$clientEventId")
         Log.i(TAG, "Personal vision activity request_id=$requestId capture_mode=$captureMode")
         return requestId

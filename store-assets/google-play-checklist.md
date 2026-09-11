@@ -7,7 +7,7 @@ current Play Console tasks shown for the publisher's account.
 
 - [x] **Target API:** the Android project targets API 36, meeting the mobile-app rule that
   starts 31 August 2026. Recheck before every later update.
-- [x] **Signed release bundle:** version 1.13.2/code 30 was built as a non-debuggable,
+- [x] **Signed release bundle:** version 1.13.3/code 31 was built as a non-debuggable,
   signed AAB with a dedicated upload key kept outside Git. Play App Signing enrolment
   still occurs in Play Console during the first upload.
 - [ ] **Hosted privacy page:** enable a stable public host, then verify
@@ -35,8 +35,9 @@ Do not submit to production until every applicable item above is complete.
   the upload key in a backed-up secret store outside the repository.
 - [ ] Install the Play-generated build from the internal track on at least one supported
   physical device. Test first launch, disclosure/permissions, manual capture, Drive Mode,
-  stopping/final clip, footage analysis/deletion, history, wipe, API-key errors, offline
-  errors, and email-composer hand-off.
+  stopping/final clip, footage analysis/deletion, Meta/dashcam video import and discard,
+  GPX/no-location routing, history, wipe, shared-capacity/API-key errors, offline errors,
+  and email-composer hand-off.
 - [ ] Confirm the release contains no API key, test frame, private location, or debug-only
   setting and that its bundled web assets match reviewed source.
 - [ ] Review the Pre-launch report and address crashes, ANRs, accessibility failures, and
