@@ -6984,6 +6984,10 @@ $("wipeBtn").onclick = async () => {
 };
 
 applyLang();
+// A fresh install must begin in the mandatory Settings screen.  Keep this local and
+// synchronous so Home cannot flash before the user chooses the shared or personal
+// vision path; existing installs continue straight to their normal screen.
+if (initialSettingsRequired) openSettings(true, true);
 void initNativeVideoImports();
 
 // #report-<id> deep link opens that report's detail screen directly.
