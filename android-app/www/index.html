@@ -23,6 +23,7 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px; margin-bottom:12px; }
   .row { display:flex; gap:10px; align-items:center; }
   .thumb { width:64px; height:64px; object-fit:cover; border-radius:10px; flex:none; }
+  .quick-email { flex:none; padding:10px 12px; font-size:13px; white-space:nowrap; }
   .big-photo { width:100%; max-height:280px; object-fit:contain; background:#000; border-radius:10px; margin-bottom:10px; cursor:zoom-in; }
   #viewer { position:fixed; inset:0; background:#000; z-index:50; display:flex; align-items:center; justify-content:center; overflow:hidden; touch-action:none; }
   #viewerImg { max-width:100%; max-height:100%; transform-origin:center; will-change:transform; user-select:none; -webkit-user-drag:none; pointer-events:none; }
@@ -117,18 +118,6 @@
   </div>
 
   <div id="detail" class="hidden"></div>
-
-  <div id="portalCopy" class="hidden">
-    <div class="card">
-      <div class="verdict" id="portalCopyTitle">Portal fields</div>
-      <div class="meta" id="portalCopyHint" style="margin-top:6px">Copy these fields into the official grievance portal. Contract details appear only after exact-road responsibility is verified.</div>
-      <textarea id="portalCopyText" readonly style="min-height:55vh;margin-top:12px"></textarea>
-      <div class="btn-row">
-        <button class="ghost" id="portalCopyBack">Back</button>
-        <button class="send" id="portalCopyAll">Copy all</button>
-      </div>
-    </div>
-  </div>
 
   <div id="drive" class="hidden">
     <div id="webDrivePanel" style="position:relative">
@@ -1207,24 +1196,9 @@ function show(screen) {
 
 function fmtDate(ts) { return new Date(ts * 1000).toLocaleString([], {day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"}); }
 
-const isOfficialHandoffReport = (r) => !!r
-  && (r.delivery_channel === "official_handoff" || r.delivery_channel === "bmc_quickfix");
-const officialServiceName = (r) => (LANG === "bn" && r && r.authority_id === "wb-kmc"
-  ? "KMC অভিযোগ প্রতিবিধান (Grievance 2.0)"
-  : LANG === "bn" && r && r.authority_id === "wb-statewide-unverified"
-    ? "West Bengal PGRS" : r && r.handoff_name)
-  || (r && r.delivery_channel === "bmc_quickfix" ? "BMC Pothole QuickFix" : "official service");
-const displayAuthorityName = (r) => LANG === "bn" && r && r.authority_id === "wb-kmc"
-  ? "কলকাতা পৌরসংস্থা (KMC)"
-  : LANG === "bn" && r && r.authority_id === "wb-statewide-unverified"
-    ? "পশ্চিমবঙ্গ PGRS — জেলা বা দপ্তর নির্বাচন করুন"
-    : (r && r.authority_name) || t("the_officer");
-const displayRouteName = (r) => LANG === "bn" && r
-  && r.authority_id === "wb-statewide-unverified"
-  ? "পশ্চিমবঙ্গ PGRS — জেলা বা দপ্তর নির্বাচন করুন"
-  : r && r.officer_name;
-const sendLabel = (r) => isOfficialHandoffReport(r)
-  ? t("open_official_btn", { name: officialServiceName(r) }) : t("email_btn");
+// Email is the one complaint action. It opens a pre-addressed draft; the user
+// remains in control of pressing Send in their email app.
+const sendLabel = () => t("email_btn");
 
 function chip(status, report) {
   const labels = { draft: t("chip_draft"), sent: t("chip_sent"), queued: t("chip_queued"),
@@ -1453,11 +1427,10 @@ async function getNativeDriveHistory(options = {}) {
 
 async function openReportDetail(r, items) {
   if (!r) return;
-  let current = r;
-  if (physicalCondition(r) !== "fixed" && isOfficialHandoffReport(r)) {
-    try { current = await api(`/api/reports/${r.id}/handoff`); }
-    catch (_) { /* keep evidence accessible; every launch path revalidates again */ }
-  }
+  // Complaint filing is email-only. The send path revalidates routing and tender
+  // attribution immediately before opening the composer, so the detail view can
+  // render without a second legacy handoff request.
+  const current = r;
   const replace = (list) => {
     if (!Array.isArray(list)) return;
     const index = list.findIndex((item) => item && item.id === current.id);
@@ -1473,6 +1446,17 @@ function wireCards(root, items) {
     if (el.dataset.wired) continue;
     el.dataset.wired = "1";
     el.onclick = () => openReportDetail(items.find((r) => r.id == el.dataset.id), items);
+  }
+  for (const el of root.querySelectorAll("[data-quick-email]")) {
+    if (el.dataset.wired) continue;
+    el.dataset.wired = "1";
+    el.onclick = async (event) => {
+      event.stopPropagation();
+      const report = items.find((r) => String(r.id) === String(el.dataset.quickEmail));
+      if (!report) return;
+      await openReportDetail(report, items);
+      await sendReport(report);
+    };
   }
 }
 
@@ -1578,14 +1562,23 @@ async function renderReports() {
     list.innerHTML = `<div class="empty">${t("no_reports")}</div>`;
     return;
   }
-  const cardHtml = (r) => `
+  const cardHtml = (r) => {
+    // A confirmed, open observation can be filed immediately from History. Reports
+    // still waiting for dedupe/routing stay detail-only so the app never opens an
+    // email addressed to a guess or creates a duplicate complaint.
+    const canEmail = StandaloneAPI.__pure.centralReportIsConfirmed(r)
+      && !["rejected", "review", "unrouted", "duplicate"].includes(r.status)
+      && physicalCondition(r) !== "fixed";
+    return `
     <div class="card row" data-id="${escapeAttr(r.id)}" style="cursor:pointer">
       <img class="thumb" src="${safePhotoSrc(photoSrc(r))}" alt="" loading="lazy" decoding="async">
-      <div style="min-width:0">
+      <div style="min-width:0;flex:1">
         <div>${chip(r.status)} ${damageType(r) ? `<span class="chip" style="background:#26272c;color:#cfcfd4">${tDamage(r)}</span>` : ""} ${r.size ? `<span class="chip" style="background:#26272c;color:#cfcfd4">${tSize(r.size)}</span>` : ""}</div>
         <div class="meta">${escapeHtml(fmtDate(r.created_at))}${r.address ? " · " + escapeHtml(String(r.address).split(",").slice(0, 2).join(", ")) : ""}</div>
       </div>
+      ${canEmail ? `<button class="send quick-email" data-quick-email="${escapeAttr(r.id)}" aria-label="${escapeAttr(t("email_btn"))}">${escapeHtml(t("email_btn"))} &#9993;</button>` : ""}
     </div>`;
+  };
   const driveById = {}, footageById = {};
   for (const d of allDrives) driveById[String(d.id)] = d;
   for (const f of footage) footageById[String(f.drive_id)] = f;
@@ -2037,7 +2030,6 @@ function openDetail(r, list) {
         ${r.address ? `<div class="meta">&#128205; ${escapeHtml(r.address)}</div>` : ""}
         ${showCivicAttribution && r.officer_name ? `<div class="meta">&#128231; ${escapeHtml(t("routes_to"))} ${escapeHtml(r.officer_name)}</div>` : ""}
         ${showCivicAttribution && r.tender_note ? `<div class="meta">&#128209; ${escapeHtml(r.tender_note)}</div>` : ""}
-        ${showCivicAttribution && r.officer_name ? `<div class="meta" style="margin-top:10px">${escapeHtml(t("routes_to"))} ${escapeHtml(r.officer_name)}</div>` : ""}
         ${!browserSendable ? `<div class="meta">${escapeHtml(t("email_waiting_dedupe"))}</div>` : ""}
         <div class="btn-row">
           <button class="ghost" id="backBtn">${t("back")}</button>
@@ -2245,132 +2237,6 @@ async function sendReport(r) {
     alert(e.message);
     btn.disabled = false; btn.textContent = sendLabel(r);
   }
-}
-
-async function markSubmitted(r) {
-  if (physicalCondition(r) === "fixed") { alert(t("fixed_action_blocked")); return; }
-  if (!confirm(t("confirm_mark_submitted"))) return;
-  const input = $("grievanceId");
-  const reference = input ? input.value.trim() : "";
-  const btn = $("markSubmittedBtn");
-  btn.disabled = true; btn.textContent = t("working");
-  try {
-    const updated = await api(`/api/reports/${r.id}/submitted`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ official_grievance_id: reference }),
-    });
-    await loadReports(); openDetail(updated);
-  } catch (e) {
-    alert(e.message); btn.disabled = false; btn.textContent = t("mark_submitted_btn");
-  }
-}
-
-async function openExternalUrl(url, packageName = null) {
-  const launcher = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.AppLauncher;
-  if (launcher) {
-    if (packageName) {
-      try {
-        const available = await launcher.canOpenUrl({ url: packageName });
-        if (available && available.value) {
-          const opened = await launcher.openUrl({ url: packageName });
-          if (!opened || opened.completed !== false) return true;
-        }
-      } catch (_) {}
-    }
-    try {
-      const opened = await launcher.openUrl({ url });
-      if (!opened || opened.completed !== false) return true;
-    } catch (_) {}
-  }
-  const opened = window.open(url, "_blank");
-  if (opened) {
-    try { opened.opener = null; } catch (_) {}
-    return true;
-  }
-  return false;
-}
-
-async function openOfficialWhatsApp(r) {
-  if (physicalCondition(r) === "fixed") { alert(t("fixed_action_blocked")); return; }
-  let verified;
-  try { verified = await api(`/api/reports/${r.id}/handoff`); }
-  catch (e) { alert(e.message); return; }
-  const base = verified.whatsapp_url;
-  if (!base || !String(base).startsWith("https://wa.me/")) {
-    alert("This saved report has no verified official WhatsApp route.");
-    return;
-  }
-  if (!confirm(t("confirm_whatsapp_share", {
-    authority: displayAuthorityName(verified || r),
-  }))) return;
-  const output = roadComplaintOutputs(verified);
-  const text = (output && output.whatsapp_text
-    ? output.whatsapp_text
-    : `${verified.email_subject || `${tIssue(verified)} report`}\n\n${verified.email_body || ""}`).slice(0, 4000);
-  const opened = await openExternalUrl(`${base}${base.includes("?") ? "&" : "?"}text=${encodeURIComponent(text)}`);
-  if (!opened) alert("Could not open the official WhatsApp route. Try Share evidence or another official channel.");
-}
-
-async function openOfficialCall(r) {
-  if (physicalCondition(r) === "fixed") { alert(t("fixed_action_blocked")); return; }
-  let verified;
-  try { verified = await api(`/api/reports/${r.id}/handoff`); }
-  catch (e) { alert(e.message); return; }
-  const number = String(verified.helpline || "").replace(/[^0-9+]/g, "");
-  if (!number) { alert("This saved report has no verified official helpline."); return; }
-  location.href = `tel:${number}`;
-}
-
-async function openAlternateHandoff(r) {
-  if (physicalCondition(r) === "fixed") { alert(t("fixed_action_blocked")); return; }
-  let verified;
-  try { verified = await api(`/api/reports/${r.id}/handoff`); }
-  catch (e) { alert(e.message); return; }
-  const url = String(verified.alternate_handoff_url || "");
-  if (!url.startsWith("https://")) {
-    alert("This saved report has no verified alternate handoff.");
-    return;
-  }
-  const opened = await openExternalUrl(url);
-  if (!opened) {
-    alert(`Could not open ${verified.alternate_handoff_name || "the official fallback"}.`);
-    return;
-  }
-  if (r.status === "draft" || r.status === "queued") {
-    try {
-      const updated = await api(`/api/reports/${r.id}/handoff-opened`, { method: "POST" });
-      await loadReports(); openDetail(updated);
-    } catch (e) { alert(e.message); }
-  }
-}
-
-async function shareEvidence(r) {
-  if (physicalCondition(r) === "fixed") { alert(t("fixed_action_blocked")); return; }
-  const btn = $("shareEvidenceBtn");
-  btn.disabled = true; btn.textContent = t("working");
-  try {
-    const evidence = await api(`/api/reports/${r.id}/evidence`);
-    const P = window.Capacitor && Capacitor.Plugins;
-    if (P && P.Filesystem && P.Share) {
-      try { await P.Filesystem.mkdir({ path: SHARE_CACHE_DIR, directory: "CACHE", recursive: true }); } catch (_) {}
-      const wide = await P.Filesystem.writeFile({ path: `${SHARE_CACHE_DIR}/${evidence.name}`, data: evidence.base64, directory: "CACHE" });
-      const files = [wide.uri];
-      await P.Share.share({ title: evidence.name, text: evidence.text, files,
-                            dialogTitle: t("share_evidence_btn") });
-    } else {
-      const bin = atob(evidence.base64), arr = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-      const file = new File([arr], evidence.name, { type: "image/jpeg" });
-      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ title: evidence.name, text: evidence.text, files: [file] });
-      } else {
-        const url = URL.createObjectURL(file), a = document.createElement("a");
-        a.href = url; a.download = evidence.name; a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-      }
-    }
-  } catch (e) { alert(e.message); }
-  btn.disabled = false; btn.textContent = t("share_evidence_btn");
 }
 
 // ---------- Drive Mode ----------
