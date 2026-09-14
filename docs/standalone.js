@@ -772,6 +772,7 @@
     ASSESS_SCHEMA.properties[field].enum.filter((value) => typeof value === "string"));
   const DAMAGE_TYPES = schemaStrings("damage_type");
   const SIZES = schemaStrings("size");
+  const POTHOLE_SIZES = SIZES;
 
   function decisionFor(a) {
     if (!a || a.image_quality !== "acceptable") return "review";
@@ -787,6 +788,37 @@
     }
     return "review";
   }
+
+  // Canonical v4 verdicts use only image quality/assessment plus nullable detail
+  // fields. Older local rows still pass the former physical evidence shape through
+  // this helper, so retain a small compatibility projection without reviving a second
+  // model contract.
+  function binaryAssessment(a) {
+    const legacy = a && (a.is_pothole === true || a.image_quality === "usable");
+    const accepted = legacy ? a.is_pothole === true : decisionFor(a) === "accept";
+    const damageType = accepted && DAMAGE_TYPES.has(a && a.damage_type)
+      ? a.damage_type : accepted ? "pothole_cavity" : null;
+    const size = accepted && SIZES.has(a && a.size) ? a.size : null;
+    return {
+      ...(a || {}),
+      image_quality: accepted ? "acceptable"
+        : a && a.image_quality === "acceptable" ? "acceptable" : "rejected",
+      assessment: accepted ? "damaged" : "undamaged",
+      damage_type: damageType,
+      size,
+      description: typeof (a && a.description) === "string" ? a.description : "",
+      is_pothole: accepted,
+      reportable: accepted,
+    };
+  }
+
+  // Removed multi-view/repair model gates are retained as inert compatibility hooks so
+  // older native callers fail closed rather than crashing while upgrading.
+  const temporarySurfaceNeedsConfirmation = () => false;
+  const temporarySurfaceVoteEligible = () => false;
+  const temporarySurfaceVoteNeedsAnother = () => false;
+  const confirmedTemporaryAssessment = (first) => binaryAssessment(first || {});
+  const nativeDetectorContract = () => null;
 
   function partialAssessment(text) {
     const q = QUALITY_RE.exec(text), a = ASSESSMENT_RE.exec(text);
@@ -900,7 +932,7 @@
       damage_type: d && d[1] !== "null" ? d[1].slice(1, -1) : null,
       size: s && s[1] !== "null" ? s[1].slice(1, -1) : null,
       description: "",
-    });
+    };
   }
 
   const fmt = (name, schema) => ({
