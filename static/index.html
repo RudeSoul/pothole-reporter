@@ -435,6 +435,15 @@ const I18N = {
     model_label: "Detection model",
     detail_label: "Image detail",
     accuracy_note: "gpt-5-mini/high remains the baseline. gpt-5.6/original is an experiment until your held-out drive benchmark proves it better.",
+    capture_source_label: "Drive video source",
+    phone_camera_option: "Phone camera",
+    dashcam_option: "Dashcam",
+    capture_source_note: "The selected source is used the next time Drive starts.",
+    dashcam_capture_source_note: "The selected dashcam source is used on the next Drive. Dashcam video is analysed directly; because RTSP has no trustworthy capture timestamp, the result is kept as uncalibrated dashcam evidence and is not automatically routed to an authority, tender or repair check.",
+    dashcam_rtsp_label: "Dashcam RTSP URL",
+    dashcam_rtsp_note: "Connect this phone to the dashcam's Wi-Fi. Drive uses this phone's GPS, but not its camera or audio. H.264 RTSP over TCP is supported. Local RTSP is normally unencrypted, so use only a trusted dashcam Wi-Fi. The address and any credentials are obscured here and saved only on this device.",
+    dashcam_rtsp_invalid: "Enter a complete rtsp:// address, for example rtsp://192.168.1.1:554/live.",
+    dashcam_native_only: "Dashcam input is available in the Android app. Choose Phone camera in this browser.",
     debug_label: "Debug mode: keep the drive video after analysing it",
     settings_note: "Accepted pothole coordinates and small metadata, including an image hash, go to the project service for tender resolution, nearby deduplication, the shared map and aggregate impact. A failed accepted-metadata upload retries when the app starts or reconnects until you delete that report. Email is the only complaint-filing option: one tap opens a pre-addressed draft with the location, road-damage details, photo and any probable tender number. Nothing sends until you press Send in your email app.",
     independent_note: "Independent, unofficial app. It is not affiliated with or endorsed by any government body. Routing is best-effort and must be reviewed before sending.",
@@ -646,6 +655,15 @@ const I18N = {
     model_label: "ಪತ್ತೆ ಮಾದರಿ",
     detail_label: "ಚಿತ್ರದ ವಿವರ",
     accuracy_note: "gpt-5-mini/high ಪ್ರಸ್ತುತ ಮೂಲಮಟ್ಟ. ನಿಮ್ಮ ಪ್ರತ್ಯೇಕ ಡ್ರೈವ್ ಪರೀಕ್ಷೆ ಉತ್ತಮವೆಂದು ಸಾಬೀತುಪಡಿಸುವವರೆಗೆ gpt-5.6/original ಪ್ರಯೋಗವಾಗಿದೆ.",
+    capture_source_label: "ಡ್ರೈವ್ ವಿಡಿಯೋ ಮೂಲ",
+    phone_camera_option: "ಫೋನ್ ಕ್ಯಾಮೆರಾ",
+    dashcam_option: "ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್",
+    capture_source_note: "ಮುಂದಿನ ಡ್ರೈವ್ ಆರಂಭಿಸಿದಾಗ ಆಯ್ದ ಮೂಲವನ್ನು ಬಳಸಲಾಗುತ್ತದೆ.",
+    dashcam_capture_source_note: "ಮುಂದಿನ ಡ್ರೈವ್‌ನಲ್ಲಿ ಆಯ್ದ ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್ ಮೂಲವನ್ನು ಬಳಸಲಾಗುತ್ತದೆ. ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್ ವಿಡಿಯೋವನ್ನು ನೇರವಾಗಿ ವಿಶ್ಲೇಷಿಸಲಾಗುತ್ತದೆ; RTSP ವಿಶ್ವಾಸಾರ್ಹ ಸೆರೆಹಿಡಿಯುವ ಸಮಯ ನೀಡದ ಕಾರಣ ಫಲಿತಾಂಶವನ್ನು ಕ್ಯಾಲಿಬ್ರೇಟ್ ಮಾಡದ ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್ ಸಾಕ್ಷಿಯಾಗಿ ಉಳಿಸಲಾಗುತ್ತದೆ ಮತ್ತು ಪ್ರಾಧಿಕಾರ, ಟೆಂಡರ್ ಅಥವಾ ದುರಸ್ತಿ ಪರಿಶೀಲನೆಗೆ ಸ್ವಯಂಚಾಲಿತವಾಗಿ ಕಳುಹಿಸಲಾಗುವುದಿಲ್ಲ.",
+    dashcam_rtsp_label: "ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್ RTSP URL",
+    dashcam_rtsp_note: "ಈ ಫೋನ್ ಅನ್ನು ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್ Wi-Fi ಗೆ ಸಂಪರ್ಕಿಸಿ. Drive ಈ ಫೋನ್‌ನ GPS ಬಳಸುತ್ತದೆ, ಆದರೆ ಅದರ ಕ್ಯಾಮೆರಾ ಅಥವಾ ಆಡಿಯೊ ಬಳಸುವುದಿಲ್ಲ. TCP ಮೇಲಿನ H.264 RTSP ಬೆಂಬಲಿತವಾಗಿದೆ. ಸ್ಥಳೀಯ RTSP ಸಾಮಾನ್ಯವಾಗಿ ಎನ್‌ಕ್ರಿಪ್ಟ್ ಆಗಿರುವುದಿಲ್ಲ; ವಿಶ್ವಾಸಾರ್ಹ ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್ Wi-Fi ಮಾತ್ರ ಬಳಸಿ. ವಿಳಾಸ ಮತ್ತು ಕ್ರೆಡೆನ್ಶಿಯಲ್‌ಗಳನ್ನು ಇಲ್ಲಿ ಮರೆಮಾಡಿ ಈ ಸಾಧನದಲ್ಲೇ ಉಳಿಸಲಾಗುತ್ತದೆ.",
+    dashcam_rtsp_invalid: "ಪೂರ್ಣ rtsp:// ವಿಳಾಸ ನಮೂದಿಸಿ, ಉದಾಹರಣೆಗೆ rtsp://192.168.1.1:554/live.",
+    dashcam_native_only: "ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್ ಇನ್‌ಪುಟ್ Android ಆ್ಯಪ್‌ನಲ್ಲಿ ಲಭ್ಯವಿದೆ. ಈ ಬ್ರೌಸರ್‌ನಲ್ಲಿ ಫೋನ್ ಕ್ಯಾಮೆರಾ ಆಯ್ಕೆಮಾಡಿ.",
     debug_label: "ಡೀಬಗ್ ಮೋಡ್: ವಿಶ್ಲೇಷಣೆಯ ನಂತರವೂ ಡ್ರೈವ್ ವಿಡಿಯೋ ಉಳಿಸಿ",
     settings_note: "ದೃಢಪಟ್ಟ ಗುಂಡಿಯ ನಿಖರ ಸ್ಥಳ ಮತ್ತು ಚಿತ್ರದ ಹ್ಯಾಶ್ ಸೇರಿದಂತೆ ಸಣ್ಣ ಮೆಟಾಡೇಟಾ ಟೆಂಡರ್ ಪರಿಹಾರ, ಹತ್ತಿರದ ನಕಲು ತಡೆ, ಸಾಮಾನ್ಯ ನಕ್ಷೆ ಮತ್ತು ಒಟ್ಟು ಪರಿಣಾಮಕ್ಕಾಗಿ ಯೋಜನೆಯ ಸೇವೆಗೆ ಹೋಗುತ್ತದೆ. ಅಪ್‌ಲೋಡ್ ವಿಫಲವಾದರೆ, ಆ ವರದಿಯನ್ನು ಅಳಿಸುವವರೆಗೆ ಆ್ಯಪ್ ಆರಂಭವಾದಾಗ ಅಥವಾ ಸಂಪರ್ಕ ಮರಳಿದಾಗ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸುತ್ತದೆ. ದೂರು ಸಲ್ಲಿಸಲು ಇರುವ ಏಕೈಕ ಆಯ್ಕೆ ಇಮೇಲ್: ಒಂದೇ ಟ್ಯಾಪ್‌ನಲ್ಲಿ ಸರಿಯಾದ ಅಧಿಕಾರಿಗೆ ವಿಳಾಸಿಸಿದ, ಸ್ಥಳ, ರಸ್ತೆ ಹಾನಿಯ ವಿವರ, ಫೋಟೋ ಮತ್ತು ಲಭ್ಯವಿದ್ದರೆ ಸಂಭಾವ್ಯ ಟೆಂಡರ್ ಸಂಖ್ಯೆಯ ಕರಡು ತೆರೆಯುತ್ತದೆ.",
     independent_note: "ಇದು ಸ್ವತಂತ್ರ, ಅನಧಿಕೃತ ಆ್ಯಪ್. ಯಾವುದೇ ಸರ್ಕಾರಿ ಸಂಸ್ಥೆಯೊಂದಿಗೆ ಸಂಬಂಧ ಅಥವಾ ಅನುಮೋದನೆ ಇಲ್ಲ. ಕಚೇರಿ ಸೂಚನೆ ಅತ್ಯುತ್ತಮ ಪ್ರಯತ್ನ ಮಾತ್ರ; ಕಳುಹಿಸುವ ಮೊದಲು ಪರಿಶೀಲಿಸಿ.",
@@ -6769,9 +6787,14 @@ window.openSettings = (firstRun) => {
   $("setKeepFrames").checked = localStorage.getItem("keep_frames") === "1";
   $("setRecord").checked = localStorage.getItem("record_video") === "1"; // explicit opt-in
   $("setBackgroundDrive").checked = localStorage.getItem("native_background_drive") === "1";
+  const captureSource = savedDriveCaptureSource();
+  $("setCaptureSource").value = captureSource;
+  $("setDashcamRtspUrl").value = captureSource === DASHCAM_CAPTURE_SOURCE
+    ? String(localStorage.getItem(DASHCAM_RTSP_URL_KEY) || "") : "";
   $("setLang").value = LANG;
   $("settingsHint").textContent = firstRun ? t("welcome_hint") : "";
   updateProviderSettings();
+  updateCaptureSourceSettings();
   show("settings");
   return true;
 };
@@ -6790,21 +6813,30 @@ $("gearBtn").onclick = () => openSettings(false);
 $("setProvider").onchange = updateProviderSettings;
 $("setBack").onclick = () => show("home");
 $("setSave").onclick = async () => {
+  const saveButton = $("setSave");
+  if (saveButton.disabled) return;
   const provider = $("setProvider").value === "personal" ? "personal" : "shared";
   const key = $("setKey").value.trim();
   if (provider === "personal" && !key) { alert(t("key_required")); return; }
-  localStorage.setItem("vision_provider", provider);
-  localStorage.setItem("openai_key", key);
-  localStorage.setItem("sender_name", $("setName").value.trim());
   const selectedModel = selectedLlmModel($("setModel").value);
   const selectedDetail = selectedLlmDetail($("setDetail").value, selectedModel);
-  localStorage.setItem("detection_model", selectedModel);
-  localStorage.setItem("image_detail", selectedDetail);
-  localStorage.setItem("debug_mode", $("setDebug").checked ? "1" : "0");
-  localStorage.setItem("keep_frames", $("setKeepFrames").checked ? "1" : "0");
-  localStorage.setItem("record_video", $("setRecord").checked ? "1" : "0");
-  localStorage.setItem("native_background_drive", $("setBackgroundDrive").checked ? "1" : "0");
+  const selectedCaptureSource = normaliseDriveCaptureSource($("setCaptureSource").value);
+  const dashcamRtspUrl = String($("setDashcamRtspUrl").value || "").trim();
+  if (selectedCaptureSource === DASHCAM_CAPTURE_SOURCE) {
+    const validRtspUrl = validateDashcamRtspUrl(dashcamRtspUrl);
+    if (!validRtspUrl) {
+      setDashcamRtspFeedback(t("dashcam_rtsp_invalid"), true);
+      $("setDashcamRtspUrl").focus();
+      return;
+    }
+  }
+  // Dashcam mode has no local recording toggle; keep that option disabled and save it
+  // as off so a later phone-camera drive cannot inherit a misleading setting.
+  const recordVideo = selectedCaptureSource !== DASHCAM_CAPTURE_SOURCE
+    && $("setRecord").checked;
+  const driveLimit = driveLimitMinutes();
   const newLang = $("setLang").value;
+  saveButton.disabled = true;
   try {
     const plugin = nativeDrivePlugin();
     if (plugin && drive && drive.native && !drive.stopping) {
@@ -6814,19 +6846,23 @@ $("setSave").onclick = async () => {
         updateNativeDriveHud(updated);
       }
     }
-    localStorage.setItem("openai_key", trimmedKey);
+    localStorage.setItem("vision_provider", provider);
+    localStorage.setItem("openai_key", key);
     localStorage.setItem("sender_name", $("setName").value.trim());
     localStorage.setItem("detection_model", selectedModel);
     localStorage.setItem("image_detail", selectedDetail);
-    localStorage.setItem(CAPTURE_SOURCE_KEY, selectedCaptureSource);
-    if (selectedCaptureSource === DASHCAM_CAPTURE_SOURCE) {
-      localStorage.setItem(DASHCAM_RTSP_URL_KEY, dashcamRtspUrl);
-    }
     localStorage.setItem("debug_mode", $("setDebug").checked ? "1" : "0");
     localStorage.setItem("keep_frames", $("setKeepFrames").checked ? "1" : "0");
     localStorage.setItem("record_video", recordVideo ? "1" : "0");
     localStorage.setItem("drive_limit_minutes", String(driveLimit));
     localStorage.setItem("app_lang", newLang);
+    localStorage.setItem("native_background_drive", $("setBackgroundDrive").checked ? "1" : "0");
+    localStorage.setItem(CAPTURE_SOURCE_KEY, selectedCaptureSource);
+    if (selectedCaptureSource === DASHCAM_CAPTURE_SOURCE) {
+      localStorage.setItem(DASHCAM_RTSP_URL_KEY, dashcamRtspUrl);
+    } else {
+      localStorage.removeItem(DASHCAM_RTSP_URL_KEY);
+    }
     localStorage.setItem(INITIAL_SETUP_KEY, "1");
     initialSettingsRequired = false;
     initialSettingsActive = false;
