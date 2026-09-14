@@ -1181,6 +1181,7 @@ const visionProvider = () => StandaloneAPI.__pure.effectiveVisionProvider(
   localStorage.getItem("vision_provider"), localStorage.getItem("openai_key"));
 let health = { ai_configured: null, provider: "shared_server", email_configured: false,
                delivery: "email_draft", service_url: CENTRAL_SERVICE_URL() };
+let healthPromise = null;
 
 function show(screen) {
   // A route change must never leave the fixed photo modal intercepting the new screen.
@@ -1328,16 +1329,21 @@ async function api(path, opts) {
   return StandaloneAPI.handle(path, opts);
 }
 
-async function loadHealth() {
-  try {
-    health = await api("/api/health");
-    const b = $("banner");
-    if (!health.ai_configured) {
-      b.textContent = t("banner_setup");
-      b.style.display = "block";
-    } else { b.style.display = "none"; }
-  } catch (e) {}
-  return health;
+function loadHealth() {
+  if (healthPromise) return healthPromise;
+  healthPromise = (async () => {
+    try {
+      health = await api("/api/health");
+      const b = $("banner");
+      if (!health.ai_configured) {
+        b.textContent = t("banner_setup");
+        b.style.display = "block";
+      } else { b.style.display = "none"; }
+    } catch (e) {}
+    return health;
+  })();
+  healthPromise.finally(() => { healthPromise = null; }).catch(() => {});
+  return healthPromise;
 }
 
 // Shared so cards inserted when a drive is expanded behave exactly like ones rendered
@@ -1372,17 +1378,6 @@ function repairPhotoSrc(r) {
     return url;
   }
   return r.repair_photo_url;
-}
-async function ensureThumbs(items) {
-  await Promise.all(items.map(async (r) => {
-    if (thumbUrls.has(r.id) || !r.photo_url) return;
-    try {
-      // A blob straight from storage needs no conversion at all; a legacy data URL
-      // string still does.
-      const blob = r.photo_url instanceof Blob ? r.photo_url : await (await fetch(r.photo_url)).blob();
-      thumbUrls.set(r.id, URL.createObjectURL(blob));
-    } catch (e) { thumbUrls.set(r.id, r.photo_url); }   // fall back to the data URL
-  }));
 }
 function releaseThumbs(keepIds) {
   for (const [id, url] of thumbUrls) {
@@ -1619,7 +1614,9 @@ async function renderReports() {
   }
   const willShow = groups.flatMap((g) =>
     (!g.driveId || expandedDrives.has(String(g.driveId))) ? g.items : []);
-  await ensureThumbs(willShow);
+  // Do not fetch/decode every historical photo before painting the list. Blob rows can
+  // become object URLs synchronously and data-URL rows remain lazy <img> sources.
+  // Browser loading="lazy" and decoding="async" take care of the visible thumbnails.
   releaseThumbs(new Set(allReports.map((r) => r.id)));
   const footageRowHtml = (driveId, fo, open) => !fo ? "" :
     `<div class="card" data-footagerow="${driveId}" style="padding:10px 12px;${open ? "" : "display:none"}">
@@ -1684,10 +1681,8 @@ async function renderReports() {
         const g = groups.find((x) => String(x.driveId) === id);
         if (g && !body.dataset.filled) {
           body.dataset.filled = "1";
-          ensureThumbs(g.items).then(() => {
-            body.innerHTML = g.items.map(cardHtml).join("");
-            wireCards(body, g.items);
-          });
+          body.innerHTML = g.items.map(cardHtml).join("");
+          wireCards(body, g.items);
         }
         body.style.display = "";
         if (footageRow) footageRow.style.display = "";
@@ -1811,6 +1806,10 @@ async function handleFile(file) {
       // A later email can explain that a missing fix prevents authority routing.
       pos = await getPosition(2000);
     }
+    if (token !== manualAnalysisSequence) return;
+    // The health probe is started while the camera is open. Waiting here means a
+    // slow shared-service check never delays the camera picker or preview.
+    if (!(await ensureVisionAvailable())) { show("home"); return; }
     if (token !== manualAnalysisSequence) return;
     $("progressText").textContent = t("working");
     const fd = new FormData();
@@ -3295,17 +3294,22 @@ function distMeters(a, b) {
   return 2 * R * Math.asin(Math.sqrt(s));
 }
 
-async function ensureVisionAvailable() {
+async function ensureVisionAvailable(options = {}) {
+  const notify = options.notify !== false;
   if (visionProvider() === "personal") {
     if ((localStorage.getItem("openai_key") || "").trim()) return true;
-    alert(t("key_required"));
-    openSettings(false);
+    if (notify) {
+      alert(t("key_required"));
+      openSettings(false);
+    }
     return false;
   }
   const status = health.ai_configured === true ? health : await loadHealth();
   if (status && status.ai_configured) return true;
-  const detail = status && status.service_error ? `\n\n${status.service_error}` : "";
-  alert(t("shared_unavailable") + detail);
+  if (notify) {
+    const detail = status && status.service_error ? `\n\n${status.service_error}` : "";
+    alert(t("shared_unavailable") + detail);
+  }
   return false;
 }
 
@@ -3362,11 +3366,18 @@ async function startDriveAdmitted() {
   if (drive || driveStarting || driveFinalizing || window._nativeDriveActive || importedVideoJob) return;
   driveStarting = true;
   if (!(await ensureDataConsent())) { driveStarting = false; return; }
-  // Start the short vision preflight before asking Android for the camera. On a cold
-  // launch these used to run serially, so a health round-trip plus the permission bridge
-  // made the live feed feel stuck for several seconds. They are independent; keep the
-  // same fail-closed check, but overlap their latency.
-  const visionReady = ensureVisionAvailable();
+  // Start the short vision preflight in the background. It must not sit in front of
+  // getUserMedia: the live preview can be visible while a cold shared-service probe
+  // completes, then the first frame is rejected cleanly if the service is unavailable.
+  const personalWithoutKey = visionProvider() === "personal"
+    && !(localStorage.getItem("openai_key") || "").trim();
+  if (personalWithoutKey) {
+    await ensureVisionAvailable();
+    driveStarting = false;
+    return;
+  }
+  const visionReady = visionProvider() === "personal"
+    ? Promise.resolve(true) : ensureVisionAvailable({ notify: false });
   const video = $("driveVideo");
   video.style.display = "";
   video.srcObject = null;
@@ -3390,7 +3401,10 @@ async function startDriveAdmitted() {
       const [, visionAvailable] = await Promise.all([
         requestNativeCapturePermissions(), visionReady,
       ]);
-      if (!visionAvailable) { driveStarting = false; show("home"); return; }
+      if (!visionAvailable) {
+        await ensureVisionAvailable();
+        driveStarting = false; show("home"); return;
+      }
       const provider = visionProvider();
       const key = (localStorage.getItem("openai_key") || "").trim();
       const model = selectedLlmModel(localStorage.getItem("detection_model"));
@@ -3421,10 +3435,7 @@ async function startDriveAdmitted() {
 
   // The live feed needs only camera permission. Ask for location after playback has
   // started so a slow Android permission bridge cannot sit in front of the preview.
-  const [cameraPermission, visionAvailable] = await Promise.all([
-    requestNativeCameraPermission(), visionReady,
-  ]);
-  if (!visionAvailable) { await cameraPermission; driveStarting = false; show("home"); return; }
+  const cameraPermission = requestNativeCameraPermission();
   await cameraPermission;
   if (drive || driveFinalizing) { driveStarting = false; return; }
   StandaloneAPI.prewarm();
@@ -3450,12 +3461,26 @@ async function startDriveAdmitted() {
     queue: [], pending: new Set(), inFlight: 0, errors: 0, wakeLock: null,
     sessionId: String(Date.now()), startedAt: Date.now(), captureSeq: 0, stillBusy: false,
     stopping: false, drained: false, readyAt: Date.now() + 250,
+    captureCanvas: document.createElement("canvas"),
   };
   ctx.drainPromise = new Promise((resolve) => { ctx.resolveDrained = resolve; });
+  // Attach the session before waiting on the service probe so Stop remains responsive
+  // even while the camera is already showing its first frame.
   drive = ctx;
   try { await video.play(); } catch (e) {}
-  // Stop can be tapped while play() is waiting for the media pipeline. Do not let
-  // this continuation recreate recording, GPS or wake-lock resources after teardown.
+  const visionAvailable = await visionReady;
+  if (drive !== ctx || ctx.stopping) { driveStarting = false; return; }
+  if (!visionAvailable) {
+    stream.getTracks().forEach((track) => track.stop());
+    video.srcObject = null;
+    drive = null;
+    driveStarting = false;
+    show("home");
+    await ensureVisionAvailable();
+    return;
+  }
+  // Do not let a late permission/health continuation recreate recording, GPS or
+  // wake-lock resources after Stop has already torn this session down.
   if (drive !== ctx || ctx.stopping) { driveStarting = false; return; }
   const locationPermission = requestNativeLocationPermission();
   const track = stream.getVideoTracks && stream.getVideoTracks()[0];
@@ -3527,18 +3552,20 @@ const withTimeout = (p, ms) =>
 // Capture hands the engine the current preview frame, unmodified. The engine makes
 // its own small working copy for detection and applies the night boost there, so the
 // copy attached to a complaint stays what the camera actually saw.
-function grabPreview(video) {
-  const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-  return new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.9));
+function grabPreview(video, canvas = null) {
+  const target = canvas || document.createElement("canvas");
+  if (target.width !== video.videoWidth || target.height !== video.videoHeight) {
+    target.width = video.videoWidth;
+    target.height = video.videoHeight;
+  }
+  target.getContext("2d").drawImage(video, 0, 0, target.width, target.height);
+  return new Promise((r) => target.toBlob(r, "image/jpeg", 0.9));
 }
 
 // One cheap read of the frame the preview is already showing. No capture-session
 // reconfiguration, so the video feed keeps running smoothly while we sample it.
-function captureFrame(video) {
-  return grabPreview(video);
+function captureFrame(video, canvas = null) {
+  return grabPreview(video, canvas);
 }
 
 function finishDriveDrain(ctx) {
@@ -3661,7 +3688,7 @@ async function driveTick() {
   ctx.stillBusy = true;
   let frame = null;
   try {
-    frame = await withTimeout(captureFrame(video), 3000);
+    frame = await withTimeout(captureFrame(video, ctx.captureCanvas), 3000);
   } catch (e) { frame = null; }
   finally { ctx.stillBusy = false; }
   if (drive !== ctx || ctx.stopping) return;
@@ -3753,7 +3780,7 @@ function stopDrive() {
     || (tally.failed || 0) > 0 || ctx.inFlight > 0 || ctx.queue.length > 0;
   clearInterval(ctx.timer);
   clearTimeout(ctx.limitTimer);
-  navigator.geolocation.clearWatch(ctx.watchId);
+  if (ctx.watchId != null) navigator.geolocation.clearWatch(ctx.watchId);
   if (ctx.wakeLock) ctx.wakeLock.release().catch(() => {});
   ctx.stream.getTracks().forEach((t) => t.stop());
   $("driveStatus").textContent = t("working");
@@ -4017,12 +4044,15 @@ $("captureBtn").onclick = async () => {
     return;
   }
   if (!(await ensureDataConsent())) return;
-  // Warm the service check and the camera permission together. The previous serial
-  // order added both waits to the time before the camera picker appeared.
-  const [cameraPermission, visionAvailable] = await Promise.all([
-    requestNativeCameraPermission(), ensureVisionAvailable(),
-  ]);
-  if (!visionAvailable) { await cameraPermission; return; }
+  // A shared health probe is useful warm-up, but it must never sit in front of the
+  // camera picker. The result is rechecked after the photo returns, while permission
+  // and TLS work happen in parallel.
+  if (visionProvider() === "personal" && !(localStorage.getItem("openai_key") || "").trim()) {
+    await ensureVisionAvailable();
+    return;
+  }
+  if (visionProvider() !== "personal") void loadHealth();
+  const cameraPermission = requestNativeCameraPermission();
   await cameraPermission;
   StandaloneAPI.prewarm();
   // With permission already granted, acquire GPS while the external camera is open.
@@ -6848,7 +6878,10 @@ nativeInitialRestorePromise = (async () => {
     await openDash();
     return;
   }
-  await Promise.all([loadHealth(), loadReports()]);
+  // Health is only needed when an analysis starts. Do not hold the first screen on a
+  // remote 4-second probe; history is local and can render immediately.
+  void loadHealth();
+  await loadReports();
   const m = location.hash.match(/^#report-(\d+)$/);
   if (!drive || m) await loadReports();
   else loadReports().catch(() => {});
