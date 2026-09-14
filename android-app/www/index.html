@@ -6417,9 +6417,11 @@ async function openDash() {
   $("communityNote").textContent = t("community_note");
   $("communityStats").innerHTML = "";
   $("dashRefresh").disabled = true;
+  const publicOnly = location.hash === "#public-map";
   const [reports, drives, footage, sharedMap, impact] = await Promise.all([
-    api("/api/reports").catch(() => []), api("/api/drives").catch(() => []),
-    api("/api/footage").catch(() => []),
+    publicOnly ? Promise.resolve([]) : api("/api/reports").catch(() => []),
+    publicOnly ? Promise.resolve([]) : api("/api/drives").catch(() => []),
+    publicOnly ? Promise.resolve([]) : api("/api/footage").catch(() => []),
     api("/api/map").catch(() => null), api("/api/impact").catch(() => null),
   ]);
   const FOUND = ["draft", "queued", "sent", "unrouted", "duplicate"];
@@ -6601,9 +6603,9 @@ $("dashBack").onclick = () => {
 $("reviewBtn").onclick = startReview;
 $("reviewPhoto").onclick = () => { if (reviewQueue[0]) openViewer(reviewQueue[0]); };
 $("lblPothole").onclick = () => labelCurrent("pothole_cavity");
-$("lblPatch").onclick = () => labelCurrent("failed_patch");
-$("lblSurface").onclick = () => labelCurrent("surface_breakup");
-$("lblRut").onclick = () => labelCurrent("rut_or_depression");
+if ($("lblPatch")) $("lblPatch").onclick = () => labelCurrent("failed_patch");
+if ($("lblSurface")) $("lblSurface").onclick = () => labelCurrent("surface_breakup");
+if ($("lblRut")) $("lblRut").onclick = () => labelCurrent("rut_or_depression");
 $("lblNo").onclick = () => labelCurrent("undamaged");
 $("lblSkip").onclick = () => labelCurrent(null);
 $("reviewBack").onclick = () => { show("home"); loadReports(); };
@@ -6974,13 +6976,13 @@ nativeInitialRestorePromise = (async () => {
 })();
 (async () => {
   // Service health is remote in shared mode; it must not hold local history hostage.
-  await Promise.all([loadHealth(), loadReports()]);
-  // A website can link straight to the read-only public map. This path intentionally
-  // needs neither an API key nor capture/location consent.
+  // A public-map link is read-only and must not wait for IndexedDB/native history to
+  // restore (or for a personal key). Open it immediately, then load only public data.
   if (location.hash === "#public-map") {
     await openDash();
     return;
   }
+  await Promise.all([loadHealth(), loadReports()]);
   const m = location.hash.match(/^#report-(\d+)$/);
   if (!drive || m) await loadReports();
   else loadReports().catch(() => {});
