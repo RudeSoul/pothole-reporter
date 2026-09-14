@@ -69,6 +69,8 @@
   const ALLOWED_DETAILS = new Set(MODEL_CONFIG.allowedImageDetails);
   const ORIGINAL_DETAIL_MODELS = new Set(MODEL_CONFIG.originalDetailModels);
   const PROMPT_VERSION = DETECTION_PROMPT_CONFIG.version;
+  // Legacy local evidence provenance only; this is not an LLM prompt/schema contract.
+  const REPAIR_VERIFICATION_VERSION = "legacy-repair-verification-v1";
   const SCHEMA_VERSION = DETECTION_PROMPT_CONFIG.schemaVersion;
   const MAX_DETECTION_IMAGES = IMAGING_CONFIG.maxDetectionImages;
   // Detection still examines every burst. Only after a burst is accepted do we group it
@@ -8109,7 +8111,8 @@
             current_photo_data_url: contextDataUrl,
             detection_model: detectionModel,
             image_detail: detectionDetail,
-            prompt_version: REPAIR_PROMPT_VERSION,
+            // Repair comparison is a legacy local evidence path, not an LLM contract.
+            prompt_version: REPAIR_VERIFICATION_VERSION,
             schema_version: REPAIR_SCHEMA_VERSION,
           });
           const applied = !repairResult.ignored ? repairResult.condition_status : null;
