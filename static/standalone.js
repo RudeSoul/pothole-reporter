@@ -7983,6 +7983,12 @@
       ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
       ctx.filter = "none";
     }
+    // Return the compressed frame to the detector. Closing the decoded bitmap here
+    // releases native memory immediately; leaving it live across concurrent requests
+    // was a common source of WebView pressure during Drive Mode.
+    const dataUrl = c.toDataURL("image/jpeg", quality);
+    if (typeof bmp.close === "function") bmp.close();
+    return dataUrl;
   }
 
   // ---------- pipeline ----------
