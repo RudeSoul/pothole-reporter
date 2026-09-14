@@ -8,6 +8,7 @@ import argparse, base64, hashlib, io, json, math, os, subprocess, sys
 import urllib.request
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,12 +62,42 @@ def load_key():
     sys.exit("OPENAI_API_KEY not set (environment or .env)")
 
 
+def client_template_constant(name):
+    """Read an auditable template literal from the shipped pure-client runtime."""
+    src = (ROOT / "static" / "standalone.js").read_text()
+    found = re.search(rf"const {re.escape(name)} = `(.*?)`;", src, re.S)
+    if not found:
+        sys.exit(f"could not find {name} in static/standalone.js")
+    return found.group(1)
+
+
+def client_string_constant(name):
+    """Read a quoted version identifier from the shipped pure-client runtime."""
+    src = (ROOT / "static" / "standalone.js").read_text()
+    found = re.search(rf'const {re.escape(name)} = "([^"]+)";', src)
+    if not found:
+        sys.exit(f"could not find {name} in static/standalone.js")
+    return found.group(1)
+
+
 def prompts():
     """Return only prompt arms registered by the canonical LLM contract."""
     registered = DETECTION.get("evaluationVariants", {})
     if "baseline" in registered:
         raise RuntimeError("The reserved baseline arm cannot be replaced by an evaluation variant.")
     return {"baseline": DETECTION["base"], **registered}
+
+
+def effective_prompt(base_prompt, mode, layout_note=""):
+    """Mirror the shipped mode-specific prompt assembly exactly."""
+    photo_scope = client_template_constant("PHOTO_ONLY_PROMPT_SUFFIX") \
+        if mode == "manual" else ""
+    return base_prompt + photo_scope + layout_note
+
+
+def effective_prompt_version(mode):
+    return client_string_constant("PHOTO_PROMPT_VERSION") if mode == "manual" \
+        else PROMPT_VERSION
 
 
 def normalise_config(model, detail):
@@ -77,9 +108,8 @@ def normalise_config(model, detail):
     return model, detail
 
 
-def adaptive_lift(image):
-    """Mirror the client's sampled RGB luma test on the already-resized view."""
-    from PIL import ImageEnhance
+def detection_enhancement_plan(image):
+    """Return the integer enhancement plan shared with Android and the Web runtime."""
     pixels = image.load()
     step = max(1, math.floor(math.sqrt(
         (image.width * image.height) / LUMINANCE_CONFIG["targetSamples"])))
@@ -113,12 +143,12 @@ def encode_view(path, max_dim, quality, band, enhance):
     from PIL import Image
     image = Image.open(path).convert("RGB")
     source = {"width": image.width, "height": image.height}
-    if band < 1:
-        height = max(1, round(image.height * band))
-        image = image.crop((0, image.height - height, image.width, image.height))
+    # Match native live analysis and WebView replay: preserve the complete frame and
+    # downscale only. No spatial crop, tile, mask, or region of interest is permitted.
     scale = min(1.0, max_dim / max(image.size))
-    if scale < 1:
-        image = image.resize((round(image.width * scale), round(image.height * scale)), Image.Resampling.LANCZOS)
+    if scale != 1:
+        image = image.resize((positive_half_up(image.width * scale),
+                              positive_half_up(image.height * scale)), Image.Resampling.LANCZOS)
     light = {"enhanced": False}
     if enhance:
         image, light = adaptive_lift(image)
@@ -127,7 +157,7 @@ def encode_view(path, max_dim, quality, band, enhance):
     raw = buf.getvalue()
     return "data:image/jpeg;base64," + base64.b64encode(raw).decode(), {
         "source": source, "output": {"width": image.width, "height": image.height},
-        "max_dim": max_dim, "jpeg_quality": quality, "road_band": band,
+        "max_dim": max_dim, "jpeg_quality": quality, "full_frame": True,
         **light, "bytes_sha256": sha(raw),
     }
 
@@ -157,7 +187,7 @@ def prepare_event(entry, root, mode):
     return [view], [transform], DETECTION["captureLayouts"][mode]
 
 
-def build_request(views, prompt, model, detail):
+def build_request(views, prompt, model, detail, mode="drive"):
     model, detail = normalise_config(model, detail)
     content = [
         {"type": "input_image", "image_url": url, "detail": detail}
@@ -176,6 +206,103 @@ def build_request(views, prompt, model, detail):
                               "schema": SCHEMA,
                               "strict": RUNTIME_CONFIG["strictStructuredOutputs"]},
                  "verbosity": RUNTIME_CONFIG["textVerbosity"]},
+    }
+    if mode == "drive":
+        # Match the shipped native streaming request. An eval completion that needs
+        # more output than production permits is not a valid production result.
+        request["max_output_tokens"] = NATIVE_DRIVE_MAX_OUTPUT_TOKENS
+        request["stream"] = True
+    return request
+
+
+def decision(result, mode="drive", source_view_count=3):
+    if not result or result.get("is_pothole") is not True:
+        return "reject"
+    if result.get("looks_like_speed_breaker") is not False:
+        return "reject"
+    surface_type = result.get("surface_type")
+    if result.get("image_quality") != "usable" or surface_type not in {
+            "bituminous_asphalt", "cement_concrete", "mastic_asphalt", "paver_blocks",
+            "temporary_drivable_surface"}:
+        return "reject"
+    if result.get("on_drivable_surface") is not True:
+        return "reject"
+    if result.get("has_localized_cavity") is not True:
+        return "reject"
+    if not isinstance(result.get("has_unambiguous_lower_interior"), bool):
+        return "reject"
+    if (surface_type == "temporary_drivable_surface" and
+            result.get("has_unambiguous_lower_interior") is not True):
+        return "reject"
+    if result.get("has_broken_edge_or_rim") is not True or result.get("has_depth_or_surface_loss") is not True:
+        return "reject"
+    # A temporary traffic surface needs the corroborating chronology that separates a
+    # discrete cavity from ordinary gravel texture, grading and wheel ruts.
+    if surface_type == "temporary_drivable_surface" and mode != "drive":
+        return "reject"
+    if mode == "drive":
+        if result.get("temporal_consistency") != "consistent" or source_view_count < 2:
+            return "reject"
+    elif result.get("temporal_consistency") not in {"consistent", "single_view"}:
+        return "reject"
+    if result.get("size") not in {"small", "medium", "large"}:
+        return "reject"
+    return "accept"
+
+
+def temporary_surface_vote_eligible(result, mode="drive"):
+    """Whether one complete decision may participate in the bounded temporary vote."""
+    return (mode == "drive"
+            and result.get("looks_like_speed_breaker") is False
+            and result.get("image_quality") == "usable"
+            and result.get("surface_type") == "temporary_drivable_surface"
+            and result.get("on_drivable_surface") is True
+            and result.get("temporal_consistency") == "consistent")
+
+
+def should_retry_temporary_surface(attempts, mode="drive", source_view_count=3):
+    """Stop as soon as two complete eligible decisions agree, with three calls maximum."""
+    if (not attempts or len(attempts) >= TEMPORARY_SURFACE_MAX_ATTEMPTS
+            or any(not temporary_surface_vote_eligible(item, mode) for item in attempts)):
+        return False
+    accepts = sum(decision(item, mode, source_view_count) == "accept" for item in attempts)
+    rejects = len(attempts) - accepts
+    return accepts < 2 and rejects < 2
+
+
+def confirms_temporary_surface(attempts, mode="drive", source_view_count=3):
+    """Require a strict two-YES majority from complete eligible temporary decisions."""
+    return (len(attempts) >= 2
+            and all(temporary_surface_vote_eligible(item, mode) for item in attempts)
+            and sum(decision(item, mode, source_view_count) == "accept"
+                    for item in attempts) >= 2)
+
+
+@dataclass(frozen=True)
+class DetectionPolicyOutcome:
+    """Auditable result of the shipped bounded temporary-surface vote."""
+
+    assessment: dict
+    decision: str
+    assessments: tuple
+    attempts_started: int
+    confirmation_failed: bool
+
+
+def _final_detection_policy_assessment(attempts, final_decision, mode,
+                                       source_view_count):
+    matching = [item for item in attempts
+                if decision(item, mode, source_view_count) == final_decision]
+    if matching:
+        return matching[-1]
+    # A failed or ineligible confirmation after one or more YES results is the
+    # native fail-closed path. Preserve the structured evidence but make the
+    # representative result unambiguously negative.
+    return {
+        **attempts[-1],
+        "is_pothole": False,
+        "size": None,
+        "description": "Temporary-surface pothole was not independently confirmed.",
     }
 
 
@@ -234,12 +361,34 @@ def call(key, body, cache_dir, cache_slot):
     return result, False, cache_key
 
 
+def call_with_detection_policy(key, body, cache_dir, cache_slot, mode, source_view_count):
+    """Apply the shipped bounded vote using a distinct fresh request per attempt."""
+    calls = []
+
+    def get_assessment():
+        attempt_number = len(calls) + 1
+        item = call(
+            key, body, cache_dir,
+            f"{cache_slot}|policy-attempt-{attempt_number}")
+        calls.append(item)
+        return item[0]
+
+    outcome = run_bounded_detection_policy(
+        get_assessment, mode, source_view_count)
+    return (outcome.assessment, all(item[1] for item in calls),
+            [item[2] for item in calls])
+
+
 def binary_label(label):
     if label in {"pothole", "pothole_cavity", "failed_patch", "surface_breakup",
                  "rut_or_depression", "other_road_damage", "damaged"}:
         return True
     if label in {"not_pothole", "undamaged"}:
         return False
+    # The retired failed_patch class did not record whether the failed repair contained
+    # a distinct cavity, so it cannot be converted into binary truth without relabelling.
+    if label == "failed_patch":
+        return None
     return None
 
 
@@ -311,6 +460,21 @@ def git_commit():
         return None
 
 
+def select_events(entries, selector):
+    """Select exact event IDs while preserving label-file order."""
+    requested = [item.strip() for item in str(selector or "").split(",") if item.strip()]
+    if not requested:
+        return entries
+    wanted = set(requested)
+    found = {str(entry.get("event_id")) for entry in entries
+             if entry.get("event_id") is not None and str(entry.get("event_id")) in wanted}
+    missing = sorted(wanted - found)
+    if missing:
+        raise ValueError(f"unknown event id(s) for selected mode: {', '.join(missing)}")
+    return [entry for entry in entries
+            if entry.get("event_id") is not None and str(entry.get("event_id")) in wanted]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--trials", type=int, default=5)
@@ -321,6 +485,8 @@ def main():
     parser.add_argument("--mode", choices=["manual", "drive"], default="drive")
     parser.add_argument("--images-root", default=str(ROOT / "eval" / "images"))
     parser.add_argument("--labels", default=str(ROOT / "eval" / "labels.json"))
+    parser.add_argument("--events", default="",
+                        help="comma-separated exact event IDs; evaluates only those events")
     parser.add_argument("--concurrency", type=int, default=5)
     parser.add_argument("--limit", type=int, default=0, help="first N matching events; smoke tests only")
     parser.add_argument("--out", default=str(ROOT / "eval" / "results"))
@@ -330,6 +496,10 @@ def main():
     label_bytes = Path(args.labels).read_bytes()
     all_entries = json.loads(label_bytes)["images"]
     entries = [entry for entry in all_entries if entry_mode(entry) == args.mode]
+    try:
+        entries = select_events(entries, args.events)
+    except ValueError as exc:
+        sys.exit(str(exc))
     if args.limit > 0:
         entries = entries[:args.limit]
     if not entries:
@@ -345,9 +515,16 @@ def main():
     unknown = [x for x in chosen if x not in variants]
     if unknown:
         sys.exit(f"unknown prompt arm(s): {unknown}; available: {sorted(variants)}")
+    requested_models = args.models or (
+        MANUAL_DEFAULT_MODEL if args.mode == "manual" else DRIVE_DEFAULT_MODEL
+    )
+    model_names = [value.strip() for value in requested_models.split(",") if value.strip()]
+    unknown_models = [value for value in model_names if value not in ALLOWED_MODELS]
+    if unknown_models:
+        sys.exit(f"unsupported model(s): {unknown_models}; allowed: {sorted(ALLOWED_MODELS)}")
     configs = []
     for arm in chosen:
-        for model in filter(None, args.models.split(",")):
+        for model in model_names:
             for detail in filter(None, args.details.split(",")):
                 model, detail = normalise_config(model, detail)
                 item = (f"{arm}|{model}|{detail}|{args.mode}", variants[arm], model, detail)
@@ -367,7 +544,8 @@ def main():
     for name, prompt, model, detail in configs:
         for entry in entries:
             views, transforms, note = prepared[entry["path"]]
-            body = build_request(views, prompt + note, model, detail)
+            body = build_request(views, effective_prompt(prompt, args.mode, note), model, detail,
+                                 args.mode)
             for trial in range(args.trials):
                 jobs.append((name, entry, trial, body, transforms))
     print(f"{len(jobs)} calls: {len(configs)} configurations x {len(entries)} events x {args.trials} trials")
@@ -387,16 +565,20 @@ def main():
     cache_dir = outdir / "cache"; cache_dir.mkdir(exist_ok=True)
     rows = []
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        results = pool.map(lambda job: call(key, job[3], cache_dir,
-                                            f"{job[0]}|{job[1].get('event_id') or job[1]['path']}|{job[2]}"), jobs)
+        results = pool.map(lambda job: call_with_detection_policy(
+            key, job[3], cache_dir,
+            f"{job[0]}|{job[1].get('event_id') or job[1]['path']}|{job[2]}",
+            args.mode, len(entry_paths(job[1]))), jobs)
         for index, (job, returned) in enumerate(zip(jobs, results), 1):
             name, entry, trial, body, transforms = job
-            result, cached, cache_key = returned
+            result, cached, cache_keys = returned
             rows.append({"arm": name, "event": entry.get("event_id") or entry["path"],
                          "image": entry["path"], "label": entry["label"],
                          "labelled_by": entry.get("labelled_by"), "trial": trial,
-                         "decision": decision(result), "cached": cached,
-                         "request_hash": cache_key, "transforms": transforms, **result})
+                         "accuracy_eligible": entry.get("accuracy_eligible", True),
+                         "decision": decision(result, args.mode, len(entry_paths(entry))), "cached": cached,
+                         "request_hash": cache_keys[-1], "request_hashes": cache_keys,
+                         "attempts": len(cache_keys), "transforms": transforms, **result})
             if index % 25 == 0:
                 print(f"  {index}/{len(jobs)}")
 

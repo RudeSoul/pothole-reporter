@@ -15,6 +15,145 @@ imaging = contract["config"]["imaging"]
 fails = []
 
 
+drive_preprocessing = re.search(
+    r"let imageInputs, dataUrl, fullViews = null, contextDataUrl = null;"
+    r"\s*if \(driveMode\) \{(?P<body>.*?)\n\s*\} else \{",
+    client,
+    re.DOTALL,
+)
+drive_preparation_gate_start = client.find("let driveImagePreparationTail = Promise.resolve();")
+drive_preparation_gate_end = client.find(
+    "\n\n  async function createReport", drive_preparation_gate_start)
+drive_preparation_gate = (client[drive_preparation_gate_start:drive_preparation_gate_end]
+                          if drive_preparation_gate_start >= 0
+                          and drive_preparation_gate_end > drive_preparation_gate_start else "")
+to_data_url_start = client.find("async function toDataUrl(")
+to_data_url_end = client.find("\n\n  // ---------- pipeline ----------", to_data_url_start)
+to_data_url_source = (client[to_data_url_start:to_data_url_end]
+                      if to_data_url_start >= 0 and to_data_url_end > to_data_url_start else "")
+
+
+def drive_preprocessing_is_sequential():
+    if not drive_preprocessing:
+        return False
+    body = drive_preprocessing.group("body")
+    return ("for (const p of photos)" in body
+            and "MAX_PREPARED_FRAME_DIMENSION" in body
+            and "1920" not in body
+            and "Promise.all(photos.map" not in body)
+
+
+def drive_preparation_gate_is_safe():
+    if not drive_preprocessing or not drive_preparation_gate:
+        return False
+    body = drive_preprocessing.group("body")
+    return ("const wait = driveImagePreparationTail;" in drive_preparation_gate
+            and "driveImagePreparationTail = new Promise" in drive_preparation_gate
+            and "await wait;" in drive_preparation_gate
+            and re.search(r"finally\s*\{\s*release\(\);\s*\}", drive_preparation_gate)
+            and "withDriveImagePreparation(async () =>" in body
+            and "analyzeImage(" not in body)
+
+
+def image_preprocessing_always_releases_resources():
+    return ("let c = null;" in to_data_url_source
+            and "return c.toDataURL(\"image/jpeg\", quality);" in to_data_url_source
+            and re.search(
+                r"finally\s*\{\s*try\s*\{\s*if \(bmp\.close\) bmp\.close\(\);\s*\}"
+                r"\s*finally\s*\{.*?c\.width = 0; c\.height = 0;.*?\}",
+                to_data_url_source,
+                re.DOTALL,
+            ))
+
+
+def parse_js_object_constant(source, name):
+    """Parse the JSON-compatible object literal assigned to a JS const."""
+    match = re.search(rf"\bconst\s+{re.escape(name)}\s*=\s*", source)
+    if not match:
+        raise ValueError(f"JavaScript constant {name} was not found")
+    start = source.find("{", match.end())
+    if start < 0:
+        raise ValueError(f"JavaScript constant {name} is not an object")
+
+    depth = 0
+    quote = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    end = None
+    index = start
+    while index < len(source):
+        char = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if line_comment:
+            if char in "\r\n":
+                line_comment = False
+            index += 1
+            continue
+        if block_comment:
+            if char == "*" and following == "/":
+                block_comment = False
+                index += 2
+            else:
+                index += 1
+            continue
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+        if char == "/" and following == "/":
+            line_comment = True
+            index += 2
+            continue
+        if char == "/" and following == "*":
+            block_comment = True
+            index += 2
+            continue
+        if char in ('"', "'", "`"):
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                end = index + 1
+                break
+        index += 1
+    if end is None:
+        raise ValueError(f"JavaScript constant {name} has an unterminated object")
+
+    literal = source[start:end]
+    literal = re.sub(r'([,{]\s*)([A-Za-z_$][A-Za-z0-9_$]*)\s*:',
+                     r'\1"\2":', literal)
+    literal = re.sub(r",\s*([}\]])", r"\1", literal)
+    return json.loads(literal)
+
+
+web_prompt = road_eval.prompts()["baseline"]
+try:
+    web_schema = parse_js_object_constant(client, "ASSESS_SCHEMA")
+except (ValueError, json.JSONDecodeError):
+    web_schema = None
+native_prompt_match = re.search(
+    r'val DETECT_PROMPT =\s*"""(.*?)"""\.trimIndent\(\)', native_contract, re.S
+)
+native_prompt = (textwrap.dedent(native_prompt_match.group(1)).strip("\n")
+                 if native_prompt_match else None)
+native_schema_match = re.search(
+    r'val SCHEMA_JSON =\s*"""(.*?)"""\.trimIndent\(\)', native_contract, re.S
+)
+try:
+    native_schema = json.loads(textwrap.dedent(native_schema_match.group(1)).strip()) \
+        if native_schema_match else None
+except json.JSONDecodeError:
+    native_schema = None
+
+
 def check(name, condition):
     print(f"  {'ok  ' if condition else 'FAIL'} {name}")
     if not condition:
@@ -138,15 +277,155 @@ check("undamaged with size is contradictory",
       road_eval.decision({**good, "assessment": "undamaged",
                           "damage_type": None, "size": "small"}) == "review")
 check("legacy positive label", road_eval.binary_label("pothole") is True)
-check("new failed-surface label", road_eval.binary_label("surface_breakup") is True)
+check("non-cavity surface breakup label is negative",
+      road_eval.binary_label("surface_breakup") is False)
+check("legacy failed patch awaits explicit binary relabelling",
+      road_eval.binary_label("failed_patch") is None)
 check("unverified category excluded", road_eval.binary_label("disputed") is None)
+selected = road_eval.select_events([
+    {"event_id": "one", "path": "one.jpg"},
+    {"event_id": "two", "path": "two.jpg"},
+    {"event_id": "three", "path": "three.jpg"},
+], "three,one")
+check("event selector preserves label order and filters exactly",
+      [entry["event_id"] for entry in selected] == ["one", "three"])
+try:
+    road_eval.select_events([{"event_id": "one"}], "missing")
+    missing_event_fails = False
+except ValueError:
+    missing_event_fails = True
+check("event selector fails on unknown IDs", missing_event_fails)
+speed_breaker_events = [entry for entry in labels
+                        if entry.get("event_id") == "tester-second-speed-breaker-2026-08-25"]
+check("tester speed breaker is retained as owner-labelled semantic ground truth",
+      len(speed_breaker_events) == 1
+      and speed_breaker_events[0].get("label") == "not_pothole"
+      and speed_breaker_events[0].get("labelled_by") == "owner"
+      and speed_breaker_events[0].get("accuracy_eligible") is False
+      and len(speed_breaker_events[0].get("frames", [])) == 3)
+native_cadence_breaker = speed_breaker_events[0]
+native_cadence_timestamps = native_cadence_breaker.get("source_timestamps_seconds", [])
+native_cadence_spacing = [
+    round((right - left) * 1000)
+    for left, right in zip(native_cadence_timestamps, native_cadence_timestamps[1:])
+]
+check("tester speed breaker preserves the sampled external-recording fixture",
+      native_cadence_breaker.get("path")
+      == "tester-speed-breaker-native-cadence/later/f1.jpg"
+      and native_cadence_breaker.get("frames") == [
+          "tester-speed-breaker-native-cadence/later/f0.jpg",
+          "tester-speed-breaker-native-cadence/later/f1.jpg",
+          "tester-speed-breaker-native-cadence/later/f2.jpg",
+      ]
+      and native_cadence_breaker.get("fixture_sha256") == [
+          "dd59f703b2ba228e6e3a88082c1a46b6c7add0df8b40c26396bde9b0f38b5a83",
+          "de6f0e9e37f20cabdba7e7287de2c4aad1556694dc607eae9941ac4d83d6a32f",
+          "90428d428e900d448cb145020848b5b4b1f5b5c5954520ad0428e97805efa1ba",
+      ]
+      and native_cadence_breaker.get("capture_provenance")
+          == "external_recording_of_test_device")
+check("tester speed breaker records its 267 ms source-video spacing",
+      native_cadence_breaker.get("capture_cadence_ms") == 250
+      and native_cadence_breaker.get("selected_source_indices") == [0, 1, 2]
+      and native_cadence_breaker.get("observed_source_spacing_ms") == [267, 267]
+      and native_cadence_breaker.get("observed_frame_spacing_ms") == [267, 267]
+      and native_cadence_spacing == [267, 267]
+      and all(spacing >= native_cadence_breaker["capture_cadence_ms"]
+              for spacing in native_cadence_spacing))
+traffic_calming_ids = {
+    "tester-opening-grid-calming-marking-2026-08-25",
+    "tester-zebra-raised-speed-breaker-2026-08-25",
+    "tester-second-speed-breaker-2026-08-25",
+}
+traffic_calming_events = [entry for entry in labels
+                          if entry.get("event_id") in traffic_calming_ids]
+check("all three supplied traffic-calming intervals are retained as negative bursts",
+      {entry.get("event_id") for entry in traffic_calming_events} == traffic_calming_ids
+      and all(entry.get("label") == "not_pothole"
+              and len(entry.get("frames", [])) == 3
+              for entry in traffic_calming_events)
+      and next(entry for entry in traffic_calming_events
+               if entry.get("event_id") == "tester-opening-grid-calming-marking-2026-08-25")
+          .get("labelled_by") == "independent assistant frame review"
+      and all(entry.get("labelled_by") == "owner"
+              for entry in traffic_calming_events
+              if entry.get("event_id") != "tester-opening-grid-calming-marking-2026-08-25"))
+check("external tester recordings cannot inflate production accuracy",
+      all(entry.get("capture_provenance") == "external_recording_of_test_device"
+              and entry.get("accuracy_eligible") is False
+              for entry in traffic_calming_events)
+      and 'row.get("accuracy_eligible") is True'
+          in pathlib.Path(road_eval.__file__).read_text())
+production_bursts = [entry for entry in labels
+                     if entry.get("mode") == "drive" and len(entry.get("frames", [])) == 3]
+check("every labelled Drive burst records the configured 250 ms sample spacing",
+      bool(production_bursts)
+      and all(
+          entry.get("capture_cadence_ms") == 250
+          and entry.get("selected_source_indices") == [0, 1, 2]
+          and entry.get("source_sample_timestamps_seconds")
+              == entry.get("source_timestamps_seconds")
+          and entry.get("observed_source_spacing_ms")
+              == entry.get("observed_frame_spacing_ms")
+          and len(entry.get("observed_source_spacing_ms", [])) == 2
+          and all(spacing >= entry["capture_cadence_ms"]
+                  for spacing in entry["observed_source_spacing_ms"])
+          and [round((right - left) * 1000)
+               for left, right in zip(entry["source_timestamps_seconds"],
+                                      entry["source_timestamps_seconds"][1:])]
+              == entry["observed_source_spacing_ms"]
+          for entry in production_bursts))
+corrected_b_events = [entry for entry in labels
+                      if entry.get("event_id") == "owner-construction-drive-2026-08-28-b"]
+check("unresolved segment_0001 event B stays outside accuracy rates",
+      len(corrected_b_events) == 1
+      and corrected_b_events[0].get("label") == "disputed"
+      and "broad disturbed patch" in corrected_b_events[0].get("notes", "").lower()
+      and "owner label" in corrected_b_events[0].get("notes", "").lower())
+mid_events = [entry for entry in labels
+              if entry.get("event_id") == "owner-construction-drive-2026-08-28-mid"]
+check("conflicting assistant reviews keep segment_0001 event M outside accuracy rates",
+      len(mid_events) == 1
+      and mid_events[0].get("label") == "disputed"
+      and "no owner label" in mid_events[0].get("notes", "").lower())
+owner_clip_positives = [entry for entry in labels
+                        if entry.get("event_id") in {
+                            "owner-construction-drive-2026-08-28-a",
+                            "owner-construction-drive-2026-08-28-segment-2-second-4",
+                        }]
+check("both owner-confirmed clip moments are positive Drive bursts",
+      len(owner_clip_positives) == 2
+      and all(entry.get("mode") == "drive"
+              and entry.get("label") == "pothole"
+              and entry.get("labelled_by") == "owner"
+              and entry.get("capture_provenance") == "native_mediarecorder_reconstruction"
+              for entry in owner_clip_positives))
+segment_two_second_four = next(
+    (entry for entry in owner_clip_positives
+     if entry.get("event_id") == "owner-construction-drive-2026-08-28-segment-2-second-4"),
+    {})
+check("segment_0002 second 4 retains the reconstructed native-video burst",
+      segment_two_second_four.get("source_interval_seconds") == [3.8, 5.4]
+      and segment_two_second_four.get("source_timestamps_seconds")
+          == [4.533333, 4.8, 5.066667]
+      and segment_two_second_four.get("fixture_sha256") == [
+          "5b212ccd4a7de01a998873735faef6effafcf190749190a62fe19d46ccb893b5",
+          "7d79d4c5d7bfdce996ae14eacd99129eb95adeebb200a26cbd68acf05ad04991",
+          "307755fd21a78a777364215b1fd2e926e32259b90b4aee8ef2b1a207d70a5695",
+      ])
+kanjur_events = [entry for entry in labels
+                 if entry.get("event_id") == "owner-kanjur-drivable-edge-pothole-2026-08-25"]
+check("owner-confirmed Kanjur drivable-edge cavity is a manual positive",
+      len(kanjur_events) == 1
+      and kanjur_events[0].get("mode") == "manual"
+      and kanjur_events[0].get("label") == "pothole"
+      and kanjur_events[0].get("labelled_by") == "owner"
+      and "drivable surface" in kanjur_events[0].get("notes", "").lower())
 check("manual and drive sets stay separate",
       road_eval.entry_mode({"source": "project owner, dashcam frame"}) == "drive"
       and road_eval.entry_mode({"source": "project owner, own camera"}) == "manual")
 
-# Low-light decisions must be taken from the cropped/resized production view. This
-# caught the evaluator enhancing the original first and measuring it with a different
-# grayscale formula.
+# Low-light decisions must be taken from the full-frame resized production view.
 observed = {}
 real_lift = road_eval.adaptive_lift
 def observe_lift(image):
@@ -160,6 +439,22 @@ with tempfile.TemporaryDirectory() as tmp:
 road_eval.adaptive_lift = real_lift
 check("evaluator resizes full frame before luminance", observed.get("size") == (1000, 500))
 check("dark resized view is enhanced", transform["enhanced"] is True)
+with tempfile.TemporaryDirectory() as tmp:
+    path = pathlib.Path(tmp) / "small-drive.jpg"
+    Image.new("RGB", (480, 720), (90, 90, 90)).save(path, quality=100)
+    _, drive_transform = road_eval.encode_view(
+        path, road_eval.MAX_PREPARED_FRAME_DIMENSION, 85, False
+    )
+check("small Drive frame remains complete and is not upscaled",
+      drive_transform["full_frame"] is True
+      and drive_transform["output"] == {"width": 480, "height": 720})
+with tempfile.TemporaryDirectory() as tmp:
+    path = pathlib.Path(tmp) / "manual.jpg"
+    Image.new("RGB", (480, 720), (80, 80, 80)).save(path, quality=100)
+    _, manual_transform = road_eval.encode_view(path, 2000, 85, False)
+check("manual Photo remains full-frame",
+      manual_transform["full_frame"] is True
+      and manual_transform["output"] == {"width": 480, "height": 720})
 _, green = real_lift(Image.new("RGB", (32, 32), (0, 101, 0)))
 check("evaluator uses client RGB luma weights", green["enhanced"] is False)
 

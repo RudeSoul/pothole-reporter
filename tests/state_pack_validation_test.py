@@ -1,0 +1,387 @@
+#!/usr/bin/env python3
+"""Pure-Python negative tests for the municipal release-pack contract."""
+
+from __future__ import annotations
+
+import copy
+import json
+import pathlib
+import sys
+from collections.abc import Callable
+from typing import Any
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+
+from state_pack_tools import (  # noqa: E402
+    PackError,
+    SPECS,
+    _authority_snapshot,
+    _validate_raw_payload,
+)
+from india_jurisdictions import (  # noqa: E402
+    JURISDICTIONS as REMAINING_JURISDICTIONS,
+    pack_id as remaining_pack_id,
+)
+
+
+Mutation = Callable[[dict[str, Any], list[dict[str, Any]]], None]
+MUNICIPAL_IDS = ("in-tn-routing", "in-tg-routing", "in-gj-routing")
+VALIDATED_IDS = (
+    *MUNICIPAL_IDS,
+    "in-mh-routing",
+    "in-wb-routing",
+    "in-pb-routing",
+    "in-tn-state-routing",
+    "in-ap-routing",
+    "in-tg-state-routing",
+    "in-ka-state-routing",
+    "in-kl-routing",
+    "in-up-routing",
+    "in-cg-routing",
+    "in-rj-routing",
+    "in-ga-routing",
+    "in-mp-routing",
+    "in-br-routing",
+    "in-od-routing",
+    "in-top50-routing",
+    *(remaining_pack_id(item) for item in REMAINING_JURISDICTIONS),
+)
+
+
+def load_case(pack_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    spec = SPECS[pack_id]
+    payload = json.loads((ROOT / spec.source_path).read_text(encoding="utf-8"))
+    return payload, copy.deepcopy(_authority_snapshot(spec))
+
+
+def validate(pack_id: str, payload: dict[str, Any], authorities: list[dict[str, Any]],
+             generated_at: str) -> None:
+    _validate_raw_payload(
+        SPECS[pack_id],
+        payload,
+        generated_at=generated_at,
+        authorities=authorities,
+    )
+
+
+def first_ring(region: dict[str, Any]) -> list[list[float]]:
+    geometry = region["geometry"]
+    if geometry["type"] == "Polygon":
+        return geometry["coordinates"][0]
+    return geometry["coordinates"][0][0]
+
+
+def main() -> int:
+    failures: list[str] = []
+    for pack_id in VALIDATED_IDS:
+        payload, authorities = load_case(pack_id)
+        try:
+            validate(pack_id, payload, authorities, payload["retrieved_at"])
+        except PackError as error:
+            failures.append(f"valid {pack_id} was rejected: {error}")
+
+    cases: list[tuple[str, str, Mutation]] = [
+        ("in-tn-routing", "extra payload field", lambda p, a: p.update({"extra": True})),
+        ("in-tn-routing", "pack/source date mismatch", lambda p, a: p.update(
+            {"retrieved_at": "2026-08-20"}
+        )),
+        ("in-tn-routing", "multiple regions", lambda p, a: p["regions"].append(
+            copy.deepcopy(p["regions"][0])
+        )),
+        ("in-tn-routing", "extra region field", lambda p, a: p["regions"][0].update(
+            {"unexpected": "field"}
+        )),
+        ("in-tn-routing", "missing region field", lambda p, a: p["regions"][0].pop("scope")),
+        ("in-tn-routing", "unpinned scope", lambda p, a: p["regions"][0].update(
+            {"scope": "all of Tamil Nadu"}
+        )),
+        ("in-tn-routing", "insecure source URL", lambda p, a: p["regions"][0].update(
+            {"source_url": "http://example.invalid/source"}
+        )),
+        ("in-tn-routing", "empty alias inventory", lambda p, a: p["regions"][0].update(
+            {"place_aliases": []}
+        )),
+        ("in-tn-routing", "inverted relevance envelope", lambda p, a: p["regions"][0][
+            "envelope"
+        ].update({"min_lng": 81.0})),
+        ("in-tn-routing", "missing limitations", lambda p, a: p["regions"][0].update(
+            {"limitations": []}
+        )),
+        ("in-tn-routing", "unreviewed complaint package", lambda p, a: a[0].update(
+            {"handoff_package": "example.unreviewed.app"}
+        )),
+        ("in-tn-routing", "non-integer coordinate precision", lambda p, a: p["regions"][0].update(
+            {"coordinate_precision": 7.0}
+        )),
+        ("in-tn-routing", "unsafe reviewed area", lambda p, a: p["regions"][0].update(
+            {"area_km2": 1}
+        )),
+        ("in-tn-routing", "geometry digest mismatch", lambda p, a: p["regions"][0].update(
+            {"geometry_sha256": "0" * 64}
+        )),
+        ("in-tn-routing", "declared bbox mismatch", lambda p, a: p["regions"][0]["bbox"].update(
+            {"max_lng": 80.34}
+        )),
+        ("in-tn-routing", "unclosed polygon ring", lambda p, a: first_ring(p["regions"][0]).__setitem__(
+            -1, [80.2, 13.0]
+        )),
+        ("in-tn-routing", "out-of-range coordinate", lambda p, a: first_ring(
+            p["regions"][0]
+        ).__setitem__(1, [181.0, 13.0])),
+        ("in-tg-routing", "missing Cantonment exclusion", lambda p, a: p["regions"][0].update(
+            {"exclusions": []}
+        )),
+        ("in-tg-routing", "exclusion outside envelope", lambda p, a: p["regions"][0][
+            "exclusions"
+        ][0]["bbox"].update({"max_lng": 79.0})),
+        ("in-tg-routing", "insecure exclusion source", lambda p, a: p["regions"][0][
+            "exclusions"
+        ][0].update({"source_url": "http://example.invalid/cantonment"})),
+        ("in-tg-routing", "CURE query uses intersects", lambda p, a: p["regions"][0].update(
+            {"query_spatial_rel": "esriSpatialRelIntersects"}
+        )),
+        ("in-tg-routing", "insecure CURE query", lambda p, a: p["regions"][0].update(
+            {"query_url": "http://example.invalid/query"}
+        )),
+        ("in-tg-routing", "Cantonment query does not intersect", lambda p, a: p["regions"][0][
+            "exclusions"
+        ][0].update({"query_spatial_rel": "esriSpatialRelWithin"})),
+        ("in-tg-routing", "official query redistributes geometry", lambda p, a: p["regions"][0].update(
+            {"geometry": {"type": "Polygon", "coordinates": []}}
+        )),
+        ("in-tg-routing", "missing legal reference", lambda p, a: p["regions"][0].update(
+            {"legal_references": p["regions"][0]["legal_references"][:1]}
+        )),
+        ("in-gj-routing", "invalid dissolved geometry", lambda p, a: p["regions"][0].update(
+            {"geometry": {"type": "Polygon", "coordinates": []}}
+        )),
+        ("in-gj-routing", "unreviewed source object", lambda p, a: p["regions"][0].update(
+            {"source_object_id": "osm:relation:1"}
+        )),
+        ("in-mh-routing", "legacy non-statewide payload version", lambda p, a: p.update(
+            {"version": 1}
+        )),
+        ("in-mh-routing", "wrong state relation", lambda p, a: p["regions"][
+            "maharashtra"
+        ].update({"source_relation_id": 1})),
+        ("in-mh-routing", "state geometry digest mismatch", lambda p, a: p["regions"][
+            "maharashtra"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-mh-routing", "missing statewide authority", lambda p, a: a.__setitem__(
+            slice(None), [item for item in a if item.get("id") != "mh-statewide-unverified"]
+        )),
+        ("in-wb-routing", "legacy KMC-only payload version", lambda p, a: p.update(
+            {"version": 1}
+        )),
+        ("in-wb-routing", "wrong state relation", lambda p, a: p["regions"][
+            "west_bengal"
+        ].update({"source_relation_id": 1})),
+        ("in-wb-routing", "state geometry digest mismatch", lambda p, a: p["regions"][
+            "west_bengal"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-wb-routing", "KMC geometry digest mismatch", lambda p, a: p["regions"][
+            "kmc"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-wb-routing", "missing KMC region", lambda p, a: p["regions"].pop("kmc")),
+        ("in-wb-routing", "missing statewide authority", lambda p, a: a.__setitem__(
+            slice(None), [item for item in a if item.get("id") != "wb-statewide-unverified"]
+        )),
+        ("in-wb-routing", "unreviewed statewide grievance URL", lambda p, a: next(
+            item for item in a if item.get("id") == "wb-statewide-unverified"
+        ).update({"handoff_url": "https://example.invalid/unreviewed"})),
+        ("in-pb-routing", "wrong state relation", lambda p, a: p["region"].update(
+            {"osm_relation_id": 1}
+        )),
+        ("in-pb-routing", "state geometry digest mismatch", lambda p, a: p["region"].update(
+            {"geometry_sha256": "0" * 64}
+        )),
+        ("in-pb-routing", "missing statewide authority", lambda p, a: a.clear()),
+        ("in-pb-routing", "unreviewed statewide grievance URL", lambda p, a: a[0].update(
+            {"handoff_url": "https://example.invalid/unreviewed"}
+        )),
+        ("in-pb-routing", "Chandigarh included in declared scope", lambda p, a: p[
+            "region"
+        ].update({"scope": "Full State of Punjab including Chandigarh"})),
+        ("in-tn-state-routing", "wrong state relation", lambda p, a: p["region"].update(
+            {"osm_relation_id": 1}
+        )),
+        ("in-tn-state-routing", "state geometry digest mismatch", lambda p, a: p[
+            "region"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-tn-state-routing", "missing statewide authority", lambda p, a: a.clear()),
+        ("in-tn-state-routing", "unreviewed statewide grievance URL", lambda p, a: a[
+            0
+        ].update({"handoff_url": "https://example.invalid/unreviewed"})),
+        ("in-tn-state-routing", "Puducherry included in declared scope", lambda p, a: p[
+            "region"
+        ].update({"scope": "Full State of Tamil Nadu including Puducherry"})),
+        ("in-tn-state-routing", "wrong Tamil Nadu app package", lambda p, a: a[0].update(
+            {"handoff_package": "example.unreviewed.app"}
+        )),
+        ("in-ap-routing", "wrong state relation", lambda p, a: p["region"].update(
+            {"osm_relation_id": 1}
+        )),
+        ("in-ap-routing", "state geometry digest mismatch", lambda p, a: p[
+            "region"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-ap-routing", "missing statewide authority", lambda p, a: a.clear()),
+        ("in-ap-routing", "unreviewed statewide grievance URL", lambda p, a: a[
+            0
+        ].update({"handoff_url": "https://example.invalid/unreviewed"})),
+        ("in-ap-routing", "Yanam included in declared scope", lambda p, a: p[
+            "region"
+        ].update({"scope": "Full State of Andhra Pradesh including Yanam"})),
+        ("in-tg-state-routing", "wrong state relation", lambda p, a: p["region"].update(
+            {"osm_relation_id": 1}
+        )),
+        ("in-tg-state-routing", "state geometry digest mismatch", lambda p, a: p[
+            "region"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-tg-state-routing", "missing statewide authority", lambda p, a: a.clear()),
+        ("in-tg-state-routing", "unreviewed statewide grievance URL", lambda p, a: a[
+            0
+        ].update({"handoff_url": "https://example.invalid/unreviewed"})),
+        ("in-tg-state-routing", "changed reviewed scope", lambda p, a: p[
+            "region"
+        ].update({"scope": "Hyderabad only"})),
+        ("in-ka-state-routing", "wrong state relation", lambda p, a: p["region"].update(
+            {"osm_relation_id": 1}
+        )),
+        ("in-ka-state-routing", "state geometry digest mismatch", lambda p, a: p[
+            "region"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-ka-state-routing", "missing statewide authority", lambda p, a: a.clear()),
+        ("in-ka-state-routing", "unreviewed statewide grievance URL", lambda p, a: a[
+            0
+        ].update({"handoff_url": "https://example.invalid/unreviewed"})),
+        ("in-ka-state-routing", "changed reviewed scope", lambda p, a: p[
+            "region"
+        ].update({"scope": "Bengaluru only"})),
+        ("in-kl-routing", "wrong state relation", lambda p, a: p["region"].update(
+            {"osm_relation_id": 1}
+        )),
+        ("in-kl-routing", "state geometry digest mismatch", lambda p, a: p[
+            "region"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-kl-routing", "missing statewide authority", lambda p, a: a.clear()),
+        ("in-kl-routing", "unreviewed statewide grievance URL", lambda p, a: a[
+            0
+        ].update({"handoff_url": "https://example.invalid/unreviewed"})),
+        ("in-kl-routing", "Mahe included in declared scope", lambda p, a: p[
+            "region"
+        ].update({"scope": "Full State of Kerala including Mahe"})),
+        ("in-up-routing", "wrong state relation", lambda p, a: p["region"].update(
+            {"osm_relation_id": 1}
+        )),
+        ("in-up-routing", "state geometry digest mismatch", lambda p, a: p[
+            "region"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-up-routing", "missing statewide authority", lambda p, a: a.clear()),
+        ("in-up-routing", "unreviewed statewide grievance URL", lambda p, a: a[
+            0
+        ].update({"handoff_url": "https://example.invalid/unreviewed"})),
+        ("in-up-routing", "Delhi included in declared scope", lambda p, a: p[
+            "region"
+        ].update({"scope": "Full State of Uttar Pradesh including Delhi NCT"})),
+        ("in-up-routing", "wrong Jansunwai app package", lambda p, a: a[0].update(
+            {"handoff_package": "example.unreviewed.app"}
+        )),
+        ("in-cg-routing", "wrong state relation", lambda p, a: p["region"].update(
+            {"osm_relation_id": 1}
+        )),
+        ("in-cg-routing", "state geometry digest mismatch", lambda p, a: p[
+            "region"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-cg-routing", "missing statewide authority", lambda p, a: a.clear()),
+        ("in-cg-routing", "unreviewed statewide grievance URL", lambda p, a: a[
+            0
+        ].update({"handoff_url": "https://example.invalid/unreviewed"})),
+        ("in-cg-routing", "changed reviewed scope", lambda p, a: p[
+            "region"
+        ].update({"scope": "Raipur only"})),
+        ("in-rj-routing", "wrong state relation", lambda p, a: p["region"].update(
+            {"osm_relation_id": 1}
+        )),
+        ("in-rj-routing", "state geometry digest mismatch", lambda p, a: p[
+            "region"
+        ].update({"geometry_sha256": "0" * 64})),
+        ("in-rj-routing", "missing statewide authority", lambda p, a: a.clear()),
+        ("in-rj-routing", "unreviewed statewide grievance URL", lambda p, a: a[
+            0
+        ].update({"handoff_url": "https://example.invalid/unreviewed"})),
+        ("in-rj-routing", "changed reviewed scope", lambda p, a: p[
+            "region"
+        ].update({"scope": "Jaipur only"})),
+        ("in-rj-routing", "wrong Sampark app package", lambda p, a: a[0].update(
+            {"handoff_package": "example.unreviewed.app"}
+        )),
+        ("in-top50-routing", "missing city region", lambda p, a: p["regions"].pop()),
+        ("in-top50-routing", "changed Census rank", lambda p, a: p["regions"][0].update(
+            {"rank": 8}
+        )),
+        ("in-top50-routing", "changed source object", lambda p, a: p["regions"][0].update(
+            {"source_object_id": "osm:node:1"}
+        )),
+        ("in-top50-routing", "broad routing envelope", lambda p, a: p["regions"][0][
+            "envelope"
+        ].update({"max_lng": 73.5})),
+        ("in-top50-routing", "weak town matching mode", lambda p, a: p["regions"][0].update(
+            {"routing_mode": "town_name"}
+        )),
+        ("in-top50-routing", "missing civic category", lambda p, a: p["regions"][0].update(
+            {"supported_issue_types": ["road_damage"]}
+        )),
+        ("in-top50-routing", "unreviewed official reference", lambda p, a: p["regions"][0].update(
+            {"official_scope_reference": "https://example.invalid/portal"}
+        )),
+        ("in-top50-routing", "same-state city alias collision", lambda p, a: p["regions"][0][
+            "place_aliases"
+        ].append("Rajkot")),
+        ("in-top50-routing", "missing authority", lambda p, a: a.pop()),
+        ("in-top50-routing", "unreviewed grievance URL", lambda p, a: a[0].update(
+            {"handoff_url": "https://example.invalid/unreviewed"}
+        )),
+    ]
+
+    for pack_id in (
+        "in-ga-routing", "in-mp-routing", "in-br-routing", "in-od-routing"
+    ):
+        cases.extend((
+            (pack_id, "wrong state relation", lambda p, a: p["region"].update(
+                {"osm_relation_id": 1}
+            )),
+            (pack_id, "state geometry digest mismatch", lambda p, a: p[
+                "region"
+            ].update({"geometry_sha256": "0" * 64})),
+            (pack_id, "missing statewide authority", lambda p, a: a.clear()),
+            (pack_id, "unreviewed statewide grievance URL", lambda p, a: a[
+                0
+            ].update({"handoff_url": "https://example.invalid/unreviewed"})),
+            (pack_id, "changed reviewed scope", lambda p, a: p["region"].update(
+                {"scope": "Capital city only"}
+            )),
+        ))
+
+    for pack_id, label, mutate in cases:
+        payload, authorities = load_case(pack_id)
+        generated_at = payload["retrieved_at"]
+        mutate(payload, authorities)
+        try:
+            validate(pack_id, payload, authorities, generated_at)
+        except PackError:
+            continue
+        failures.append(f"{pack_id} accepted malformed case: {label}")
+
+    if failures:
+        print("State-pack validation failures:", file=sys.stderr)
+        for failure in failures:
+            print(f" - {failure}", file=sys.stderr)
+        return 1
+    print(f"state-pack validation OK ({len(cases)} malformed cases refused)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

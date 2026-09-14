@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Every check that guards a shipped behaviour. Needs .env with OPENAI_API_KEY.
-# The live ones hit KGIS and OpenAI on purpose: the answers that matter are today's.
+# Local checks that guard shipped behaviour. Some mocked checks still read the test key
+# from .env, but no live service is contacted unless RUN_LIVE_TESTS=1 is explicit.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 PY=.venv/bin/python3
@@ -25,7 +25,7 @@ else
 fi
 
 start_server() {
-  (cd android-app/www && nohup python3 -m http.server 8765 >/tmp/pothole-srv.log 2>&1 &)
+  (nohup python3 tests/serve_app.py --port 8765 >/tmp/pothole-srv.log 2>&1 &)
   for _ in $(seq 1 20); do
     curl -s -o /dev/null http://localhost:8765/index.html && return 0
     sleep 0.5
@@ -37,13 +37,14 @@ start_server() {
 ensure_server() {
   curl -s -o /dev/null --max-time 3 http://localhost:8765/index.html && return 0
   echo "    (restarting the static server)"
-  pkill -f "http.server 8765" >/dev/null 2>&1
+  pkill -f "tests/serve_app.py --port 8765" >/dev/null 2>&1
   start_server
 }
 
 pkill -f "http.server 8765" >/dev/null 2>&1
+pkill -f "tests/serve_app.py --port 8765" >/dev/null 2>&1
 start_server || { echo "could not start the static server"; exit 1; }
-trap 'pkill -f "http.server 8765" >/dev/null 2>&1' EXIT
+trap 'pkill -f "tests/serve_app.py --port 8765" >/dev/null 2>&1' EXIT
 
 TESTS="llm_contract_parity_test standalone_default_test unit_test server_client_contract_test timeout_contract_test email_only_flow_test native_email_cache_test browser_civic_cache_migration_test central_resolution_isolation_test eval_contract_test persistent_dedupe_test manual_analysis_race_test video_import_test native_video_import_bridge_test footage_metadata_test footage_backpressure_test drive_start_stop_test orphan_footage_test capture_cadence_test letter_test tender_determinism_test tender_source_registry_test national_highway_contracts_test storage_commit_test stalled_body_test
        stored_xss_test public_map_test privacy_consent_test ui_text_test routing_test nh_test gis_failure_test footage_test"

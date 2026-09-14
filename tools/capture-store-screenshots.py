@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Capture genuine, deterministic Play Store screenshots from the local client."""
+"""Capture deterministic Play Store screenshots from the local web client.
+
+The privacy-disclosure screenshot is captured from the native Android app so
+this script intentionally leaves ``04-privacy-disclosure.png`` untouched.
+"""
 
 from __future__ import annotations
 
+import base64
 import subprocess
 import time
 from pathlib import Path
@@ -18,7 +23,7 @@ PORT = 8767
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     server = subprocess.Popen(
-        ["python3", "-m", "http.server", str(PORT), "--bind", "127.0.0.1"],
+        ["python3", "tests/serve_app.py", "--port", str(PORT)],
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -39,15 +44,26 @@ def main() -> None:
                 """
                 localStorage.setItem('openai_key', 'store-preview-key');
                 localStorage.setItem('sender_name', 'Road volunteer');
-                localStorage.setItem('data_notice_version', '2026-08-21-v1');
+                localStorage.setItem('data_notice_version', '2026-08-23-v10-play-background-disclosure');
                 localStorage.setItem('record_video', '0');
                 """
             )
             page = context.new_page()
-            page.goto(f"http://127.0.0.1:{PORT}/static/index.html", wait_until="networkidle")
+            page.goto(f"http://127.0.0.1:{PORT}/", wait_until="networkidle")
+            example_photo = base64.b64encode(
+                (ROOT / "docs" / "example-pothole-thumb.jpg").read_bytes()
+            ).decode("ascii")
             page.evaluate(
-                """async () => {
-                  const photo = await fetch('/docs/example-pothole-thumb.jpg').then(r => r.blob());
+                """async (photoBase64) => {
+                  const photo = await fetch(`data:image/jpeg;base64,${photoBase64}`).then(r => r.blob());
+                  const route = await StandaloneAPI.__pure.kolkataRouteFromGeocode(
+                    null, 22.5726, 88.3639, 12
+                  );
+                  const [subject, body] = StandaloneAPI.__pure.draftEmail(
+                    {damage_type: 'pothole_cavity', assessment: 'clear', size: 'medium'},
+                    22.5726, 88.3639, 'Esplanade, Kolkata', route.officer_name, null, route
+                  );
+                  const previewTime = Date.UTC(2026, 7, 21, 11, 45, 0) / 1000;
                   const db = await new Promise((resolve, reject) => {
                     const req = indexedDB.open('potholes');
                     req.onsuccess = () => resolve(req.result);
@@ -68,38 +84,58 @@ def main() -> None:
                       damage_type: 'pothole_cavity', assessment: 'damaged',
                       image_quality: 'acceptable', size: 'medium',
                       description: 'Open cavity with a broken rim and visible material loss in the travelled lane.',
-                      address: '100 Feet Road, Indiranagar, Bengaluru 560038',
-                      officer_name: 'Suggested municipal road office',
-                      officer_email: 'review-before-sending@example.invalid',
-                      email_subject: 'Road damage at 100 Feet Road, Indiranagar',
-                      email_body: 'Please inspect the attached road damage. Review this draft before sending.',
-                      lat: 12.9784, lng: 77.6408, photo
+                      address: 'Esplanade, Kolkata', lat: 22.5726, lng: 88.3639,
+                      email_subject: subject, email_body: body, officer_email: null,
+                      officer_name: route.officer_name, authority_id: route.authority_id,
+                      authority_name: route.authority_name,
+                      authority_registry_version: route.authority_registry_version,
+                      delivery_channel: 'official_handoff', region: 'kolkata',
+                      routing_source: route.routing_source, routing_match_field: 'boundary',
+                      routing_match_value: route.routing_match_value, ownership_unverified: true,
+                      handoff_name: route.handoff_name, handoff_url: route.handoff_url,
+                      alternate_handoff_name: route.alternate_handoff_name,
+                      alternate_handoff_url: route.alternate_handoff_url,
+                      whatsapp_url: route.whatsapp_url, helpline: route.helpline,
+                      requires_official_reference: true, official_grievance_id: null, photo
                     });
                     tx.oncomplete = resolve;
                     tx.onerror = () => reject(tx.error);
                   });
                   await loadReports();
                   show('home');
-                }"""
+                  window.scrollTo(0, 0);
+                }""",
+                example_photo,
             )
+            page.wait_for_timeout(100)
             page.screenshot(path=OUT / "01-home-and-history.png")
 
             page.locator("[data-id]").first.click()
+            page.evaluate("window.scrollTo(0, 0)")
             page.screenshot(path=OUT / "02-detection-detail.png")
 
             page.locator("#backBtn").click()
             page.locator("#dashBtn").click()
             page.wait_for_timeout(800)
+            page.evaluate(
+                "document.getElementById('map').style.height = '30vh'; "
+                "if (mapObj) mapObj.invalidateSize(); window.scrollTo(0, 0)"
+            )
+            page.wait_for_timeout(200)
+            page.locator(".leaflet-control-attribution").wait_for(state="visible")
             page.screenshot(path=OUT / "03-contribution-dashboard.png")
 
-            page.evaluate("show('dataConsent')")
-            page.screenshot(path=OUT / "04-privacy-disclosure.png")
             browser.close()
     finally:
         server.terminate()
         server.wait(timeout=5)
 
-    for path in sorted(OUT.glob("*.png")):
+    for name in (
+        "01-home-and-history.png",
+        "02-detection-detail.png",
+        "03-contribution-dashboard.png",
+    ):
+        path = OUT / name
         print(path.relative_to(ROOT))
 
 

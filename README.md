@@ -9,11 +9,14 @@ There is no user account system.
 **Current coverage:** supported Karnataka urban local bodies with published contact
 emails. National, state and district highways, and rural roads are excluded.
 
-<a href="docs/example-pothole.jpg"><img src="docs/example-pothole-thumb.jpg" width="280" alt="Pothole detected by Pothole Reporter"></a>
+<p>
+  <a href="docs/example-pothole.jpg"><img src="docs/example-pothole-thumb.jpg" width="280" alt="Pothole detected by Pothole Reporter"></a>
+  <a href="docs/coverage-overview.svg"><img src="docs/coverage-overview.svg" width="280" alt="Pothole Reporter nationwide India coverage overview"></a>
+</p>
 
-<sub>Example detected by the app. Select the thumbnail for the full-size photo.</sub>
+<sub>Example detection and current coverage. Map boundary: [DataMeet India community, CC0](https://github.com/datameet/maps/blob/5ed214bf77788f99066e3542cccd4a52cb042896/Country/india-composite.geojson), following the Survey of India standard; no government endorsement. Select either image to enlarge.</sub>
 
-## What it does
+## Coverage
 
 - Captures exactly one photo per analysis request, either manually or by sampling the
   road in Drive Mode.
@@ -49,7 +52,7 @@ The app refuses to guess a recipient for national, state and district highways, 
 roads, locations outside Karnataka, unknown road ownership, or bodies without a
 published address.
 
-## Install and use
+## How it works
 
 1. Download `PotholeReporter.apk` from the
    [latest release](https://github.com/coding-parrot/pothole-reporter/releases/latest)
@@ -90,7 +93,8 @@ geocoding, and road classification.
 - The app does not send email automatically and is not affiliated with any government
   body.
 
-## Cost and privacy
+Read [data sources and limits](https://coding-parrot.github.io/pothole-reporter/sources.html)
+for exact coverage, provenance, and known gaps.
 
 - Shared vision is centrally sponsored and best effort. It can fail when the configured
   detector is unavailable or at capacity, or when the default OpenAI backend is out of
@@ -143,15 +147,8 @@ Build the Android APK with:
 
 ```bash
 ./tools/build-apk.sh
-```
-
-The script mirrors the static files into the Android project, builds the APK, verifies
-the packaged assets, and scans the packaged engine for an OpenAI-style key.
-
-Run the complete test suite with:
-
-```bash
 ./tests/run-all.sh
+# Explicit live-service checks: RUN_LIVE_TESTS=1 ./tests/run-all.sh
 ```
 
 The production central service is the AWS HTTP API in

@@ -1,0 +1,694 @@
+{
+  "MH": {
+    "authorities": [
+      {
+        "id": "mh-bmc",
+        "name": "Brihanmumbai Municipal Corporation",
+        "aliases": ["mumbai", "greater mumbai", "brihanmumbai", "bombay", "मुंबई", "बृहन्मुंबई"],
+        "handoff_name": "BMC Pothole QuickFix",
+        "handoff_url": "https://play.google.com/store/apps/details?id=com.bmc.potholequickfix",
+        "handoff_package": "com.bmc.potholequickfix",
+        "whatsapp_url": "https://wa.me/918999228999",
+        "helpline": "1916"
+      },
+      {
+        "id": "mh-tmc",
+        "name": "Thane Municipal Corporation",
+        "aliases": ["thane", "thana", "ठाणे"],
+        "handoff_name": "Aaple Sarkar",
+        "handoff_url": "https://grievances.maharashtra.gov.in/en"
+      },
+      {
+        "id": "mh-kdmc",
+        "name": "Kalyan-Dombivli Municipal Corporation",
+        "aliases": ["kalyan-dombivli", "kalyan-dombivali", "kalyan dombivli", "kalyan dombivali", "kalyan", "dombivli", "dombivali", "कल्याण", "डोंबिवली"],
+        "handoff_name": "KDMC Citizen Grievance",
+        "handoff_url": "https://kdmc.gov.in/kdmc/CitizenHome.html"
+      },
+      {
+        "id": "mh-nmmc",
+        "name": "Navi Mumbai Municipal Corporation",
+        "aliases": ["navi mumbai", "new bombay", "नवी मुंबई"],
+        "handoff_name": "My NMMC",
+        "handoff_url": "https://online.nmmc.gov.in/Grievance",
+        "handoff_package": "com.newnmmc.app"
+      },
+      {
+        "id": "mh-umc",
+        "name": "Ulhasnagar Municipal Corporation",
+        "aliases": ["ulhasnagar", "ulhas nagar", "उल्हासनगर"],
+        "handoff_name": "UMC official website",
+        "handoff_url": "https://www.umc.gov.in/"
+      },
+      {
+        "id": "mh-bncmc",
+        "name": "Bhiwandi-Nizampur Municipal Corporation",
+        "aliases": ["bhiwandi-nizampur", "bhiwandi-nizamapur", "bhiwandi nizampur", "bhiwandi nizamapur", "bhiwandi", "bhivandi", "nizampur", "भिवंडी", "निजामपूर"],
+        "handoff_name": "BNCMC Grievance Portal",
+        "handoff_url": "https://grp.bncmc.gov.in/en/home"
+      },
+      {
+        "id": "mh-vvcmc",
+        "name": "Vasai-Virar City Municipal Corporation",
+        "aliases": ["vasai-virar", "vasai virar", "vasai", "virar", "nala sopara", "nalasopara", "वसई", "विरार", "नालासोपारा"],
+        "handoff_name": "VClick - VVCMC",
+        "handoff_url": "https://onlinevvcmc.in/CRM/",
+        "whatsapp_url": "https://wa.me/919665877727"
+      },
+      {
+        "id": "mh-mbmc",
+        "name": "Mira-Bhayandar Municipal Corporation",
+        "aliases": ["mira-bhayandar", "mira bhayandar", "mira bhayander", "mira road", "bhayandar", "bhayander", "मीरा-भाईंदर", "भाईंदर"],
+        "handoff_name": "MyMBMC Complaint Portal",
+        "handoff_url": "https://crm.mymbmc.in/"
+      },
+      {
+        "id": "mh-panvel",
+        "name": "Panvel Municipal Corporation",
+        "aliases": ["panvel", "new panvel", "पनवेल"],
+        "handoff_name": "Panvel Connect",
+        "handoff_url": "https://grievance.panvelcorporation.in/",
+        "helpline": "1800227701"
+      },
+      {
+        "id": "mh-ambarnath",
+        "name": "Ambarnath Municipal Council",
+        "aliases": ["ambarnath", "ambernath", "अंबरनाथ"],
+        "officer_email": "coud.ambernath@maharashtra.gov.in"
+      },
+      {
+        "id": "mh-badlapur",
+        "name": "Kulgaon-Badlapur Municipal Council",
+        "aliases": ["kulgaon-badlapur", "kulgaon-badalapur", "kulgaon badlapur", "kulgaon badalapur", "badlapur", "badalapur", "kulgaon", "बदलापूर", "कुळगाव-बदलापूर"],
+        "officer_email": "support@kbmc.gov.in",
+        "helpline": "18002129032"
+      },
+      {
+        "id": "mh-matheran",
+        "name": "Matheran Municipal Council",
+        "aliases": ["matheran", "माथेरान"],
+        "officer_email": "mcomatheran@gmail.com"
+      },
+      {
+        "id": "mh-karjat",
+        "name": "Karjat Municipal Council",
+        "aliases": ["karjat", "कर्जत"],
+        "officer_email": "karjatcouncil@gmail.com"
+      },
+      {
+        "id": "mh-khopoli",
+        "name": "Khopoli Municipal Council",
+        "aliases": ["khopoli", "खोपोली"],
+        "officer_email": "cokmckhopoli@gmail.com"
+      },
+      {
+        "id": "mh-pen",
+        "name": "Pen Municipal Council",
+        "aliases": ["pen", "पेण"],
+        "officer_email": "copenmc@gmail.com"
+      },
+      {
+        "id": "mh-uran",
+        "name": "Uran Municipal Council",
+        "aliases": ["uran", "उरण"],
+        "officer_email": "uranmunicipal@gmail.com"
+      },
+      {
+        "id": "mh-alibag",
+        "name": "Alibag Municipal Council",
+        "aliases": ["alibag", "alibaug", "अलिबाग"],
+        "officer_email": "nagarparishadalibag@gmail.com"
+      },
+      {
+        "id": "mh-palghar",
+        "name": "Palghar Municipal Council",
+        "aliases": ["palghar", "पालघर"],
+        "handoff_name": "Aaple Sarkar",
+        "handoff_url": "https://grievances.maharashtra.gov.in/en"
+      },
+      {
+        "id": "mh-khalapur",
+        "name": "Khalapur Nagar Panchayat",
+        "aliases": ["khalapur", "खालापूर"],
+        "officer_email": "cokmckhalapur@gmail.com"
+      }
+    ],
+    "pmc": {
+      "id": "mh-pmc",
+      "name": "Pune Municipal Corporation",
+      "handoff_name": "PMC Road Mitra",
+      "handoff_url": "https://play.google.com/store/apps/details?id=com.nyatitechnologies.pmcroadmitra",
+      "handoff_package": "com.nyatitechnologies.pmcroadmitra",
+      "alternate_handoff_name": "PMC CARE",
+      "alternate_handoff_url": "https://pmccare.in/",
+      "helpline": "18001030222"
+    },
+    "fallback": {
+      "id": "mh-mmr-unverified",
+      "name": "MMR road authority (verify in Aaple Sarkar)",
+      "handoff_name": "Aaple Sarkar",
+      "handoff_url": "https://grievances.maharashtra.gov.in/en"
+    },
+    "statewide": {
+      "id": "mh-statewide-unverified",
+      "name": "Maharashtra authority (select in Aaple Sarkar)",
+      "handoff_name": "Aaple Sarkar",
+      "handoff_url": "https://grievances.maharashtra.gov.in/en",
+      "alternate_handoff_name": "MahaULB (urban areas)",
+      "alternate_handoff_url": "https://mahaulb.in/MahaULB/index"
+    }
+  },
+  "WB": {
+    "authorities": [
+      {
+        "id": "wb-kmc",
+        "name": "Kolkata Municipal Corporation",
+        "aliases": ["kolkata", "calcutta", "kolkata municipal corporation", "কলকাতা", "কলকাতা পৌরসংস্থা"],
+        "handoff_name": "KMC Grievance 2.0",
+        "handoff_url": "https://kmc.wb.gov.in/citizen/language-selection",
+        "handoff_package": "com.kmc.app",
+        "alternate_handoff_name": "KMC APP",
+        "alternate_handoff_url": "https://play.google.com/store/apps/details?id=com.kmc.app",
+        "whatsapp_url": "https://wa.me/918335988888",
+        "helpline": "18003453375"
+      }
+    ],
+    "statewide": {
+      "id": "wb-statewide-unverified",
+      "name": "West Bengal authority (select in PGRS)",
+      "aliases": ["west bengal", "পশ্চিমবঙ্গ"],
+      "handoff_name": "West Bengal PGRS",
+      "handoff_url": "https://finance.wb.gov.in/pgrs/page/PGMS_Lodge_Greivance.aspx",
+      "alternate_handoff_name": "CMO Grievance",
+      "alternate_handoff_url": "https://cmo.wb.gov.in/landing/raise-grievance"
+    }
+  },
+  "PB": {
+    "authorities": [
+      {
+        "id": "pb-statewide-unverified",
+        "name": "Punjab authority (select in Connect Punjab)",
+        "aliases": ["punjab", "ਪੰਜਾਬ"],
+        "handoff_name": "Connect Punjab PGRS",
+        "handoff_url": "https://connect.punjab.gov.in/",
+        "alternate_handoff_name": "Punjab mSeva (urban areas)",
+        "alternate_handoff_url": "https://mseva.lgpunjab.gov.in/",
+        "helpline": "1100"
+      }
+    ]
+  },
+  "KA": {
+    "authorities": [
+      {
+        "id": "ka-statewide-unverified",
+        "name": "Karnataka authority (select in Janaspandana)",
+        "aliases": ["karnataka", "ಕರ್ನಾಟಕ"],
+        "handoff_name": "Karnataka Janaspandana",
+        "handoff_url": "https://ipgrs.karnataka.gov.in/",
+        "alternate_handoff_name": "Janahitha (urban areas outside Bengaluru)",
+        "alternate_handoff_url": "https://www.mrc.gov.in/janahita/login",
+        "helpline": "1902"
+      }
+    ]
+  },
+  "KL": {
+    "authorities": [
+      {
+        "id": "kl-statewide-unverified",
+        "name": "Kerala authority (select in CMO grievance portal)",
+        "aliases": ["kerala", "കേരളം"],
+        "handoff_name": "Kerala CMO Grievance",
+        "handoff_url": "https://complaints.cmo.kerala.gov.in/cmoportal/login.htm?lang=en",
+        "alternate_handoff_name": "K-SMART (local-body issues)",
+        "alternate_handoff_url": "https://ksmart.lsgkerala.gov.in/ui/web-portal/services",
+        "helpline": "1076"
+      }
+    ]
+  },
+  "UP": {
+    "authorities": [
+      {
+        "id": "up-statewide-unverified",
+        "name": "Uttar Pradesh authority (select in Jansunwai)",
+        "aliases": ["uttar pradesh", "उत्तर प्रदेश"],
+        "handoff_name": "UP Jansunwai–Samadhan",
+        "handoff_url": "https://jansunwai.up.nic.in/?language=en_US",
+        "handoff_package": "in.nic.up.jansunwai.upjansunwai",
+        "helpline": "1076"
+      }
+    ]
+  },
+  "CG": {
+    "authorities": [
+      {
+        "id": "cg-statewide-unverified",
+        "name": "Chhattisgarh authority (select in CM Helpline)",
+        "aliases": ["chhattisgarh", "छत्तीसगढ़", "छत्तीसगढ़"],
+        "handoff_name": "Chhattisgarh CM Helpline",
+        "handoff_url": "https://cmhelpline.cg.gov.in/Home/VerifyOTPBeforeOnlineComplaint",
+        "alternate_handoff_name": "NIDAAN 1100 (urban civic issues)",
+        "alternate_handoff_url": "https://crm.nidaan.cg.gov.in/",
+        "helpline": "1076"
+      }
+    ]
+  },
+  "AP": {
+    "authorities": [
+      {
+        "id": "ap-statewide-unverified",
+        "name": "Andhra Pradesh authority (select in PGRS)",
+        "aliases": ["andhra pradesh", "ఆంధ్ర ప్రదేశ్"],
+        "handoff_name": "Andhra Pradesh PGRS",
+        "handoff_url": "https://pgrs.ap.gov.in/",
+        "alternate_handoff_name": "AP CDMA / Puramithra (urban areas)",
+        "alternate_handoff_url": "https://cdma.ap.gov.in/auth/login/",
+        "helpline": "1902"
+      }
+    ]
+  },
+  "RJ": {
+    "authorities": [
+      {
+        "id": "rj-statewide-unverified",
+        "name": "Rajasthan authority (select in Sampark)",
+        "aliases": ["rajasthan", "राजस्थान"],
+        "handoff_name": "Rajasthan Sampark 2.0",
+        "handoff_url": "https://sampark.rajasthan.gov.in/grievanceForm",
+        "handoff_package": "com.rajsampark.versiontwo",
+        "helpline": "181"
+      }
+    ]
+  },
+  "GA": {
+    "authorities": [
+      {
+        "id": "ga-statewide-unverified",
+        "name": "Goa authority (select in CM Helpline)",
+        "aliases": ["goa", "गोवा", "गोंय"],
+        "handoff_name": "CM Helpline Goa",
+        "handoff_url": "https://cmhelpline.dpg.goa.gov.in/",
+        "handoff_package": "in.gov.dpg.cmhelpline",
+        "helpline": "1905"
+      }
+    ]
+  },
+  "MP": {
+    "authorities": [
+      {
+        "id": "mp-statewide-unverified",
+        "name": "Madhya Pradesh authority (select in CM Helpline)",
+        "aliases": ["madhya pradesh", "मध्य प्रदेश"],
+        "handoff_name": "Madhya Pradesh CM Helpline",
+        "handoff_url": "https://www.cmhelpline.mp.gov.in/Public/VerifyOTPBeforeOnlineComplaint.aspx",
+        "handoff_package": "com.magnum.helpline",
+        "helpline": "181"
+      }
+    ]
+  },
+  "BR": {
+    "authorities": [
+      {
+        "id": "br-statewide-unverified",
+        "name": "Bihar authority (select in Lok Shikayat)",
+        "aliases": ["bihar", "बिहार"],
+        "handoff_name": "Bihar Lok Shikayat",
+        "handoff_url": "https://lokshikayat.bihar.gov.in/Default.aspx",
+        "handoff_package": "com.bpsms.jansamadhan",
+        "helpline": "18003456284"
+      }
+    ]
+  },
+  "OD": {
+    "authorities": [
+      {
+        "id": "od-statewide-unverified",
+        "name": "Odisha authority (select in Jana Sunani)",
+        "aliases": ["odisha", "orissa", "ଓଡ଼ିଶା", "ଓଡିଶା"],
+        "handoff_name": "Odisha Jana Sunani",
+        "handoff_url": "https://janasunani.odisha.gov.in/grievance-details",
+        "handoff_package": "com.sociomatic.janasunani",
+        "whatsapp_url": "https://wa.me/916370951930",
+        "helpline": "155335"
+      }
+    ]
+  },
+  "IN": {
+    "authorities": [
+      {
+        "id": "in-gj-enagar",
+        "name": "Gujarat urban authority (select in eNagar)",
+        "aliases": ["gujarat", "ગુજરાત"],
+        "handoff_name": "Gujarat eNagar",
+        "handoff_url": "https://enagar.gujarat.gov.in/enagar/login.jsp"
+      },
+      {
+        "id": "in-rj-sampark",
+        "name": "Rajasthan authority (select in Sampark)",
+        "aliases": ["rajasthan", "राजस्थान"],
+        "handoff_name": "Rajasthan Sampark",
+        "handoff_url": "https://sampark.rajasthan.gov.in/"
+      },
+      {
+        "id": "in-up-jansunwai",
+        "name": "Uttar Pradesh authority (select in Jansunwai)",
+        "aliases": ["uttar pradesh", "उत्तर प्रदेश"],
+        "handoff_name": "UP Jansunwai",
+        "handoff_url": "https://www.jansunwai.up.nic.in/"
+      },
+      {
+        "id": "in-mp-cm-helpline",
+        "name": "Madhya Pradesh authority (select in CM Helpline)",
+        "aliases": ["madhya pradesh", "मध्य प्रदेश"],
+        "handoff_name": "MP CM Helpline",
+        "handoff_url": "https://www.cmhelpline.mp.gov.in/"
+      },
+      {
+        "id": "in-tn-cm-helpline",
+        "name": "Tamil Nadu authority (select in CM Helpline)",
+        "aliases": ["tamil nadu", "tamilnadu", "தமிழ்நாடு"],
+        "handoff_name": "Tamil Nadu CM Helpline",
+        "handoff_url": "https://cmhelpline.tnega.org/portal/en/home"
+      },
+      {
+        "id": "in-kl-ksmart",
+        "name": "Kerala urban authority (select in K-SMART)",
+        "aliases": ["kerala", "കേരളം"],
+        "handoff_name": "K-SMART",
+        "handoff_url": "https://ksmart.lsgkerala.gov.in/ui/web-portal",
+        "alternate_handoff_name": "Kerala CMO Grievance",
+        "alternate_handoff_url": "https://cmo.kerala.gov.in/"
+      },
+      {
+        "id": "in-br-lok-shikayat",
+        "name": "Bihar authority (select in Lok Shikayat)",
+        "aliases": ["bihar", "बिहार"],
+        "handoff_name": "Bihar Lok Shikayat",
+        "handoff_url": "https://lokshikayat.bihar.gov.in/"
+      },
+      {
+        "id": "in-ap-puramithra",
+        "name": "Andhra Pradesh urban authority (select in Puramithra)",
+        "aliases": ["andhra pradesh", "ఆంధ్ర ప్రదేశ్"],
+        "handoff_name": "AP CDMA / Puramithra",
+        "handoff_url": "https://cdma.ap.gov.in/services/grievances/"
+      },
+      {
+        "id": "in-hr-nagar-darshan",
+        "name": "Haryana urban authority (select in Nagar Darshan)",
+        "aliases": ["haryana", "हरियाणा"],
+        "handoff_name": "Haryana Nagar Darshan",
+        "handoff_url": "https://nagardarshan.ulbharyana.gov.in/Default/CitizenEntry"
+      },
+      {
+        "id": "in-jh-municipal-grievance",
+        "name": "Jharkhand urban authority (select in municipal grievance)",
+        "aliases": ["jharkhand", "झारखंड", "झारखण्ड"],
+        "handoff_name": "Jharkhand Municipal Grievance",
+        "handoff_url": "https://municipalservices.jharkhand.gov.in/public/grievance_new/login"
+      },
+      {
+        "id": "in-jk-samadhan",
+        "name": "Jammu and Kashmir authority (select in Samadhan)",
+        "aliases": ["jammu and kashmir", "jammu & kashmir", "جموں و کشمیر", "जम्मू और कश्मीर"],
+        "handoff_name": "JK Samadhan",
+        "handoff_url": "https://samadhan.jk.gov.in/"
+      },
+      {
+        "id": "in-cg-nidaan",
+        "name": "Chhattisgarh urban authority (select in NIDAAN)",
+        "aliases": ["chhattisgarh", "छत्तीसगढ़", "छत्तीसगढ़"],
+        "handoff_name": "CG NIDAAN",
+        "handoff_url": "https://crm.nidaan.cg.gov.in/"
+      }
+    ]
+  },
+  "DL": {
+    "authorities": [
+      {
+        "id": "dl-pwd-sewa",
+        "name": "Delhi road grievance coordination",
+        "handoff_name": "PWD Sewa",
+        "handoff_url": "https://www.pwddelhi.gov.in/sewa/complaint",
+        "handoff_package": "com.sis.pwdsewaapp",
+        "alternate_handoff_name": "Delhi PGMS",
+        "alternate_handoff_url": "https://pgms.delhi.gov.in/",
+        "whatsapp_url": "https://wa.me/918130188222",
+        "helpline": "1908"
+      }
+    ]
+  },
+  "TN": {
+    "authorities": [
+      {
+        "id": "tn-gcc",
+        "name": "Greater Chennai Corporation complaint intake",
+        "aliases": ["chennai", "madras", "greater chennai corporation", "சென்னை", "சென்னை மாநகராட்சி"],
+        "handoff_name": "GCC Public Grievance",
+        "handoff_url": "https://erp.chennaicorporation.gov.in/pgr/citizen/BeforeReg.do",
+        "handoff_package": "com.ceedeev.grivenancev2",
+        "alternate_handoff_name": "GCC grievance portal",
+        "alternate_handoff_url": "https://erp.chennaicorporation.gov.in/pgr/",
+        "whatsapp_url": "https://wa.me/919445061913",
+        "helpline": "1913"
+      },
+      {
+        "id": "tn-statewide-unverified",
+        "name": "Tamil Nadu authority (select in grievance portal)",
+        "aliases": ["tamil nadu", "tamilnadu", "தமிழ்நாடு"],
+        "handoff_name": "Mudhalvarin Mugavari",
+        "handoff_url": "https://cmhelpline.tnega.org/portal/en/home",
+        "handoff_package": "org.tnega.cmhelpline.citizen",
+        "helpline": "1100"
+      }
+    ]
+  },
+  "TG": {
+    "authorities": [
+      {
+        "id": "tg-cure-shared",
+        "name": "Hyderabad CURE shared civic grievance intake",
+        "aliases": ["hyderabad", "greater hyderabad", "హైదరాబాద్", "హైదరాబాదు"],
+        "handoff_name": "My Cure",
+        "handoff_url": "https://igs.ghmc.gov.in/operator/send_otp_mobile",
+        "handoff_package": "cgg.gov.ghmc",
+        "alternate_handoff_name": "My Cure complaint status",
+        "alternate_handoff_url": "https://igs.ghmc.gov.in/Operator/search"
+      },
+      {
+        "id": "tg-statewide-unverified",
+        "name": "Telangana authority (select in Prajavani)",
+        "aliases": ["telangana", "telengana", "తెలంగాణ"],
+        "handoff_name": "Telangana Prajavani",
+        "handoff_url": "https://prajavani.cgg.gov.in/",
+        "alternate_handoff_name": "Citizen Buddy (municipal areas outside Hyderabad)",
+        "alternate_handoff_url": "https://play.google.com/store/apps/details?id=vmax.com.citizenbuddy"
+      }
+    ]
+  },
+  "GJ": {
+    "authorities": [
+      {
+        "id": "gj-amc",
+        "name": "Amdavad Municipal Corporation complaint intake",
+        "aliases": ["ahmedabad", "amdavad", "અમદાવાદ", "अहमदाबाद"],
+        "handoff_name": "AMC CCRS",
+        "handoff_url": "https://www.amccrs.com/AMCPortal/View/ComplaintRegistration.aspx?m=Online",
+        "handoff_package": "com.amplvb.ccrs",
+        "alternate_handoff_name": "AMC CCRS instructions",
+        "alternate_handoff_url": "https://www.amccrs.com/AMCPortal/View/ComplainRegistrationMobile.aspx",
+        "whatsapp_url": "https://wa.me/917567855303",
+        "helpline": "155303"
+      },
+      {
+        "id": "gj-statewide-unverified",
+        "name": "Gujarat authority (select in SWAGAT)",
+        "aliases": ["gujarat", "ગુજરાત"],
+        "handoff_name": "SWAGAT",
+        "handoff_url": "https://swagat.gujarat.gov.in/"
+      }
+    ]
+  },
+  "AR": {
+    "authorities": [{
+      "id": "ar-statewide-unverified",
+      "name": "Arunachal Pradesh authority (select in CM e-Jan Sunwai)",
+      "aliases": ["arunachal pradesh"],
+      "handoff_name": "CM e-Jan Sunwai",
+      "handoff_url": "https://cmejansunwai.arunachal.gov.in/",
+      "helpline": "1076"
+    }]
+  },
+  "AS": {
+    "authorities": [{
+      "id": "as-statewide-unverified",
+      "name": "Assam authority (select in CPGRAMS)",
+      "aliases": ["assam", "অসম"],
+      "handoff_name": "CPGRAMS",
+      "handoff_url": "https://pgportal.gov.in/"
+    }]
+  },
+  "HR": {
+    "authorities": [{
+      "id": "hr-statewide-unverified",
+      "name": "Haryana authority (select in CPGRAMS)",
+      "aliases": ["haryana", "हरियाणा"],
+      "handoff_name": "CPGRAMS",
+      "handoff_url": "https://pgportal.gov.in/"
+    }]
+  },
+  "HP": {
+    "authorities": [{
+      "id": "hp-statewide-unverified",
+      "name": "Himachal Pradesh authority (select in eSamadhan)",
+      "aliases": ["himachal pradesh", "हिमाचल प्रदेश"],
+      "handoff_name": "eSamadhan",
+      "handoff_url": "https://esamadhan.nic.in/welcome.aspx",
+      "helpline": "01772880490"
+    }]
+  },
+  "JH": {
+    "authorities": [{
+      "id": "jh-statewide-unverified",
+      "name": "Jharkhand authority (select in CPGRAMS)",
+      "aliases": ["jharkhand", "झारखंड", "झारखण्ड"],
+      "handoff_name": "CPGRAMS",
+      "handoff_url": "https://pgportal.gov.in/",
+      "alternate_handoff_name": "Jharkhand municipal PGMS",
+      "alternate_handoff_url": "https://pgms.dmajharkhand.in/index.aspx"
+    }]
+  },
+  "MN": {
+    "authorities": [{
+      "id": "mn-statewide-unverified",
+      "name": "Manipur authority (select in GovConnect Manipur)",
+      "aliases": ["manipur", "মণিপুর"],
+      "handoff_name": "GovConnect Manipur",
+      "handoff_url": "https://govconnectmanipur.mn.gov.in/"
+    }]
+  },
+  "ML": {
+    "authorities": [{
+      "id": "ml-statewide-unverified",
+      "name": "Meghalaya authority (select in CM Connect)",
+      "aliases": ["meghalaya"],
+      "handoff_name": "CM Connect",
+      "handoff_url": "https://cmconnect.meghalaya.gov.in/",
+      "helpline": "1971"
+    }]
+  },
+  "MZ": {
+    "authorities": [{
+      "id": "mz-statewide-unverified",
+      "name": "Mizoram authority (select in Mipui Aw)",
+      "aliases": ["mizoram"],
+      "handoff_name": "Mipui Aw",
+      "handoff_url": "https://mipuiaw.mizoram.gov.in/"
+    }]
+  },
+  "NL": {
+    "authorities": [{
+      "id": "nl-statewide-unverified",
+      "name": "Nagaland authority (select in CPGRAMS)",
+      "aliases": ["nagaland"],
+      "handoff_name": "CPGRAMS",
+      "handoff_url": "https://pgportal.gov.in/"
+    }]
+  },
+  "SK": {
+    "authorities": [{
+      "id": "sk-statewide-unverified",
+      "name": "Sikkim authority (select in CPGRAMS)",
+      "aliases": ["sikkim"],
+      "handoff_name": "CPGRAMS",
+      "handoff_url": "https://pgportal.gov.in/",
+      "alternate_handoff_name": "Sikkim State Portal",
+      "alternate_handoff_url": "https://www.sikkim.gov.in/"
+    }]
+  },
+  "TR": {
+    "authorities": [{
+      "id": "tr-statewide-unverified",
+      "name": "Tripura authority (select in CM Helpline)",
+      "aliases": ["tripura"],
+      "handoff_name": "CM Helpline",
+      "handoff_url": "https://cmhelpline.tripura.gov.in/",
+      "alternate_handoff_name": "Tripura grievance portal",
+      "alternate_handoff_url": "https://grievance.tripura.gov.in/",
+      "whatsapp_url": "https://wa.me/916033374544",
+      "helpline": "1905"
+    }]
+  },
+  "UK": {
+    "authorities": [{
+      "id": "uk-statewide-unverified",
+      "name": "Uttarakhand authority (select in CM Helpline)",
+      "aliases": ["uttarakhand", "उत्तराखण्ड", "उत्तराखंड"],
+      "handoff_name": "CM Helpline",
+      "handoff_url": "https://cmhelpline.uk.gov.in/",
+      "helpline": "1905"
+    }]
+  },
+  "AN": {
+    "authorities": [{
+      "id": "an-statewide-unverified",
+      "name": "Andaman and Nicobar Islands authority (select in CPGRAMS)",
+      "aliases": ["andaman and nicobar islands", "andaman & nicobar islands"],
+      "handoff_name": "CPGRAMS",
+      "handoff_url": "https://pgportal.gov.in/"
+    }]
+  },
+  "CH": {
+    "authorities": [{
+      "id": "ch-statewide-unverified",
+      "name": "Chandigarh authority (select in CPGRAMS)",
+      "aliases": ["chandigarh", "ਚੰਡੀਗੜ੍ਹ", "चंडीगढ़"],
+      "handoff_name": "CPGRAMS",
+      "handoff_url": "https://pgportal.gov.in/"
+    }]
+  },
+  "DH": {
+    "authorities": [{
+      "id": "dh-statewide-unverified",
+      "name": "Dadra and Nagar Haveli and Daman and Diu authority (select in CPGRAMS)",
+      "aliases": ["dadra and nagar haveli and daman and diu", "dnhdd"],
+      "handoff_name": "CPGRAMS",
+      "handoff_url": "https://pgportal.gov.in/"
+    }]
+  },
+  "JK": {
+    "authorities": [{
+      "id": "jk-statewide-unverified",
+      "name": "Jammu and Kashmir authority (select in JK Samadhan)",
+      "aliases": ["jammu and kashmir", "jammu & kashmir", "जम्मू और कश्मीर"],
+      "handoff_name": "JK Samadhan",
+      "handoff_url": "https://samadhan.jk.gov.in/"
+    }]
+  },
+  "LA": {
+    "authorities": [{
+      "id": "la-statewide-unverified",
+      "name": "Ladakh authority (select in Ladakh grievance portal)",
+      "aliases": ["ladakh"],
+      "handoff_name": "Ladakh grievance portal",
+      "handoff_url": "https://grievance.ladakh.gov.in/"
+    }]
+  },
+  "LD": {
+    "authorities": [{
+      "id": "ld-statewide-unverified",
+      "name": "Lakshadweep authority (select in CPGRAMS)",
+      "aliases": ["lakshadweep"],
+      "handoff_name": "CPGRAMS",
+      "handoff_url": "https://pgportal.gov.in/"
+    }]
+  },
+  "PY": {
+    "authorities": [{
+      "id": "py-statewide-unverified",
+      "name": "Puducherry authority (select in CPGRAMS)",
+      "aliases": ["puducherry", "pondicherry", "புதுச்சேரி"],
+      "handoff_name": "CPGRAMS",
+      "handoff_url": "https://pgportal.gov.in/"
+    }]
+  }
+}

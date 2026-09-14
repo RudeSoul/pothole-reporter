@@ -88,7 +88,7 @@ INIT = r"""
     if (target.includes("api.openai.com/v1/responses")) {
       const body = JSON.parse(init.body || "{}");
       const name = body.text && body.text.format && body.text.format.name;
-      if (name !== "road_damage_assessment") {
+      if (name !== "pothole_binary_assessment") {
         throw new Error(`Unexpected model call: ${name || "unnamed"}`);
       }
       window.__detectorCalls++;
@@ -122,11 +122,6 @@ INIT = r"""
       }
       return make();
     }
-    if (target.endsWith("karnataka-bodies.json")) {
-      return new Response('{"bodies":{"test":{"name":"Test body"}}}', {
-        status: 200, headers: { "content-type": "application/json" },
-      });
-    }
     if (target.includes("nominatim.openstreetmap.org")) {
       return new Response(JSON.stringify({
         display_name: "Test Road, Karnataka, India",
@@ -156,7 +151,14 @@ async function jpeg() {
 }
 async function requestBody(path, opts = {}) {
   const fd = new FormData();
-  fd.append("photo", await jpeg(), "event.jpg");
+  if (path === "/api/frame") {
+    fd.append("photo", await jpeg(), "event-before.jpg");
+    fd.append("photo", await jpeg(), "event-primary.jpg");
+    fd.append("photo", await jpeg(), "event-after.jpg");
+    fd.append("primary_index", "1");
+  } else {
+    fd.append("photo", await jpeg(), "event.jpg");
+  }
   if (opts.lat != null) fd.append("lat", String(opts.lat));
   if (opts.lng != null) fd.append("lng", String(opts.lng));
   if (path === "/api/frame") {
@@ -377,9 +379,27 @@ with sync_playwright() as p:
 
     # Recreate the document, not merely the API call: dedupe must come from IndexedDB,
     # not an in-memory set that disappears on navigation or app relaunch.
-    page.reload()
-    page.wait_for_load_state("networkidle")
-    page.wait_for_function("typeof StandaloneAPI !== 'undefined'", timeout=30000)
+    reload_navigations = []
+    page.on("framenavigated", lambda frame: reload_navigations.append(frame.url)
+            if frame == page.main_frame else None)
+    # Wait for the app's startup network/restore work, not merely the document load event.
+    # Beginning a long evaluate while that lifecycle is still replacing its execution
+    # context makes the persistence regression test itself race the reload it requested.
+    page.reload(wait_until="networkidle")
+    page.wait_for_function("""async () => {
+      if (document.readyState !== "complete" || typeof StandaloneAPI === "undefined" ||
+          (typeof nativeInitialRestorePending !== "undefined" && nativeInitialRestorePending)) {
+        return false;
+      }
+      try {
+        const reports = await StandaloneAPI.handle("/api/reports", { method: "GET" });
+        return Array.isArray(reports) && reports.length === 2;
+      } catch (_) { return false; }
+    }""", timeout=30000)
+    if page.url != APP or reload_navigations != [APP]:
+        failures.append(
+            f"reload lifecycle was not one stable navigation: {reload_navigations!r}, {page.url!r}"
+        )
     second = page.evaluate("""async () => {
       %s
       window.__detectorCalls = 0;

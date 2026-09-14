@@ -1,7 +1,7 @@
 # Google Play publication checklist
 
-Status reviewed 21 August 2026. This is a release checklist, not a substitute for the
-current Play Console tasks shown for the publisher's account.
+Status reviewed 25 August 2026 for release 1.35.0 / version code 54. This is a release
+checklist, not a substitute for the current Play Console tasks shown for the publisher's account.
 
 ## Go/no-go blockers
 
@@ -15,13 +15,15 @@ current Play Console tasks shown for the publisher's account.
   browser. It must not redirect to a login, return an error, or serve a PDF.
 - [x] **In-app privacy link:** link that exact hosted page from the release build. Creating
   the page alone does not satisfy the in-app-link requirement.
-- [ ] **Support email:** supply a monitored, developer-controlled email address in Play
-  Console. The repository contains none, so this remains a publisher decision.
-- [ ] **Reviewer access:** core detection requires an OpenAI key. Give Play reviewers
+- [ ] **Support email:** enter and monitor `contact@aiengg.dev` in Play Console.
+- [ ] **Reviewer access:** Photo and Drive require an OpenAI key. Give Play reviewers
   reusable English instructions and a dedicated revocable, spend-limited credential that
   unlocks every reviewable feature. Do not expose a personal production key.
 - [ ] **Data Safety and App content:** complete and submit the declarations below; do not
   claim that the app collects no data.
+- [ ] **Government-information declaration:** disclose that the app is independent,
+  identify its official government sources, and complete Play's Government apps
+  declaration without claiming affiliation with any named civic body or complaint service.
 - [ ] **Account gates:** complete any identity, device-verification, package-registration,
   or closed-testing task Play Console shows for this publisher account.
 
@@ -29,7 +31,7 @@ Do not submit to production until every applicable item above is complete.
 
 ## Release artifact and testing
 
-- [ ] Use the fixed package name `com.gauravsen.potholereporter` and a version code not
+- [ ] Use the fixed package name `dev.aiengg.potholereporter` and a version code not
   previously uploaded to Play.
 - [ ] Generate a signed **release AAB**, inspect it in Play's App Bundle Explorer, and save
   the upload key in a backed-up secret store outside the repository.
@@ -51,13 +53,29 @@ Official references: [target API schedule](https://support.google.com/googleplay
 
 - [ ] Paste the reviewed title, short description, full description, and release notes from
   [`google-play-listing.md`](google-play-listing.md).
-- [x] Add the required Play icon, feature graphic, and four 1080×1920 phone screenshots
-  from the actual client UI.
+- [ ] Replace or re-verify the icon, feature graphic, and four phone screenshots against
+  the 1.35.0 release. Include the issue picker, an independent civic handoff, and regional-language support
+  without displaying private coordinates, an API key, a real grievance ID, or civic-body
+  marks. Put other city-specific flows in reviewer instructions instead of implying that
+  one screenshot proves every supported route.
 - [ ] Use screenshots from the release build and avoid implying government affiliation,
-  guaranteed detection, verified responsibility, or benchmarked accuracy.
+  automatic filing, guaranteed detection, verified responsibility, or benchmarked accuracy.
 - [ ] Enter the hosted privacy-policy URL, support website, and required support email.
-- [ ] Choose the app category and target countries intentionally. Current routing is limited
-  to supported Karnataka urban local bodies; the listing must keep that limit visible.
+- [ ] Choose the app category and target countries intentionally. Current routing covers mapped
+  NH/NE carriageways across India plus the areas listed in `google-play-listing.md`; keep the Delhi-NCT versus separate NCR-city distinction, wider
+  exact GCC versus statewide Tamil Nadu routing, Puducherry/Karaikal exclusions, statewide
+  Andhra Pradesh routing and the Yanam exclusion, statewide Telangana routing, exact My Cure
+  precedence and the neutral Prajavani fallback for Cantonment, full-state Karnataka routing
+  with verified local-route precedence, full-state Kerala routing with Mahe excluded,
+  full-state Uttar Pradesh routing with Delhi NCT excluded, full-state Chhattisgarh routing,
+  full-state Rajasthan routing through Sampark 2.0/181, full-state Goa, Madhya Pradesh,
+  Bihar, and Odisha neutral grievance routing,
+  and Ahmedabad outer-expansion limitations visible; explain that
+  non-KMC West Bengal routes require the user to select the responsible district or department.
+- [ ] Keep the non-affiliation statement and the clearly labelled government-information
+  source directory visible in the full description; confirm that directory exposes direct
+  official links. Do not use civic names, seals, logos, colours, or screenshots in a way
+  that suggests affiliation with a civic body or complaint service.
 
 ## Privacy and Data Safety
 
@@ -65,11 +83,22 @@ Official references: [target API schedule](https://support.google.com/googleplay
   release behavior agree exactly.
 - [ ] Treat off-device transmission as collection even when processing is short-lived.
   Audit at least:
-  - selected manual photos and Drive/VOD image frames sent to OpenAI;
-  - precise coordinates sent to Nominatim and Karnataka GIS;
-  - road address and procurement shortlist sent to OpenAI for probable contract matching;
+  - selected pothole photos and Drive/VOD image frames sent to OpenAI;
+  - precise coordinates sent to Nominatim (including structured city/state fields used by
+    the 8 additional city routes), to Karnataka GIS for Karnataka points, and with
+    the GPS-accuracy envelope to official Telangana GIS for exact Hyderabad CURE routing;
+    Maharashtra, West Bengal, Punjab, Karnataka, Kerala, Tamil Nadu (including GCC), Andhra Pradesh, Telangana, Uttar Pradesh, Chhattisgarh, Rajasthan, Goa, Madhya Pradesh, Bihar, Odisha,
+    Delhi NCT, and Ahmedabad boundary checks remain on-device;
+  - for eligible Karnataka routes only, road address and procurement shortlist sent to
+    OpenAI for probable contract matching; contract matching elsewhere is disabled;
   - API credential and standard network metadata received by external services;
-  - map-area tile requests, email-app hand-off, Android sharing, and every included SDK.
+  - the selected regional routing/tender pack or 2° National Highway tile and standard
+    connection metadata disclosed to GitHub Pages when that checksum-pinned data is downloaded;
+  - map-area tile requests, email-app hand-off, Android sharing, and every included SDK;
+  - report text or evidence handed to a selected email, WhatsApp, or share
+    destination, plus app/portal, Play-listing, and dialler launch metadata;
+  - an official grievance/reference ID stored locally when the user marks an eligible
+    official-channel report submitted.
 - [ ] For each applicable Play data type, answer collection/sharing, purpose,
   required-versus-optional, ephemeral processing, retention/deletion, and encryption in
   transit. Determine “shared” only after documenting whether each recipient meets Google's
@@ -78,9 +107,13 @@ Official references: [target API schedule](https://support.google.com/googleplay
 - [ ] Verify that disclosure and affirmative consent appear before camera/location access
   and explain named recipients, off-device processing, unblurred imagery, and local video
   retention in clear language.
-- [x] Verify local deletion claims: the in-app wipe clears reports, photos, drive summaries,
-  app-held footage, key/name/settings, and the app's Documents debug-frame directory. Files
-  copied, shared, attached, or sent elsewhere remain under that destination's control.
+- [x] Shared evidence and exported datasets use a dedicated app-cache folder; the in-app
+  wipe deletes that folder. Copies already handed to another app remain under that
+  destination's control, as the privacy policy explains.
+- [x] Verify the remaining local deletion claims: the in-app wipe clears reports, photos,
+  drive summaries, app-held footage, downloaded pack/highway-tile cache, key/name/settings, and the
+  app's Documents debug-frame directory. Files copied, shared, attached, or sent elsewhere
+  remain under that destination's control.
 - [ ] Re-audit all answers whenever an SDK, model provider, endpoint, permission, storage
   rule, or retention behavior changes.
 
@@ -97,15 +130,24 @@ and Google's [July 2026 AI/location clarification](https://support.google.com/go
 - [ ] Select only target age groups the product is genuinely designed for. Do not include
   children unless the app, data practices, SDKs, and listing are ready for Families policy.
 - [ ] In **App access**, explain first-run disclosure, permissions, entering the supplied
-  review API key, manual capture, Drive Mode, History, and opening an email draft. Access
-  details must remain valid, reusable, location-independent, and available throughout review.
-- [ ] If a Karnataka-only routing path is hard for an overseas reviewer to exercise, include
-  lawful, repeatable review steps and test material that expose the full flow without
-  falsifying device location or policy declarations.
+  review API key, manual capture, Drive Mode, History, Karnataka email, and every regional
+  handoff. Access details must remain valid, reusable, and available throughout review.
+- [ ] If any regional route is hard for an overseas reviewer to exercise, include
+  lawful, repeatable review steps and test material that expose both flows without falsifying
+  device location or policy declarations.
+- [ ] Complete the Government apps declaration as an unaffiliated app that communicates
+  government information. Keep easy-to-see official source URLs and the explicit statement
+  that the app represents no government body, does not establish road ownership, and does
+  not submit a grievance automatically. Identify every official source and complaint channel
+  shown in the listing or source page without implying affiliation.
+- [ ] Do not add civic-body marks, copied government graphics, or framing that implies
+  official status. Keep every external service clearly labelled as a user-controlled handoff.
 
 Official references: [content ratings](https://support.google.com/googleplay/android-developer/answer/9898843?hl=en),
 [prepare app for review](https://support.google.com/googleplay/android-developer/answer/9859455?hl=en),
-and [review sign-in/access details](https://support.google.com/googleplay/android-developer/answer/15748846?hl=en).
+[review sign-in/access details](https://support.google.com/googleplay/android-developer/answer/15748846?hl=en),
+[Government apps](https://support.google.com/googleplay/android-developer/answer/9514050?hl=en),
+and [Impersonation](https://support.google.com/googleplay/android-developer/answer/9888374?hl=en).
 
 ## Publisher account and rollout
 

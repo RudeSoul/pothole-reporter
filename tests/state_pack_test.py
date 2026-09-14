@@ -1,0 +1,1366 @@
+# -*- coding: utf-8 -*-
+"""State packs are pinned, downloaded once, verified, cached, and evicted safely."""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import math
+import pathlib
+import sys
+
+from playwright.sync_api import sync_playwright
+
+TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1] / "tools"
+sys.path.insert(0, str(TOOLS_ROOT))
+
+from state_pack_tools import (  # noqa: E402
+    PackError,
+    SPECS,
+    _validate_municipal_city_payload,
+)
+from state_pack_utils import (
+    MANIFEST_PATH,
+    ROOT,
+    load_manifest,
+    pack_path,
+    read_pack,
+    resource_relative_path,
+    route_pattern,
+)
+
+
+APP = "http://localhost:8765/"
+PRODUCTION_SITE_ROOT = "https://coding-parrot.github.io/pothole-reporter/"
+EXPECTED_RESOURCES = {
+    "in-ap-routing": (
+        "AP", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-br-routing": (
+        "BR", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-dl-routing": ("DL", "routing", "pothole-routing-pack", "delhi-nct-v1"),
+    "in-ga-routing": (
+        "GA", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-gj-routing": ("GJ", "routing", "pothole-routing-pack", "municipal-city-v1"),
+    "in-ka-routing": ("KA", "routing", "pothole-routing-pack", "karnataka-kgis-v1"),
+    "in-ka-state-routing": (
+        "KA", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-ka-tenders": (
+        "KA", "tenders", "pothole-tender-pack", "karnataka-carriageway-indexed-v2"
+    ),
+    "in-mh-routing": (
+        "MH", "routing", "pothole-routing-pack", "maharashtra-statewide-v1"
+    ),
+    "in-mp-routing": (
+        "MP", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-od-routing": (
+        "OD", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-kl-routing": (
+        "KL", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-up-routing": (
+        "UP", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-cg-routing": (
+        "CG", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-rj-routing": (
+        "RJ", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-pb-routing": (
+        "PB", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-tg-routing": ("TG", "routing", "pothole-routing-pack", "municipal-city-v1"),
+    "in-tg-state-routing": (
+        "TG", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-tn-routing": ("TN", "routing", "pothole-routing-pack", "municipal-city-v1"),
+    "in-tn-state-routing": (
+        "TN", "routing", "pothole-routing-pack", "statewide-general-v1"
+    ),
+    "in-top50-routing": (
+        "IN", "routing", "pothole-routing-pack", "major-city-structured-v1"
+    ),
+    "in-wb-routing": (
+        "WB", "routing", "pothole-routing-pack", "west-bengal-statewide-v1"
+    ),
+}
+REMAINING_STATE_RESOURCES = {
+    "in-ar-routing": "AR",
+    "in-as-routing": "AS",
+    "in-gj-state-routing": "GJ",
+    "in-hr-routing": "HR",
+    "in-hp-routing": "HP",
+    "in-jh-routing": "JH",
+    "in-mn-routing": "MN",
+    "in-ml-routing": "ML",
+    "in-mz-routing": "MZ",
+    "in-nl-routing": "NL",
+    "in-sk-routing": "SK",
+    "in-tr-routing": "TR",
+    "in-uk-routing": "UK",
+    "in-an-routing": "AN",
+    "in-ch-routing": "CH",
+    "in-dh-routing": "DH",
+    "in-jk-routing": "JK",
+    "in-la-routing": "LA",
+    "in-ld-routing": "LD",
+    "in-py-routing": "PY",
+}
+EXPECTED_RESOURCES.update({
+    pack_id: (code, "routing", "pothole-routing-pack", "statewide-general-v1")
+    for pack_id, code in REMAINING_STATE_RESOURCES.items()
+})
+MUNICIPAL_CITY_RESOURCES = {
+    "in-tn-routing": {
+        "region_id": "chennai-gcc",
+        "authority_id": "tn-gcc",
+        "routing_mode": "boundary",
+        "routing_source": "osm_gcc_boundary",
+        "source_object_id": "osm:relation:1766358",
+    },
+    "in-tg-routing": {
+        "region_id": "hyderabad-cure-2053",
+        "authority_id": "tg-cure-shared",
+        "routing_mode": "official_point_query",
+        "routing_source": "tgrac_cure_2053_point_query",
+        "source_object_id": (
+            "tgrac:TCUR_Folder:TCUR_Telangana_Core_Urban_Region_V2:MapServer:22"
+        ),
+    },
+    "in-gj-routing": {
+        "region_id": "ahmedabad-amc",
+        "authority_id": "gj-amc",
+        "routing_mode": "boundary",
+        "routing_source": "opencity_amc_wards_union",
+        "source_object_id": "opencity:wards-ahmedabad:2026-05-26",
+    },
+}
+LEGACY_BUNDLED_FILES = {
+    "delhi-coverage.json",
+    "kolkata-coverage.json",
+    "maharashtra-coverage.json",
+    "karnataka-bodies.json",
+    "tenders.json",
+}
+
+HOOKS_READY = """
+() => {
+  const P = window.StandaloneAPI && StandaloneAPI.__pure;
+  return P && ["loadStatePack", "pruneStatePacks", "getStatePackManifest",
+    "resolvePackUrl", "resetStatePackMemory"].every((name) => typeof P[name] === "function");
+}
+"""
+
+IDB_HELPERS = r"""
+const openPackDb = () => new Promise((resolve, reject) => {
+  const request = indexedDB.open("potholes", 6);
+  request.onerror = () => reject(request.error);
+  request.onsuccess = () => resolve(request.result);
+});
+const allPackRecords = async () => {
+  const db = await openPackDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction("state_packs", "readonly");
+      const request = tx.objectStore("state_packs").getAll();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+  } finally { db.close(); }
+};
+const mutatePackRecords = async (mutator) => {
+  const db = await openPackDb();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("state_packs", "readwrite");
+      const store = tx.objectStore("state_packs");
+      const request = store.getAll();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        try { mutator(store, request.result); }
+        catch (error) { tx.abort(); reject(error); }
+      };
+      tx.oncomplete = resolve;
+      tx.onerror = () => {};
+      tx.onabort = () => reject(tx.error || new Error("state-pack transaction aborted"));
+    });
+  } finally { db.close(); }
+};
+"""
+
+
+def check_municipal_city_pack(pack_id: str, envelope: dict, failures: list[str]) -> None:
+    expected = MUNICIPAL_CITY_RESOURCES[pack_id]
+    payload = envelope.get("payload")
+    try:
+        _validate_municipal_city_payload(
+            SPECS[pack_id],
+            payload,
+            generated_at=envelope.get("generated_at"),
+            authorities=envelope.get("authorities"),
+        )
+    except PackError as error:
+        failures.append(f"{pack_id} fails the release municipal schema: {error}")
+    regions = payload.get("regions") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        failures.append(f"{pack_id} municipal payload schema/version is invalid")
+        return
+    if payload.get("retrieved_at") != envelope.get("generated_at"):
+        failures.append(f"{pack_id} municipal payload date differs from its pack date")
+    if not isinstance(regions, list) or len(regions) != 1 or not isinstance(regions[0], dict):
+        failures.append(f"{pack_id} must contain exactly one municipal region")
+        return
+
+    region = regions[0]
+    required = {
+        "id", "authority_id", "name", "scope", "routing_mode", "routing_source",
+        "match_value", "state_aliases", "place_aliases", "envelope", "source_name",
+        "source_home_url", "source_url", "source_license", "attribution",
+        "official_scope_reference", "routing_note", "limitations", "exclusions", "source_object_id",
+    }
+    missing = sorted(required - set(region))
+    if missing:
+        failures.append(f"{pack_id} municipal region is missing fields: {missing}")
+    for field in (
+        "region_id", "authority_id", "routing_mode", "routing_source", "source_object_id"
+    ):
+        actual_field = "id" if field == "region_id" else field
+        if region.get(actual_field) != expected[field]:
+            failures.append(
+                f"{pack_id} {actual_field} is {region.get(actual_field)!r}, "
+                f"want {expected[field]!r}"
+            )
+
+    authorities = envelope.get("authorities")
+    authority_ids = {
+        item.get("id") for item in authorities or []
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    if authority_ids != {expected["authority_id"]}:
+        failures.append(f"{pack_id} municipal authority inventory is {sorted(authority_ids)!r}")
+    for field in ("source_home_url", "source_url", "official_scope_reference"):
+        if not isinstance(region.get(field), str) or not region[field].startswith("https://"):
+            failures.append(f"{pack_id} {field} is not an HTTPS source")
+    if pack_id != "in-tg-routing" and "ODbL" not in str(region.get("source_license")):
+        failures.append(f"{pack_id} does not identify its ODbL source licence")
+    if pack_id == "in-tg-routing" and "no boundary geometry" not in str(
+        region.get("source_license")
+    ):
+        failures.append("in-tg-routing does not state its no-redistribution policy")
+    expected_attribution = {
+        "in-gj-routing": "OpenCity",
+        "in-tg-routing": "TGRAC",
+    }.get(pack_id, "OpenStreetMap")
+    if expected_attribution not in str(region.get("attribution")):
+        failures.append(f"{pack_id} does not preserve {expected_attribution} attribution")
+    if not all(
+        isinstance(region.get(field), list) and region[field]
+        for field in ("state_aliases", "place_aliases", "limitations")
+    ):
+        failures.append(f"{pack_id} aliases or limitations are missing")
+    exclusions = region.get("exclusions")
+    if not isinstance(exclusions, list):
+        failures.append(f"{pack_id} has no exclusion inventory")
+    elif pack_id == "in-tg-routing":
+        if (
+            len(exclusions) != 1
+            or exclusions[0].get("id") != "secunderabad-cantonment"
+            or exclusions[0].get("mode") != "official_point_query"
+            or exclusions[0].get("query_spatial_rel") != "esriSpatialRelIntersects"
+        ):
+            failures.append("in-tg-routing does not pin the exact Cantonment query")
+    elif exclusions:
+        failures.append(f"{pack_id} has an unexpected exclusion")
+
+    relevance = region.get("envelope")
+    envelope_values = [
+        relevance.get(field) if isinstance(relevance, dict) else None
+        for field in ("min_lng", "min_lat", "max_lng", "max_lat")
+    ]
+    if not all(isinstance(value, (int, float)) and math.isfinite(value)
+               for value in envelope_values) or not (
+        envelope_values[0] < envelope_values[2]
+        and envelope_values[1] < envelope_values[3]
+    ):
+        failures.append(f"{pack_id} has an invalid municipal relevance envelope")
+
+    geometry_fields = {"coordinate_precision", "area_km2", "bbox", "geometry_sha256", "geometry"}
+    point_query_fields = {
+        "query_url", "query_where", "query_geometry_type", "query_in_sr",
+        "query_spatial_rel", "official_area_km2", "legal_references",
+    }
+    if expected["routing_mode"] == "boundary":
+        if not geometry_fields.issubset(region):
+            failures.append(f"{pack_id} boundary region has incomplete geometry metadata")
+            return
+        geometry = region.get("geometry")
+        if not isinstance(geometry, dict) or geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+            failures.append(f"{pack_id} boundary geometry is not a polygon")
+            return
+        geometry_bytes = json.dumps(
+            geometry, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        calculated = hashlib.sha256(geometry_bytes).hexdigest()
+        if region.get("geometry_sha256") != calculated:
+            failures.append(
+                f"{pack_id} geometry digest is {region.get('geometry_sha256')!r}, "
+                f"want {calculated!r}"
+            )
+        if region.get("coordinate_precision") != 7:
+            failures.append(f"{pack_id} geometry coordinate precision is not pinned to 7")
+        if not isinstance(region.get("area_km2"), (int, float)) or region["area_km2"] <= 0:
+            failures.append(f"{pack_id} geometry has no positive reviewed area")
+    elif expected["routing_mode"] == "official_point_query":
+        if not point_query_fields.issubset(region):
+            failures.append(f"{pack_id} official point route has incomplete query metadata")
+        if region.get("query_spatial_rel") != "esriSpatialRelWithin":
+            failures.append(f"{pack_id} CURE query does not require full envelope containment")
+        if region.get("query_in_sr") != 4326:
+            failures.append(f"{pack_id} CURE query is not pinned to EPSG:4326")
+        references = region.get("legal_references")
+        titles = [item.get("title", "") for item in references or [] if isinstance(item, dict)]
+        if not any("G.O.Ms.No.292" in title for title in titles):
+            failures.append(f"{pack_id} does not pin G.O.Ms.No.292")
+        if not any("G.O.Ms.No.55" in title for title in titles):
+            failures.append(f"{pack_id} does not pin G.O.Ms.No.55")
+        if geometry_fields.intersection(region):
+            failures.append(f"{pack_id} redistributes geometry for a live official query")
+    elif geometry_fields.intersection(region) or point_query_fields.intersection(region):
+        failures.append(f"{pack_id} structured route implies unsupported spatial data")
+
+
+def check_catalog(failures: list[str]) -> dict:
+    static_manifest = ROOT / "static" / "pack-manifest-v1.35.json"
+    pages_manifest = ROOT / "docs" / "pack-manifest-v1.35.json"
+    if not MANIFEST_PATH.is_file() or not static_manifest.is_file() or not pages_manifest.is_file():
+        failures.append("pack-manifest-v1.35.json is missing from static, Android, or GitHub Pages assets")
+        return {}
+    if MANIFEST_PATH.read_bytes() != static_manifest.read_bytes():
+        failures.append("static and Android pack manifests differ")
+    if pages_manifest.read_bytes() != static_manifest.read_bytes():
+        failures.append("static and GitHub Pages pack manifests differ")
+
+    # Older JavaScript hard-validates exact resource sets. Every earlier catalog must
+    # remain byte-for-byte immutable while v1.35 uses its own catalog URL.
+    legacy_paths = [
+        ROOT / "static" / "pack-manifest.json",
+        ROOT / "android-app" / "www" / "pack-manifest.json",
+        ROOT / "docs" / "pack-manifest.json",
+    ]
+    legacy_digest = "4a8ecb8ea906da56d238d759155abc9aebb701d07ec766051c76eea50b6b0f4c"
+    if any(not path.is_file() for path in legacy_paths):
+        failures.append("legacy pack-manifest.json mirror is missing")
+    else:
+        legacy_bytes = legacy_paths[0].read_bytes()
+        if any(path.read_bytes() != legacy_bytes for path in legacy_paths[1:]):
+            failures.append("legacy pack-manifest.json mirrors differ")
+        if hashlib.sha256(legacy_bytes).hexdigest() != legacy_digest:
+            failures.append("legacy v1.25 pack manifest changed")
+        try:
+            legacy = json.loads(legacy_bytes)
+            legacy_resources = legacy.get("resources", {})
+            if len(legacy_resources) != 10 or "in-tn-state-routing" in legacy_resources:
+                failures.append("legacy v1.25 manifest no longer exposes exactly its ten resources")
+        except (TypeError, ValueError):
+            failures.append("legacy v1.25 pack manifest is not valid JSON")
+
+    previous_paths = [
+        ROOT / "static" / "pack-manifest-v1.26.json",
+        ROOT / "android-app" / "www" / "pack-manifest-v1.26.json",
+        ROOT / "docs" / "pack-manifest-v1.26.json",
+    ]
+    previous_digest = "c178c5f52ab579c21bb26e4d61738bf844bcaacca84c88152629ae938809b96b"
+    if any(not path.is_file() for path in previous_paths):
+        failures.append("v1.26 pack manifest mirror is missing")
+    else:
+        previous_bytes = previous_paths[0].read_bytes()
+        if any(path.read_bytes() != previous_bytes for path in previous_paths[1:]):
+            failures.append("v1.26 pack manifest mirrors differ")
+        if hashlib.sha256(previous_bytes).hexdigest() != previous_digest:
+            failures.append("v1.26 pack manifest changed")
+        try:
+            previous = json.loads(previous_bytes)
+            previous_resources = previous.get("resources", {})
+            if len(previous_resources) != 11 or "in-ap-routing" in previous_resources:
+                failures.append("v1.26 manifest no longer exposes exactly its 11 resources")
+        except (TypeError, ValueError):
+            failures.append("v1.26 pack manifest is not valid JSON")
+
+    v127_paths = [
+        ROOT / "static" / "pack-manifest-v1.27.json",
+        ROOT / "android-app" / "www" / "pack-manifest-v1.27.json",
+        ROOT / "docs" / "pack-manifest-v1.27.json",
+    ]
+    v127_digest = "9b7f0201bf7b65314e476456c6f0456b96fc9fb18254f2ab1fa151ae117d9bf9"
+    if any(not path.is_file() for path in v127_paths):
+        failures.append("v1.27 pack manifest mirror is missing")
+    else:
+        v127_bytes = v127_paths[0].read_bytes()
+        if any(path.read_bytes() != v127_bytes for path in v127_paths[1:]):
+            failures.append("v1.27 pack manifest mirrors differ")
+        if hashlib.sha256(v127_bytes).hexdigest() != v127_digest:
+            failures.append("v1.27 pack manifest changed")
+        try:
+            v127 = json.loads(v127_bytes)
+            v127_resources = v127.get("resources", {})
+            if len(v127_resources) != 12 or "in-tg-state-routing" in v127_resources:
+                failures.append("v1.27 manifest no longer exposes exactly its 12 resources")
+        except (TypeError, ValueError):
+            failures.append("v1.27 pack manifest is not valid JSON")
+
+    v128_paths = [
+        ROOT / "static" / "pack-manifest-v1.28.json",
+        ROOT / "android-app" / "www" / "pack-manifest-v1.28.json",
+        ROOT / "docs" / "pack-manifest-v1.28.json",
+    ]
+    v128_digest = "b35036e966ed30d46c04798f96299928680c442fb5050d4741b0f877543bab5f"
+    if any(not path.is_file() for path in v128_paths):
+        failures.append("v1.28 pack manifest mirror is missing")
+    else:
+        v128_bytes = v128_paths[0].read_bytes()
+        if any(path.read_bytes() != v128_bytes for path in v128_paths[1:]):
+            failures.append("v1.28 pack manifest mirrors differ")
+        if hashlib.sha256(v128_bytes).hexdigest() != v128_digest:
+            failures.append("v1.28 pack manifest changed")
+        try:
+            v128 = json.loads(v128_bytes)
+            if len(v128.get("resources", {})) != 13:
+                failures.append("v1.28 manifest no longer exposes exactly its 13 resources")
+        except (TypeError, ValueError):
+            failures.append("v1.28 pack manifest is not valid JSON")
+
+    v129_paths = [
+        ROOT / "static" / "pack-manifest-v1.29.json",
+        ROOT / "android-app" / "www" / "pack-manifest-v1.29.json",
+        ROOT / "docs" / "pack-manifest-v1.29.json",
+    ]
+    v129_digest = "e030f9c4f5339d9f99436ca407a2be7e8226f2252675e196dc6dac3069401b18"
+    if any(not path.is_file() for path in v129_paths):
+        failures.append("v1.29 pack manifest mirror is missing")
+    else:
+        v129_bytes = v129_paths[0].read_bytes()
+        if any(path.read_bytes() != v129_bytes for path in v129_paths[1:]):
+            failures.append("v1.29 pack manifest mirrors differ")
+        if hashlib.sha256(v129_bytes).hexdigest() != v129_digest:
+            failures.append("v1.29 pack manifest changed")
+        try:
+            v129 = json.loads(v129_bytes)
+            v129_resources = v129.get("resources", {})
+            if len(v129_resources) != 13 or "in-ka-state-routing" in v129_resources \
+                    or "in-kl-routing" in v129_resources:
+                failures.append("v1.29 manifest no longer exposes exactly its 13 resources")
+        except (TypeError, ValueError):
+            failures.append("v1.29 pack manifest is not valid JSON")
+
+    v130_paths = [
+        ROOT / "static" / "pack-manifest-v1.30.json",
+        ROOT / "android-app" / "www" / "pack-manifest-v1.30.json",
+        ROOT / "docs" / "pack-manifest-v1.30.json",
+    ]
+    v130_digest = "c637bdf39242737a6334370e15d39d6f597e31d1510aa9927b9683e6521e19fd"
+    if any(not path.is_file() for path in v130_paths):
+        failures.append("v1.30 pack manifest mirror is missing")
+    else:
+        v130_bytes = v130_paths[0].read_bytes()
+        if any(path.read_bytes() != v130_bytes for path in v130_paths[1:]):
+            failures.append("v1.30 pack manifest mirrors differ")
+        if hashlib.sha256(v130_bytes).hexdigest() != v130_digest:
+            failures.append("v1.30 pack manifest changed")
+        try:
+            v130 = json.loads(v130_bytes)
+            v130_resources = v130.get("resources", {})
+            if len(v130_resources) != 15 or "in-up-routing" in v130_resources \
+                    or "in-cg-routing" in v130_resources:
+                failures.append("v1.30 manifest no longer exposes exactly its 15 resources")
+        except (TypeError, ValueError):
+            failures.append("v1.30 pack manifest is not valid JSON")
+
+    v131_paths = [
+        ROOT / "static" / "pack-manifest-v1.31.json",
+        ROOT / "android-app" / "www" / "pack-manifest-v1.31.json",
+        ROOT / "docs" / "pack-manifest-v1.31.json",
+    ]
+    v131_digest = "15fc5522dc15f31e98e03aa108696025277333a4a3cec0f31ae36305abc7c035"
+    if any(not path.is_file() for path in v131_paths):
+        failures.append("v1.31 pack manifest mirror is missing")
+    else:
+        v131_bytes = v131_paths[0].read_bytes()
+        if any(path.read_bytes() != v131_bytes for path in v131_paths[1:]):
+            failures.append("v1.31 pack manifest mirrors differ")
+        if hashlib.sha256(v131_bytes).hexdigest() != v131_digest:
+            failures.append("v1.31 pack manifest changed")
+        try:
+            v131 = json.loads(v131_bytes)
+            v131_resources = v131.get("resources", {})
+            if len(v131_resources) != 17 or "in-rj-routing" in v131_resources:
+                failures.append("v1.31 manifest no longer exposes exactly its 17 resources")
+        except (TypeError, ValueError):
+            failures.append("v1.31 pack manifest is not valid JSON")
+
+    v133_paths = [
+        ROOT / "static" / "pack-manifest-v1.33.json",
+        ROOT / "android-app" / "www" / "pack-manifest-v1.33.json",
+        ROOT / "docs" / "pack-manifest-v1.33.json",
+    ]
+    v133_digest = "edb55f5112f79df2201bc6f66d59c47ac17f9bb3c8e0d54c04a2fc32c9e026bd"
+    if any(not path.is_file() for path in v133_paths):
+        failures.append("v1.33 pack manifest mirror is missing")
+    else:
+        v133_bytes = v133_paths[0].read_bytes()
+        if any(path.read_bytes() != v133_bytes for path in v133_paths[1:]):
+            failures.append("v1.33 pack manifest mirrors differ")
+        if hashlib.sha256(v133_bytes).hexdigest() != v133_digest:
+            failures.append("v1.33 pack manifest changed")
+        try:
+            v133 = json.loads(v133_bytes)
+            v133_resources = v133.get("resources", {})
+            if len(v133_resources) != 18 or any(
+                pack_id in v133_resources
+                for pack_id in (
+                    "in-ga-routing", "in-mp-routing", "in-br-routing", "in-od-routing"
+                )
+            ):
+                failures.append("v1.33 manifest no longer exposes exactly its 18 resources")
+        except (TypeError, ValueError):
+            failures.append("v1.33 pack manifest is not valid JSON")
+
+    v134_paths = [
+        ROOT / "static" / "pack-manifest-v1.34.json",
+        ROOT / "android-app" / "www" / "pack-manifest-v1.34.json",
+        ROOT / "docs" / "pack-manifest-v1.34.json",
+    ]
+    v134_digest = "019bb8b8f244db75c2031231ddd92b4db3205a46be47f2f76378c366b556b41e"
+    if any(not path.is_file() for path in v134_paths):
+        failures.append("v1.34 pack manifest mirror is missing")
+    else:
+        v134_bytes = v134_paths[0].read_bytes()
+        if any(path.read_bytes() != v134_bytes for path in v134_paths[1:]):
+            failures.append("v1.34 pack manifest mirrors differ")
+        if hashlib.sha256(v134_bytes).hexdigest() != v134_digest:
+            failures.append("v1.34 pack manifest changed")
+        try:
+            v134 = json.loads(v134_bytes)
+            v134_resources = v134.get("resources", {})
+            if len(v134_resources) != 22 or any(
+                pack_id in v134_resources for pack_id in REMAINING_STATE_RESOURCES
+            ):
+                failures.append("v1.34 manifest no longer exposes exactly its 22 resources")
+        except (TypeError, ValueError):
+            failures.append("v1.34 pack manifest is not valid JSON")
+
+    try:
+        manifest = load_manifest()
+    except (OSError, ValueError) as error:
+        failures.append(f"pack manifest is not readable JSON: {error}")
+        return {}
+
+    if manifest.get("format") != "pothole-pack-manifest":
+        failures.append(f"bad pack manifest format: {manifest.get('format')!r}")
+    if manifest.get("schema_version") != 1 or manifest.get("catalog_version") != 1:
+        failures.append("pack manifest schema/catalog version is not 1")
+    cache = manifest.get("cache")
+    if not isinstance(cache, dict):
+        failures.append("pack manifest cache policy is missing")
+    else:
+        if not isinstance(cache.get("max_bytes"), int) or not 1_048_576 <= cache["max_bytes"] <= 67_108_864:
+            failures.append(f"pack cache size is unsafe: {cache.get('max_bytes')!r}")
+        routing_days = cache.get("routing_max_unused_days")
+        tender_days = cache.get("tender_max_unused_days")
+        if not isinstance(routing_days, int) or not 1 <= routing_days <= 90:
+            failures.append(f"routing-pack unused-age policy is unsafe: {routing_days!r}")
+        if not isinstance(tender_days, int) or not 1 <= tender_days <= 90:
+            failures.append(f"tender-pack unused-age policy is unsafe: {tender_days!r}")
+        if isinstance(routing_days, int) and isinstance(tender_days, int) and tender_days > routing_days:
+            failures.append("large tender packs are retained longer than routing packs")
+
+    resources = manifest.get("resources")
+    if not isinstance(resources, dict):
+        failures.append("pack manifest resources is not an object")
+        return manifest
+    if set(resources) != set(EXPECTED_RESOURCES):
+        failures.append(
+            f"pack catalog IDs differ: got {sorted(resources)}, want {sorted(EXPECTED_RESOURCES)}"
+        )
+
+    urls: set[str] = set()
+    for pack_id, (state_code, kind, pack_format, adapter) in EXPECTED_RESOURCES.items():
+        resource = resources.get(pack_id)
+        if not isinstance(resource, dict):
+            continue
+        if resource.get("pack_id") != pack_id:
+            failures.append(f"{pack_id} resource does not repeat its stable pack_id")
+        if resource.get("state_code") != state_code or resource.get("kind") != kind:
+            failures.append(f"{pack_id} state/kind metadata does not match its ID")
+        if resource.get("pack_version") != 1:
+            failures.append(f"{pack_id} pack_version is not 1")
+        if resource.get("schema_version") != 1:
+            failures.append(f"{pack_id} schema_version is not 1")
+        if resource.get("adapter") != adapter:
+            failures.append(
+                f"{pack_id} adapter is {resource.get('adapter')!r}, want {adapter!r}"
+            )
+        if pack_id == "in-wb-routing":
+            if resource.get("statewide") is not True:
+                failures.append("in-wb-routing is not declared statewide")
+            if not str(resource.get("coverage_scope") or "").startswith(
+                "Full State of West Bengal"
+            ):
+                failures.append("in-wb-routing does not declare full West Bengal coverage")
+        if pack_id == "in-pb-routing":
+            if resource.get("statewide") is not True:
+                failures.append("in-pb-routing is not declared statewide")
+            if not str(resource.get("coverage_scope") or "").startswith(
+                "Full State of Punjab"
+            ):
+                failures.append("in-pb-routing does not declare full Punjab coverage")
+        if pack_id == "in-tn-state-routing":
+            if resource.get("statewide") is not True:
+                failures.append("in-tn-state-routing is not declared statewide")
+            if not str(resource.get("coverage_scope") or "").startswith(
+                "Full State of Tamil Nadu"
+            ):
+                failures.append("in-tn-state-routing does not declare full Tamil Nadu coverage")
+        if pack_id == "in-ap-routing":
+            if resource.get("statewide") is not True:
+                failures.append("in-ap-routing is not declared statewide")
+            if not str(resource.get("coverage_scope") or "").startswith(
+                "Full State of Andhra Pradesh"
+            ):
+                failures.append("in-ap-routing does not declare full Andhra Pradesh coverage")
+        if pack_id == "in-tg-state-routing":
+            if resource.get("statewide") is not True:
+                failures.append("in-tg-state-routing is not declared statewide")
+            if not str(resource.get("coverage_scope") or "").startswith(
+                "Full State of Telangana"
+            ):
+                failures.append("in-tg-state-routing does not declare full Telangana coverage")
+        if pack_id == "in-ka-state-routing":
+            if resource.get("statewide") is not True:
+                failures.append("in-ka-state-routing is not declared statewide")
+            if not str(resource.get("coverage_scope") or "").startswith(
+                "Full State of Karnataka"
+            ):
+                failures.append("in-ka-state-routing does not declare full Karnataka coverage")
+        if pack_id == "in-kl-routing":
+            if resource.get("statewide") is not True:
+                failures.append("in-kl-routing is not declared statewide")
+            if not str(resource.get("coverage_scope") or "").startswith(
+                "Full State of Kerala"
+            ):
+                failures.append("in-kl-routing does not declare full Kerala coverage")
+        if pack_id == "in-up-routing":
+            if resource.get("statewide") is not True:
+                failures.append("in-up-routing is not declared statewide")
+            if not str(resource.get("coverage_scope") or "").startswith(
+                "Full State of Uttar Pradesh"
+            ):
+                failures.append("in-up-routing does not declare full Uttar Pradesh coverage")
+        if pack_id == "in-cg-routing":
+            if resource.get("statewide") is not True:
+                failures.append("in-cg-routing is not declared statewide")
+            if not str(resource.get("coverage_scope") or "").startswith(
+                "Full State of Chhattisgarh"
+            ):
+                failures.append("in-cg-routing does not declare full Chhattisgarh coverage")
+        if pack_id == "in-rj-routing":
+            if resource.get("statewide") is not True:
+                failures.append("in-rj-routing is not declared statewide")
+            if not str(resource.get("coverage_scope") or "").startswith(
+                "Full State of Rajasthan"
+            ):
+                failures.append("in-rj-routing does not declare full Rajasthan coverage")
+        if pack_id == "in-top50-routing":
+            if resource.get("statewide") is not False:
+                failures.append("in-top50-routing must not claim statewide coverage")
+            scope = str(resource.get("coverage_scope") or "")
+            if "35 additional Census 2011 top-50" not in scope:
+                failures.append("in-top50-routing coverage scope is unclear")
+        sha = resource.get("sha256")
+        if not isinstance(sha, str) or len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+            failures.append(f"{pack_id} has an invalid SHA-256 pin")
+            continue
+        try:
+            relative = resource_relative_path(pack_id)
+            hosted_path = pack_path(pack_id)
+            envelope, _ = read_pack(pack_id)
+        except (AssertionError, OSError, ValueError) as error:
+            failures.append(str(error))
+            continue
+        expected_name = f"{kind}-{sha}.json"
+        if pathlib.PurePosixPath(relative).name != expected_name:
+            failures.append(f"{pack_id} path is not content-addressed by its full digest")
+        if relative != f"states/{state_code.lower()}/{expected_name}":
+            failures.append(f"{pack_id} is outside its state/kind pack directory: {relative}")
+        expected_catalog_path = f"packs/v1/{relative}"
+        if resource.get("path") != expected_catalog_path:
+            failures.append(f"{pack_id} catalog path is not canonical: {resource.get('path')!r}")
+        expected_url = PRODUCTION_SITE_ROOT + expected_catalog_path
+        if resource.get("url") != expected_url:
+            failures.append(f"{pack_id} production URL is not the pinned GitHub Pages URL")
+        if expected_url in urls:
+            failures.append(f"duplicate production pack URL: {expected_url}")
+        urls.add(expected_url)
+        if not hosted_path.is_file():
+            failures.append(f"hosted pack is absent: {hosted_path}")
+
+        identity = {
+            "format": pack_format,
+            "schema_version": 1,
+            "pack_id": pack_id,
+            "pack_version": 1,
+            "state_code": state_code,
+        }
+        for field, want in identity.items():
+            if envelope.get(field) != want:
+                failures.append(f"{pack_id} envelope {field} is {envelope.get(field)!r}, want {want!r}")
+        if envelope.get("adapter") != resource.get("adapter"):
+            failures.append(f"{pack_id} envelope adapter differs from the catalog")
+        if not isinstance(envelope.get("generated_at"), str) or not envelope["generated_at"]:
+            failures.append(f"{pack_id} has no generation timestamp")
+        if kind == "routing":
+            if not isinstance(envelope.get("adapter"), str) or not envelope["adapter"]:
+                failures.append(f"{pack_id} has no routing adapter")
+            authorities = envelope.get("authorities")
+            if not isinstance(authorities, list):
+                failures.append(f"{pack_id} has no authority inventory")
+            elif state_code != "KA" and not authorities:
+                failures.append(f"{pack_id} has an empty authority inventory")
+            if not isinstance(envelope.get("payload"), dict):
+                failures.append(f"{pack_id} has no routing payload object")
+            if pack_id in MUNICIPAL_CITY_RESOURCES:
+                check_municipal_city_pack(pack_id, envelope, failures)
+            if pack_id == "in-wb-routing":
+                wb_authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if wb_authority_ids != {"wb-kmc", "wb-statewide-unverified"}:
+                    failures.append(
+                        "in-wb-routing authority inventory is "
+                        f"{sorted(wb_authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                regions = payload.get("regions") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 2:
+                    failures.append("in-wb-routing payload is not statewide schema version 2")
+                elif not isinstance(regions, dict) or set(regions) != {"kmc", "west_bengal"}:
+                    failures.append("in-wb-routing does not contain exactly KMC and West Bengal")
+                else:
+                    if regions["kmc"].get("authority_id") != "wb-kmc":
+                        failures.append("in-wb-routing KMC authority pin changed")
+                    state = regions["west_bengal"]
+                    if (
+                        state.get("authority_id") != "wb-statewide-unverified"
+                        or state.get("source_relation_id") != 1_960_177
+                    ):
+                        failures.append("in-wb-routing statewide authority or relation pin changed")
+            if pack_id == "in-pb-routing":
+                pb_authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if pb_authority_ids != {"pb-statewide-unverified"}:
+                    failures.append(
+                        "in-pb-routing authority inventory is "
+                        f"{sorted(pb_authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                region = payload.get("region") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 1:
+                    failures.append("in-pb-routing payload is not statewide schema version 1")
+                elif not isinstance(region, dict):
+                    failures.append("in-pb-routing has no Punjab state region")
+                elif (
+                    region.get("authority_id") != "pb-statewide-unverified"
+                    or region.get("osm_relation_id") != 1_942_686
+                    or region.get("geometry_sha256")
+                    != "e113eb774f4f353d3c7a9c98830f4b665f9bd4d166ed3b84e90855bdf38f5782"
+                ):
+                    failures.append("in-pb-routing statewide authority or boundary pin changed")
+            if pack_id == "in-tn-state-routing":
+                tn_authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if tn_authority_ids != {"tn-statewide-unverified"}:
+                    failures.append(
+                        "in-tn-state-routing authority inventory is "
+                        f"{sorted(tn_authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                region = payload.get("region") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 1:
+                    failures.append(
+                        "in-tn-state-routing payload is not statewide schema version 1"
+                    )
+                elif not isinstance(region, dict):
+                    failures.append("in-tn-state-routing has no Tamil Nadu state region")
+                elif (
+                    region.get("authority_id") != "tn-statewide-unverified"
+                    or region.get("osm_relation_id") != 96_905
+                    or region.get("geometry_sha256")
+                    != "b3034527326b1120366adaf4b7c3df4bd0b8c7aab4d82b28e3dde189b39c313e"
+                ):
+                    failures.append(
+                        "in-tn-state-routing statewide authority or boundary pin changed"
+                    )
+            if pack_id == "in-ap-routing":
+                ap_authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if ap_authority_ids != {"ap-statewide-unverified"}:
+                    failures.append(
+                        "in-ap-routing authority inventory is "
+                        f"{sorted(ap_authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                region = payload.get("region") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 1:
+                    failures.append("in-ap-routing payload is not statewide schema version 1")
+                elif not isinstance(region, dict):
+                    failures.append("in-ap-routing has no Andhra Pradesh state region")
+                elif (
+                    region.get("authority_id") != "ap-statewide-unverified"
+                    or region.get("osm_relation_id") != 2_022_095
+                    or region.get("geometry_sha256")
+                    != "4e36d9c16fda044dceab7a5b08955cb19046bb1bddd052b7671a8311e90cd71c"
+                ):
+                    failures.append("in-ap-routing statewide authority or boundary pin changed")
+            if pack_id == "in-tg-state-routing":
+                tg_authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if tg_authority_ids != {"tg-statewide-unverified"}:
+                    failures.append(
+                        "in-tg-state-routing authority inventory is "
+                        f"{sorted(tg_authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                region = payload.get("region") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 1:
+                    failures.append("in-tg-state-routing payload is not statewide schema version 1")
+                elif not isinstance(region, dict):
+                    failures.append("in-tg-state-routing has no Telangana state region")
+                elif (
+                    region.get("authority_id") != "tg-statewide-unverified"
+                    or region.get("osm_relation_id") != 3_250_963
+                    or region.get("geometry_sha256")
+                    != "77183815e4b698ec1e823f4a94a6f213d1d827ea35de8fec8c0ab3b6a9d15175"
+                ):
+                    failures.append("in-tg-state-routing statewide authority or boundary pin changed")
+            if pack_id == "in-ka-state-routing":
+                ka_authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if ka_authority_ids != {"ka-statewide-unverified"}:
+                    failures.append(
+                        "in-ka-state-routing authority inventory is "
+                        f"{sorted(ka_authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                region = payload.get("region") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 1:
+                    failures.append(
+                        "in-ka-state-routing payload is not statewide schema version 1"
+                    )
+                elif not isinstance(region, dict):
+                    failures.append("in-ka-state-routing has no Karnataka state region")
+                elif (
+                    region.get("authority_id") != "ka-statewide-unverified"
+                    or region.get("osm_relation_id") != 2_019_939
+                    or region.get("geometry_sha256")
+                    != "9d7fe3f01a80cb41712c09139efcd43e0e11a644849d5f3bffe125cc0bc1c5ad"
+                ):
+                    failures.append(
+                        "in-ka-state-routing statewide authority or boundary pin changed"
+                    )
+            if pack_id == "in-kl-routing":
+                kl_authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if kl_authority_ids != {"kl-statewide-unverified"}:
+                    failures.append(
+                        "in-kl-routing authority inventory is "
+                        f"{sorted(kl_authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                region = payload.get("region") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 1:
+                    failures.append("in-kl-routing payload is not statewide schema version 1")
+                elif not isinstance(region, dict):
+                    failures.append("in-kl-routing has no Kerala state region")
+                elif (
+                    region.get("authority_id") != "kl-statewide-unverified"
+                    or region.get("osm_relation_id") != 2_018_151
+                    or region.get("geometry_sha256")
+                    != "51e226750b1d6c08a5030e6074e2641282e01c328f46d8aee741de664bef705c"
+                ):
+                    failures.append("in-kl-routing statewide authority or boundary pin changed")
+            if pack_id == "in-up-routing":
+                up_authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if up_authority_ids != {"up-statewide-unverified"}:
+                    failures.append(
+                        "in-up-routing authority inventory is "
+                        f"{sorted(up_authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                region = payload.get("region") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 1:
+                    failures.append("in-up-routing payload is not statewide schema version 1")
+                elif not isinstance(region, dict):
+                    failures.append("in-up-routing has no Uttar Pradesh state region")
+                elif (
+                    region.get("authority_id") != "up-statewide-unverified"
+                    or region.get("osm_relation_id") != 1_942_587
+                    or region.get("geometry_sha256")
+                    != "2dbb5237cab5eb029f517c1d79451663c1fc49affe0e0789b11f0565180db015"
+                ):
+                    failures.append("in-up-routing statewide authority or boundary pin changed")
+            if pack_id == "in-cg-routing":
+                cg_authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if cg_authority_ids != {"cg-statewide-unverified"}:
+                    failures.append(
+                        "in-cg-routing authority inventory is "
+                        f"{sorted(cg_authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                region = payload.get("region") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 1:
+                    failures.append("in-cg-routing payload is not statewide schema version 1")
+                elif not isinstance(region, dict):
+                    failures.append("in-cg-routing has no Chhattisgarh state region")
+                elif (
+                    region.get("authority_id") != "cg-statewide-unverified"
+                    or region.get("osm_relation_id") != 1_972_004
+                    or region.get("geometry_sha256")
+                    != "827e89a598571ade84db77390bca5daf98c9f67fbae716b17193f4ccdc2876eb"
+                ):
+                    failures.append("in-cg-routing statewide authority or boundary pin changed")
+            if pack_id == "in-rj-routing":
+                rj_authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if rj_authority_ids != {"rj-statewide-unverified"}:
+                    failures.append(
+                        "in-rj-routing authority inventory is "
+                        f"{sorted(rj_authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                region = payload.get("region") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 1:
+                    failures.append("in-rj-routing payload is not statewide schema version 1")
+                elif not isinstance(region, dict):
+                    failures.append("in-rj-routing has no Rajasthan state region")
+                elif (
+                    region.get("authority_id") != "rj-statewide-unverified"
+                    or region.get("osm_relation_id") != 1_942_920
+                    or region.get("geometry_sha256")
+                    != "dcde670675d0fc50e292c6b306b1f80d9d68a1323250c29d6eddc97992491a36"
+                ):
+                    failures.append("in-rj-routing statewide authority or boundary pin changed")
+            if pack_id == "in-top50-routing":
+                expected_authorities = {
+                    "in-gj-enagar", "in-rj-sampark", "in-up-jansunwai",
+                    "in-mp-cm-helpline", "in-tn-cm-helpline", "in-kl-ksmart",
+                    "in-br-lok-shikayat", "in-ap-puramithra",
+                    "in-hr-nagar-darshan", "in-jh-municipal-grievance",
+                    "in-jk-samadhan", "in-cg-nidaan",
+                }
+                authority_ids = {
+                    item.get("id") for item in authorities or [] if isinstance(item, dict)
+                }
+                if authority_ids != expected_authorities:
+                    failures.append(
+                        "in-top50-routing authority inventory is "
+                        f"{sorted(authority_ids)!r}"
+                    )
+                payload = envelope.get("payload")
+                regions = payload.get("regions") if isinstance(payload, dict) else None
+                if not isinstance(payload, dict) or payload.get("version") != 1:
+                    failures.append("in-top50-routing payload is not schema version 1")
+                elif not isinstance(regions, list) or len(regions) != 35:
+                    failures.append("in-top50-routing does not contain exactly 35 regions")
+                else:
+                    identities = {
+                        (item.get("rank"), item.get("id"))
+                        for item in regions if isinstance(item, dict)
+                    }
+                    if len(identities) != 35:
+                        failures.append("in-top50-routing region rank/id inventory is not unique")
+                    if any(
+                        item.get("routing_mode") != "structured_geocode"
+                        or item.get("routing_source") != "nominatim_structured_city"
+                        or item.get("supported_issue_types")
+                            != ["road_damage", "garbage", "open_manhole"]
+                        for item in regions if isinstance(item, dict)
+                    ):
+                        failures.append("in-top50-routing structured route contract changed")
+        else:
+            tenders = envelope.get("tenders")
+            if not isinstance(tenders, list) or not tenders:
+                failures.append(f"{pack_id} has no tender records")
+            expected_records = resource.get("records")
+            if expected_records is not None and len(tenders or []) != expected_records:
+                failures.append(
+                    f"{pack_id} record count is {len(tenders or [])}, want {expected_records}"
+                )
+
+    for asset_root in (ROOT / "static", ROOT / "android-app" / "www"):
+        present = sorted(name for name in LEGACY_BUNDLED_FILES if (asset_root / name).exists())
+        if present:
+            failures.append(f"legacy state data remains bundled in {asset_root}: {present}")
+        if (asset_root / "packs").exists():
+            failures.append(f"downloadable state packs were copied into {asset_root}")
+    return manifest
+
+
+def open_page(context, *, wait_for_hooks: bool = True):
+    page = context.new_page()
+    page.goto(APP)
+    page.wait_for_load_state("networkidle")
+    if wait_for_hooks:
+        page.wait_for_function(HOOKS_READY, timeout=30000)
+    return page
+
+
+def records(page) -> list[dict]:
+    return page.evaluate(f"""async () => {{
+      {IDB_HELPERS}
+      const rows = await allPackRecords();
+      return rows.map((row) => ({{
+        cache_key: row.cache_key, pack_id: row.pack_id, pack_version: row.pack_version,
+        state_code: row.state_code, kind: row.kind, sha256: row.sha256,
+        bytes: row.bytes, installed_at: row.installed_at, last_used_at: row.last_used_at,
+        blob_size: row.blob instanceof Blob ? row.blob.size : null,
+      }}));
+    }}""")
+
+
+def check_download_cache_offline(browser, manifest: dict, failures: list[str]) -> None:
+    pack_id = "in-dl-routing"
+    resource = manifest["resources"][pack_id]
+    pattern = route_pattern(pack_id)
+    downloads = 0
+    download_headers: list[dict[str, str]] = []
+    download_urls: list[str] = []
+
+    context = browser.new_context(viewport={"width": 390, "height": 844})
+    context.add_cookies([{"name": "pack_test_secret", "value": "must-not-leak", "url": APP}])
+
+    def count_download(route):
+        nonlocal downloads
+        downloads += 1
+        download_headers.append(route.request.headers)
+        download_urls.append(route.request.url)
+        route.continue_()
+
+    context.route("**/packs/v1/**", count_download)
+    page = open_page(context)
+    downloads_before_load = downloads
+    result = page.evaluate(f"""async () => {{
+      {IDB_HELPERS}
+      const P = StandaloneAPI.__pure;
+      await P.resetStatePackMemory();
+      const loaded = await Promise.all([
+        P.loadStatePack({json.dumps(pack_id)}),
+        P.loadStatePack({json.dumps(pack_id)}),
+        P.loadStatePack({json.dumps(pack_id)}),
+      ]);
+      const catalog = await P.getStatePackManifest();
+      const resolved = new URL(P.resolvePackUrl(catalog.resources[{json.dumps(pack_id)}]), location.href);
+      const rows = await allPackRecords();
+      const row = rows.find((item) => item.pack_id === {json.dumps(pack_id)});
+      let blobSha = null;
+      if (row && row.blob instanceof Blob) {{
+        const digest = await crypto.subtle.digest("SHA-256", await row.blob.arrayBuffer());
+        blobSha = [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
+      }}
+      return {{
+        loaded: loaded.every(Boolean), format: catalog && catalog.format,
+        resolved_origin: resolved.origin, resolved_path: resolved.pathname,
+        rows: rows.length, row: row && {{
+          cache_key: row.cache_key, pack_version: row.pack_version,
+          state_code: row.state_code, kind: row.kind, sha256: row.sha256,
+          bytes: row.bytes, installed_at: row.installed_at, last_used_at: row.last_used_at,
+          blob_size: row.blob instanceof Blob ? row.blob.size : null,
+        }}, blobSha,
+      }};
+    }}""")
+    if not result["loaded"]:
+        failures.append("concurrent state-pack callers did not all receive the verified pack")
+    if downloads_before_load:
+        failures.append(f"idle app startup downloaded {downloads_before_load} state pack(s)")
+    if downloads != 1:
+        failures.append(f"three concurrent pack loads made {downloads} HTTP requests, want 1")
+    if download_urls and not download_urls[0].endswith("/" + resource["path"]):
+        failures.append(f"runtime downloaded the wrong state pack: {download_urls[0]}")
+    if download_headers and ("cookie" in download_headers[0] or "referer" in download_headers[0]):
+        failures.append("state-pack download leaked app cookies or a referrer")
+    if result["format"] != "pothole-pack-manifest":
+        failures.append("runtime did not return the validated bundled manifest")
+    if result["resolved_origin"] != "http://localhost:8765":
+        failures.append(f"localhost pack URL did not stay local: {result['resolved_origin']}")
+    expected_path = "/" + resource["path"]
+    if result["resolved_path"] != expected_path:
+        failures.append(
+            f"localhost pack URL path is {result['resolved_path']!r}, want {expected_path!r}"
+        )
+    row = result.get("row") or {}
+    expected_row = {
+        "pack_version": resource["pack_version"],
+        "state_code": resource["state_code"],
+        "kind": resource["kind"],
+        "sha256": resource["sha256"],
+        "bytes": resource["bytes"],
+        "blob_size": resource["bytes"],
+    }
+    for key, want in expected_row.items():
+        if row.get(key) != want:
+            failures.append(f"cached {pack_id} {key} is {row.get(key)!r}, want {want!r}")
+    if not isinstance(row.get("cache_key"), str) or pack_id not in row["cache_key"]:
+        failures.append(f"cached {pack_id} has no stable cache key")
+    if not row.get("installed_at") or not row.get("last_used_at"):
+        failures.append(f"cached {pack_id} has no install/use timestamps")
+    if result.get("blobSha") != resource["sha256"]:
+        failures.append("cached pack blob does not hash to the catalog pin")
+
+    # A fresh document has no in-memory cache. With the pack transport blocked it must
+    # still use the verified IndexedDB copy and must not make a speculative request.
+    page.close()
+    context.unroute("**/packs/v1/**", count_download)
+    offline_attempts = 0
+    page = context.new_page()
+
+    def block_pack(route):
+        nonlocal offline_attempts
+        offline_attempts += 1
+        route.abort()
+
+    page.route(pattern, block_pack)
+    page.goto(APP)
+    page.wait_for_load_state("networkidle")
+    page.wait_for_function(HOOKS_READY, timeout=30000)
+    offline = page.evaluate(
+        f"async () => !!(await StandaloneAPI.__pure.loadStatePack({json.dumps(pack_id)}))"
+    )
+    if not offline:
+        failures.append("verified state pack was unavailable offline after a document reload")
+    if offline_attempts:
+        failures.append("offline cached pack still attempted a network download")
+
+    # Bytes in IndexedDB are untrusted. A changed blob must be deleted and must never be
+    # returned while the network is unavailable.
+    page.evaluate(f"""async () => {{
+      {IDB_HELPERS}
+      await mutatePackRecords((store, rows) => {{
+        const row = rows.find((item) => item.pack_id === {json.dumps(pack_id)});
+        row.blob = new Blob(["tampered-state-pack"], {{type: "application/json"}});
+        store.put(row);
+      }});
+    }}""")
+    page.close()
+    tamper_attempts = 0
+    page = context.new_page()
+
+    def block_tampered_pack(route):
+        nonlocal tamper_attempts
+        tamper_attempts += 1
+        route.abort()
+
+    page.route(pattern, block_tampered_pack)
+    page.goto(APP)
+    page.wait_for_load_state("networkidle")
+    page.wait_for_function(HOOKS_READY, timeout=30000)
+    tampered = page.evaluate(
+        f"async () => !!(await StandaloneAPI.__pure.loadStatePack({json.dumps(pack_id)}))"
+    )
+    remaining = records(page)
+    if tampered:
+        failures.append("tampered cached pack was accepted")
+    if tamper_attempts < 1:
+        failures.append("tampered cached pack did not attempt a verified replacement download")
+    if any(row["pack_id"] == pack_id for row in remaining):
+        failures.append("tampered cached pack was not removed")
+    context.close()
+
+
+def check_bad_network_pack(browser, failures: list[str]) -> None:
+    pack_id = "in-dl-routing"
+    context = browser.new_context(viewport={"width": 390, "height": 844})
+    page = context.new_page()
+    page.route(
+        route_pattern(pack_id),
+        lambda route: route.fulfill(status=200, content_type="application/json", body="{}"),
+    )
+    page.goto(APP)
+    page.wait_for_load_state("networkidle")
+    page.wait_for_function(HOOKS_READY, timeout=30000)
+    accepted = page.evaluate(
+        f"async () => !!(await StandaloneAPI.__pure.loadStatePack({json.dumps(pack_id)}))"
+    )
+    if accepted:
+        failures.append("network response with the wrong digest was accepted")
+    if any(row["pack_id"] == pack_id for row in records(page)):
+        failures.append("network response with the wrong digest was cached")
+    context.close()
+
+
+def check_bad_manifest(browser, failures: list[str]) -> None:
+    def manifest_response(status: int, body: str):
+        def handler(route):
+            route.fulfill(status=status, content_type="application/json", body=body)
+
+        return handler
+
+    for label, status, body in [
+        ("missing", 404, "missing"),
+        ("malformed", 200, '{"format":"pothole-pack-manifest","schema_version":1}'),
+    ]:
+        context = browser.new_context(viewport={"width": 390, "height": 844})
+        pack_requests = 0
+
+        def count_pack(route):
+            nonlocal pack_requests
+            pack_requests += 1
+            route.abort()
+
+        context.route(
+            "**/pack-manifest-v1.35.json",
+            manifest_response(status, body),
+        )
+        context.route("**/packs/v1/**", count_pack)
+        page = open_page(context)
+        result = page.evaluate("""async () => {
+          try {
+            return {loaded: !!(await StandaloneAPI.__pure.loadStatePack("in-dl-routing")), error: null};
+          } catch (error) {
+            return {loaded: false, error: String(error && error.message || error)};
+          }
+        }""")
+        if result["loaded"]:
+            failures.append(f"{label} bundled pack manifest did not fail closed")
+        if result["error"]:
+            failures.append(f"{label} bundled pack manifest escaped as an exception: {result['error']}")
+        if pack_requests:
+            failures.append(f"{label} manifest still triggered {pack_requests} pack request(s)")
+        context.close()
+
+
+def check_age_eviction_and_wipe(browser, failures: list[str]) -> None:
+    active_id = "in-dl-routing"
+    old_id = "in-wb-routing"
+    context = browser.new_context(viewport={"width": 390, "height": 844})
+    page = open_page(context)
+    result = page.evaluate(f"""async () => {{
+      {IDB_HELPERS}
+      const P = StandaloneAPI.__pure;
+      const loaded = await Promise.all([
+        P.loadStatePack({json.dumps(active_id)}), P.loadStatePack({json.dumps(old_id)}),
+      ]);
+      await mutatePackRecords((store, rows) => {{
+        for (const row of rows) {{
+          const now = Number(row.last_used_at) > 1e11 ? Date.now() : Date.now() / 1000;
+          const day = Number(row.last_used_at) > 1e11 ? 86400000 : 86400;
+          row.last_used_at = now - 120 * day;
+          store.put(row);
+        }}
+        const source = rows.find((row) => row.pack_id === {json.dumps(active_id)});
+        store.put({{
+          ...source, cache_key: "unlisted-pack@1", pack_id: "unlisted-pack",
+          state_code: "xx", last_used_at: 1, installed_at: 1,
+        }});
+      }});
+      P.resetStatePackMemory();
+      await P.pruneStatePacks({json.dumps(active_id)});
+      const afterPrune = (await allPackRecords()).map((row) => row.pack_id).sort();
+      await StandaloneAPI.handle("/api/reports", {{method: "DELETE"}});
+      const afterWipe = (await allPackRecords()).map((row) => row.pack_id).sort();
+      return {{loaded: loaded.every(Boolean), afterPrune, afterWipe}};
+    }}""")
+    if not result["loaded"]:
+        failures.append("could not seed routing packs for eviction test")
+    if result["afterPrune"] != [active_id]:
+        failures.append(
+            f"unused/unlisted eviction left {result['afterPrune']!r}, want only active {active_id}"
+        )
+    if result["afterWipe"]:
+        failures.append(f"Delete all app data left state packs behind: {result['afterWipe']!r}")
+    context.close()
+
+
+def check_lru_limit(browser, manifest: dict, failures: list[str]) -> None:
+    tender_id = "in-ka-tenders"
+    active_id = "in-dl-routing"
+    custom = copy.deepcopy(manifest)
+    tender_bytes = custom["resources"][tender_id]["bytes"]
+    active_bytes = custom["resources"][active_id]["bytes"]
+    # The tender pack fits by itself, but the next small routing pack crosses the cap.
+    custom["cache"]["max_bytes"] = tender_bytes + max(1, active_bytes // 2)
+
+    context = browser.new_context(viewport={"width": 390, "height": 844})
+    context.route(
+        "**/pack-manifest-v1.35.json",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json",
+            body=json.dumps(custom, separators=(",", ":")),
+        ),
+    )
+    page = open_page(context)
+    result = page.evaluate(f"""async () => {{
+      {IDB_HELPERS}
+      const P = StandaloneAPI.__pure;
+      const first = await P.loadStatePack({json.dumps(tender_id)});
+      const second = await P.loadStatePack({json.dumps(active_id)});
+      P.resetStatePackMemory();
+      await P.pruneStatePacks({json.dumps(active_id)});
+      const rows = await allPackRecords();
+      return {{loaded: !!first && !!second,
+        ids: rows.map((row) => row.pack_id).sort(),
+        bytes: rows.reduce((sum, row) => sum + Number(row.bytes || 0), 0)}};
+    }}""")
+    if not result["loaded"]:
+        failures.append("could not load packs for LRU size-limit test")
+    if result["ids"] != [active_id]:
+        failures.append(f"LRU size limit left {result['ids']!r}, want only {active_id}")
+    if result["bytes"] > custom["cache"]["max_bytes"]:
+        failures.append("LRU pruning left the state-pack cache over its byte limit")
+    context.close()
+
+
+def main() -> None:
+    failures: list[str] = []
+    manifest = check_catalog(failures)
+    if not manifest or not isinstance(manifest.get("resources"), dict):
+        print("FAIL")
+        for failure in failures:
+            print("  -", failure)
+        sys.exit(1)
+
+    with sync_playwright() as playwright:
+        # Exercise normal browser security; development pack URLs resolve same-origin.
+        browser = playwright.chromium.launch()
+        check_download_cache_offline(browser, manifest, failures)
+        check_bad_network_pack(browser, failures)
+        check_bad_manifest(browser, failures)
+        check_age_eviction_and_wipe(browser, failures)
+        check_lru_limit(browser, manifest, failures)
+        browser.close()
+
+    if failures:
+        print("FAIL")
+        for failure in failures:
+            print("  -", failure)
+        sys.exit(1)
+    print("STATE PACK TEST PASS (catalog, integrity, offline, fail-closed, eviction, concurrency)")
+
+
+if __name__ == "__main__":
+    main()

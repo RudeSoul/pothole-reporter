@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Guard the private-media regression manifest without requiring private media in git."""
+
+import json
+import hashlib
+from collections import Counter
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent.parent
+LABELS = json.loads((ROOT / "eval" / "labels.json").read_text())["images"]
+EVENTS = {entry["event_id"]: entry for entry in LABELS if entry.get("event_id")}
+FAILURES = []
+
+
+def check(name, condition):
+    print(f"  {'ok  ' if condition else 'FAIL'} {name}")
+    if not condition:
+        FAILURES.append(name)
+
+
+EXPECTED = {
+    "owner-construction-drive-2026-08-28-a": {
+        "label": "pothole",
+        "mode": "drive",
+        "source_file": "construction-drive-segment-1",
+        "source_interval_seconds": [33.6, 35.8],
+        "source_timestamps_seconds": [35.266667, 35.533333, 35.8],
+    },
+    "owner-construction-drive-2026-08-28-mid": {
+        "label": "disputed",
+        "mode": "drive",
+        "source_file": "construction-drive-segment-1",
+        "source_interval_seconds": [44.3, 45.8],
+        "source_timestamps_seconds": [45.166667, 45.433333, 45.7],
+    },
+    "owner-construction-drive-2026-08-28-b": {
+        "label": "disputed",
+        "mode": "drive",
+        "source_file": "construction-drive-segment-1",
+        "source_interval_seconds": [53.3, 55.8],
+        "source_timestamps_seconds": [55.066667, 55.333333, 55.6],
+    },
+    "owner-construction-drive-2026-08-28-segment-2-second-4": {
+        "label": "pothole",
+        "mode": "drive",
+        "source_file": "construction-drive-segment-2",
+        "source_interval_seconds": [3.8, 5.4],
+        "source_timestamps_seconds": [4.533333, 4.8, 5.066667],
+    },
+    "owner-construction-drive-2026-08-28-borderline-negative": {
+        "label": "not_pothole",
+        "mode": "drive",
+        "source_file": "construction-drive-segment-2",
+        "source_interval_seconds": [43.5, 44.8],
+        "source_timestamps_seconds": [43.866667, 44.133333, 44.4],
+    },
+    "tester-opening-grid-calming-marking-2026-08-25": {
+        "label": "not_pothole",
+        "mode": "drive",
+        "source_file": "tester-speed-breaker-clip",
+        "source_interval_seconds": [0.0, 1.2],
+        "source_timestamps_seconds": [0.233333, 0.5, 0.766667],
+    },
+    "tester-zebra-raised-speed-breaker-2026-08-25": {
+        "label": "not_pothole",
+        "mode": "drive",
+        "source_file": "tester-speed-breaker-clip",
+        "source_interval_seconds": [2.4, 4.8],
+        "source_timestamps_seconds": [3.333333, 3.6, 3.866667],
+    },
+    "tester-second-speed-breaker-2026-08-25": {
+        "label": "not_pothole",
+        "mode": "drive",
+        "path": "tester-speed-breaker-native-cadence/later/f1.jpg",
+        "frames": [
+            "tester-speed-breaker-native-cadence/later/f0.jpg",
+            "tester-speed-breaker-native-cadence/later/f1.jpg",
+            "tester-speed-breaker-native-cadence/later/f2.jpg",
+        ],
+        "source_file": "tester-speed-breaker-clip",
+        "source_interval_seconds": [6.1, 7.8],
+        "source_timestamps_seconds": [6.578333, 6.845, 7.111667],
+        "source_sample_timestamps_seconds": [6.578333, 6.845, 7.111667],
+        "selected_source_indices": [0, 1, 2],
+        "capture_cadence_ms": 250,
+        "observed_source_spacing_ms": [267, 267],
+        "observed_frame_spacing_ms": [267, 267],
+        "fixture_sha256": [
+            "dd59f703b2ba228e6e3a88082c1a46b6c7add0df8b40c26396bde9b0f38b5a83",
+            "de6f0e9e37f20cabdba7e7287de2c4aad1556694dc607eae9941ac4d83d6a32f",
+            "90428d428e900d448cb145020848b5b4b1f5b5c5954520ad0428e97805efa1ba",
+        ],
+    },
+    "owner-kanjur-drivable-edge-pothole-2026-08-25": {
+        "label": "pothole",
+        "mode": "manual",
+        "source_file": "owner-manual-edge-photo",
+    },
+}
+
+
+event_ids = [entry["event_id"] for entry in LABELS if entry.get("event_id")]
+duplicates = sorted(event_id for event_id, count in Counter(event_ids).items() if count > 1)
+check("event IDs are unique", not duplicates)
+
+for event_id, expected in EXPECTED.items():
+    event = EVENTS.get(event_id, {})
+    check(f"{event_id} is retained", bool(event))
+    for field, value in expected.items():
+        check(f"{event_id} has exact {field}", event.get(field) == value)
+
+    image_paths = event.get("frames") or ([event["path"]] if event.get("path") else [])
+    expected_count = 3 if expected["mode"] == "drive" else 1
+    check(f"{event_id} has {expected_count} manifest image path(s)",
+          len(image_paths) == expected_count)
+    check(f"{event_id} uses only private relative fixture paths",
+          bool(image_paths)
+          and all(not Path(path).is_absolute() and ".." not in Path(path).parts
+                  for path in image_paths)
+          and str(event.get("licence", "")).startswith("private evaluation only"))
+    if expected["mode"] == "drive" and len(image_paths) == 3:
+        primary_index = event.get("primary_index")
+        check(f"{event_id} primary path matches primary_index",
+              type(primary_index) is int and primary_index in range(3)
+              and event.get("path") == image_paths[primary_index])
+    fixture_hashes = event.get("fixture_sha256", [])
+    check(f"{event_id} records one SHA-256 per private fixture",
+          len(fixture_hashes) == len(image_paths)
+          and all(len(value) == 64 for value in fixture_hashes))
+    for relative_path, expected_hash in zip(image_paths, fixture_hashes):
+        local_path = ROOT / "eval" / "images" / relative_path
+        if local_path.is_file():
+            actual_hash = hashlib.sha256(local_path.read_bytes()).hexdigest()
+            check(f"{event_id} local fixture hash matches {Path(relative_path).name}",
+                  actual_hash == expected_hash)
+
+    if expected["mode"] == "drive":
+        timestamps = event.get("source_timestamps_seconds", [])
+        observed_spacing = [
+            round((right - left) * 1000)
+            for left, right in zip(timestamps, timestamps[1:])
+        ]
+        check(f"{event_id} records three views at the configured sample interval",
+              len(timestamps) == 3
+              and event.get("source_sample_timestamps_seconds") == timestamps
+              and event.get("selected_source_indices") == [0, 1, 2]
+              and event.get("capture_cadence_ms") == 250
+              and event.get("observed_source_spacing_ms") == observed_spacing
+              and event.get("observed_frame_spacing_ms") == observed_spacing
+              and all(spacing >= event["capture_cadence_ms"]
+                      for spacing in observed_spacing))
+
+event_b_notes = EVENTS.get("owner-construction-drive-2026-08-28-b", {}).get("notes", "").lower()
+check("ambiguous event B explicitly awaits an owner label",
+      "ambiguous" in event_b_notes and "owner label" in event_b_notes)
+
+segment_two_positive = EVENTS.get(
+    "owner-construction-drive-2026-08-28-segment-2-second-4", {})
+check("segment_0002 second 4 is retained as an owner-confirmed positive",
+      segment_two_positive.get("label") == "pothole"
+      and segment_two_positive.get("labelled_by") == "owner"
+      and "second 4" in segment_two_positive.get("notes", "").lower())
+segment_two_negative_notes = EVENTS.get(
+    "owner-construction-drive-2026-08-28-borderline-negative", {}).get("notes", "").lower()
+check("segment_0002 second 44 negative is explicitly local",
+      "local strict-negative" in segment_two_negative_notes
+      and "not the whole clip" in segment_two_negative_notes)
+check("segment_0001 second 35 is owner-confirmed",
+      EVENTS.get("owner-construction-drive-2026-08-28-a", {}).get("labelled_by") == "owner")
+
+traffic_ids = (
+    "tester-opening-grid-calming-marking-2026-08-25",
+    "tester-zebra-raised-speed-breaker-2026-08-25",
+    "tester-second-speed-breaker-2026-08-25",
+)
+check("all three traffic-calming intervals are retained as negatives",
+      all(EVENTS.get(event_id, {}).get("label") == "not_pothole"
+          for event_id in traffic_ids))
+check("external tester recordings stay out of production-accuracy rates",
+      all(EVENTS.get(event_id, {}).get("capture_provenance")
+              == "external_recording_of_test_device"
+          and EVENTS.get(event_id, {}).get("accuracy_eligible") is False
+          for event_id in traffic_ids))
+check("only the two tester-identified speed breakers claim owner verification",
+      EVENTS[traffic_ids[0]].get("labelled_by") == "independent assistant frame review"
+      and all(EVENTS[event_id].get("labelled_by") == "owner"
+              for event_id in traffic_ids[1:]))
+
+later_breaker = EVENTS["tester-second-speed-breaker-2026-08-25"]
+later_timestamps = later_breaker.get("source_timestamps_seconds", [])
+later_observed_spacing = [
+    round((right - left) * 1000)
+    for left, right in zip(later_timestamps, later_timestamps[1:])
+]
+check("later tester breaker retains its external-recording fixture path",
+      later_breaker.get("path") == "tester-speed-breaker-native-cadence/later/f1.jpg"
+      and all(path.startswith("tester-speed-breaker-native-cadence/later/")
+              for path in later_breaker.get("frames", []))
+      and later_breaker.get("capture_provenance") == "external_recording_of_test_device")
+check("later tester breaker records sampled external-video spacing",
+      later_breaker.get("capture_cadence_ms") == 250
+      and later_breaker.get("selected_source_indices") == [0, 1, 2]
+      and later_breaker.get("observed_source_spacing_ms") == [267, 267]
+      and later_breaker.get("observed_frame_spacing_ms") == [267, 267]
+      and later_observed_spacing == [267, 267]
+      and all(spacing >= later_breaker["capture_cadence_ms"]
+              for spacing in later_observed_spacing))
+
+kanjur = EVENTS.get("owner-kanjur-drivable-edge-pothole-2026-08-25", {})
+kanjur_notes = kanjur.get("notes", "").lower()
+check("Kanjur is an owner-verified manual positive",
+      kanjur.get("label") == "pothole" and kanjur.get("mode") == "manual"
+      and kanjur.get("labelled_by") == "owner")
+check("Kanjur preserves the drivable-edge ground truth",
+      "road-edge cavity" in kanjur_notes and "drivable surface" in kanjur_notes)
+
+if FAILURES:
+    raise SystemExit(f"\n{len(FAILURES)} media manifest check(s) failed")
+
+print("\nMEDIA REGRESSION MANIFEST TEST PASS")

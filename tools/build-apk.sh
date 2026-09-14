@@ -8,6 +8,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 APK=android-app/android/app/build/outputs/apk/debug/app-debug.apk
+FORBIDDEN_STATE_ASSETS=(
+  delhi-coverage.json
+  karnataka-bodies.json
+  kolkata-coverage.json
+  maharashtra-coverage.json
+  tenders.json
+)
 
 echo "1/5 generating the cross-runtime LLM contract"
 node llm/generate.mjs

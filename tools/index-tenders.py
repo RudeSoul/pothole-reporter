@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stamp each municipal contract with the LGD code of the body that awarded it.
+"""Stamp each eligible municipal road contract with its awarding body's LGD code.
 
 The app already knows which local body contains a pothole: the state GIS returns its LGD
 code. Stamping the same code on each contract turns the shortlist into a lookup instead of
@@ -14,10 +14,17 @@ Against the full roster, Kanakapura matches Kanakapura and simply ends up unstam
 
 A match must also beat the runner-up by a margin, so near-ties (Belur and Belluru,
 Chincholi and Chinchali) are left unstamped rather than guessed.
+
+Body matching and work-scope matching are independent gates.  A drain or footpath tender
+can belong to the correct body and still be ineligible for a pothole complaint.
 """
 import json, re, difflib, pathlib
 
+from state_pack_tools import publish_resource
+from tender_scope import is_road_surface_contract
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+SOURCE_RETRIEVED_AT = "2026-08-21"  # update when data/tenders-karnataka.json is refreshed
 rows = json.load(open(ROOT / "data/tenders-karnataka.json"))
 rows = rows if isinstance(rows, list) else rows.get("tenders", [])
 towns = json.load(open(ROOT / "data/karnataka-towns.json"))["towns"]
@@ -81,9 +88,28 @@ for r in rows:
     else:
         stats["no_address" if code else "unresolved"] += 1; r.pop("b", None)
 
-json.dump(rows, open(ROOT / "data/tenders-karnataka.json", "w"), separators=(",", ":"))
-json.dump(rows, open(ROOT / "android-app/www/tenders.json", "w"), separators=(",", ":"))
+with (ROOT / "data/tenders-karnataka.json").open("w", encoding="utf-8") as output:
+    json.dump(rows, output, ensure_ascii=False, separators=(",", ":"))
+    output.write("\n")
+body_rows = [row for row in rows if row.get("b")]
+published_rows = [
+    # The legacy mirror's `c` value is not an official KPPP award record. Keep it in the
+    # canonical research snapshot, but never ship a person's/company's name to the app as
+    # though it were verified contractor responsibility.
+    {**row, "c": ""} for row in body_rows
+    if is_road_surface_contract(row.get("t"), row.get("tn"))
+]
+_, pack_output = publish_resource(
+    "in-ka-tenders",
+    published_rows,
+    source_retrieved_at=SOURCE_RETRIEVED_AT,
+)
 print(f"stamped              {stats['mapped']}")
 print(f"legacy BBMP ({BLR})   {stats['blr']}")
 print(f"body has no address  {stats['no_address']}  (never citable, correctly unstamped)")
 print(f"unresolved location  {stats['unresolved']}")
+print(f"non-road scope       {len(body_rows) - len(published_rows)}")
+print(f"published records    {len(published_rows)}")
+print(pack_output.relative_to(ROOT))
+print("static/pack-manifest-v1.35.json")
+print("android-app/www/pack-manifest-v1.35.json")

@@ -11,7 +11,7 @@
 <style>
   * { box-sizing: border-box; margin: 0; }
   :root { --bg:#111214; --card:#1c1d21; --line:#2a2b30; --accent:#ff7a1a; --ok:#3ecf6f; --bad:#ff5d5d; --mut:#9a9ba1; }
-  body { background:var(--bg); color:#f2f2f4; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  body { background:var(--bg); color:#f2f2f4; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans Bengali","Nirmala UI",Vrinda,Roboto,sans-serif;
          padding: calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 24px); max-width:520px; margin:0 auto; }
   body.public-map-view { max-width:1080px; }
   h1 { font-size:22px; margin:4px 0 2px; }
@@ -25,7 +25,7 @@
   .thumb { width:64px; height:64px; object-fit:cover; border-radius:10px; flex:none; }
   .big-photo { width:100%; max-height:280px; object-fit:contain; background:#000; border-radius:10px; margin-bottom:10px; cursor:zoom-in; }
   #viewer { position:fixed; inset:0; background:#000; z-index:50; display:flex; align-items:center; justify-content:center; overflow:hidden; touch-action:none; }
-  #viewerImg { max-width:100%; max-height:100%; transform-origin:0 0; will-change:transform; user-select:none; -webkit-user-drag:none; }
+  #viewerImg { max-width:100%; max-height:100%; transform-origin:center; will-change:transform; user-select:none; -webkit-user-drag:none; pointer-events:none; }
   #viewerClose { position:absolute; top:calc(env(safe-area-inset-top) + 12px); right:12px; background:rgba(255,255,255,.15); color:#fff; font-size:20px; padding:10px 16px; border-radius:12px; }
   #viewerMeta { position:absolute; top:calc(env(safe-area-inset-top) + 12px); left:12px; right:84px;
                 background:rgba(0,0,0,.78); color:#fff; padding:10px 12px; border-radius:12px;
@@ -52,6 +52,7 @@
   .meta { color:var(--mut); font-size:12px; margin-top:2px; }
   label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; }
   input[type=text], input[type=password], select, textarea { width:100%; background:#131417; color:#f2f2f4; border:1px solid var(--line); border-radius:10px; padding:10px; font:inherit; font-size:14px; }
+  input[aria-invalid="true"] { border-color:var(--bad); box-shadow:0 0 0 1px var(--bad); }
   textarea { min-height:220px; line-height:1.45; }
   .btn-row { display:flex; gap:10px; margin-top:12px; }
   .send { flex:1; background:var(--ok); color:#06210f; font-weight:700; padding:14px; }
@@ -67,13 +68,16 @@
   h2 { font-size:15px; color:var(--mut); font-weight:600; margin:18px 0 10px; }
   .policy-links { display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:10px; }
   .policy-links a { color:#ffb36f; font-size:13px; }
+  html.native-preview-active, html.native-preview-active body { background:transparent !important; }
+  html.native-preview-active #nativePreviewFrame,
+  html.native-preview-active #nativePreviewSlot { background:transparent !important; }
 </style>
 </head>
 <body>
   <div class="row" style="justify-content:space-between;align-items:flex-start">
     <div>
       <h1>Pothole Reporter</h1>
-      <div class="sub" id="subTitle">Shoot it. Verify it. Report it to the right officer.</div>
+      <div class="sub" id="subTitle">Shoot it. Verify it. Use the suggested official route.</div>
     </div>
     <button class="ghost" id="gearBtn" style="flex:none;padding:10px 14px" aria-label="Settings">&#9881;&#65039;</button>
   </div>
@@ -114,18 +118,47 @@
 
   <div id="detail" class="hidden"></div>
 
+  <div id="portalCopy" class="hidden">
+    <div class="card">
+      <div class="verdict" id="portalCopyTitle">Portal fields</div>
+      <div class="meta" id="portalCopyHint" style="margin-top:6px">Copy these fields into the official grievance portal. Contract details appear only after exact-road responsibility is verified.</div>
+      <textarea id="portalCopyText" readonly style="min-height:55vh;margin-top:12px"></textarea>
+      <div class="btn-row">
+        <button class="ghost" id="portalCopyBack">Back</button>
+        <button class="send" id="portalCopyAll">Copy all</button>
+      </div>
+    </div>
+  </div>
+
   <div id="drive" class="hidden">
-    <div style="position:relative">
+    <div id="webDrivePanel" style="position:relative">
       <video id="driveVideo" autoplay playsinline muted style="width:100%;border-radius:14px;background:#000;min-height:340px"></video>
-      <div aria-hidden="true" style="position:absolute;left:8%;right:8%;top:34%;bottom:7%;border:2px dashed rgba(255,122,26,.8);border-radius:14px;pointer-events:none"></div>
       <button id="driveStop" style="position:absolute;top:12px;right:12px;background:var(--bad);color:#fff;font-size:17px;font-weight:700;padding:14px 24px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.5)">&#9632; Stop</button>
       <span class="hidden"></span>
       <div style="position:absolute;left:12px;bottom:12px;background:rgba(0,0,0,.6);padding:8px 12px;border-radius:10px;max-width:75%">
-        <div class="verdict" id="driveCount" style="margin:0;font-size:16px;color:#fff">0 road-damage events</div>
+        <div class="verdict" id="driveCount" style="margin:0;font-size:16px;color:#fff">0 potholes</div>
         <div class="meta" id="driveStatus" style="color:#d5d5da">Starting...</div>
       </div>
     </div>
-    <div class="meta" id="driveTip" style="text-align:center;margin-top:10px">Mount the phone facing the road. Frames are checked continuously while you move (about every 10 meters). The back button also stops the drive.</div>
+    <div id="nativeDrivePanel" class="hidden">
+      <div id="nativePreviewFrame" style="position:relative;min-height:340px;border-radius:14px;overflow:hidden;background:#000">
+        <div id="nativePreviewSlot" role="img" aria-label="Live road camera preview" style="width:100%;height:clamp(340px,58vh,560px);background:transparent"></div>
+        <div id="nativeSourceMessage" role="status" aria-live="polite" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:82%;background:rgba(0,0,0,.72);color:#f2f2f4;padding:10px 14px;border-radius:10px;text-align:center;font-size:13px;line-height:1.4;pointer-events:none">Starting phone camera...</div>
+        <div id="nativeCameraBadge" style="position:absolute;top:12px;left:12px;background:rgba(120,0,0,.82);color:#fff;font-size:12px;font-weight:800;padding:8px 10px;border-radius:99px;letter-spacing:.04em">&#9679; CAMERA ACTIVE</div>
+        <button id="nativeDriveStop" style="position:absolute;top:12px;right:12px;background:var(--bad);color:#fff;font-size:17px;font-weight:700;padding:14px 24px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.5)">&#9632; Stop</button>
+        <div style="position:absolute;left:12px;right:12px;bottom:12px;background:rgba(0,0,0,.68);padding:9px 12px;border-radius:10px">
+          <div class="verdict" id="nativeDriveCount" style="margin:0;font-size:16px;color:#fff">0 potholes</div>
+          <div class="meta" id="nativeDriveStatus" style="color:#d5d5da">Starting camera and GPS...</div>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="ghost" id="openMapsBtn">Maps</button>
+        <button class="ghost" id="nativePauseBtn">Pause</button>
+        <button class="ghost" id="nativeRecordBtn">Video: Off</button>
+      </div>
+      <div class="meta" id="nativeBackgroundNotice" style="text-align:center;margin-top:10px;line-height:1.4">Camera scanning continues only while the persistent Android “Drive Mode” notification is visible—even when Maps or a call is on screen. It stops automatically at the selected battery limit.</div>
+    </div>
+    <div class="meta" id="driveTip" style="text-align:center;margin-top:10px">Mount the phone facing the road. Frames are checked continuously while you move (about every 10 meters).</div>
   </div>
 
   <div id="dash" class="hidden">
@@ -157,8 +190,8 @@
     <div class="meta" id="reviewMeta"></div>
     <div class="meta" id="reviewSaid" style="margin-top:6px"></div>
     <div class="btn-row">
-      <button class="send" id="lblPothole">Pothole cavity</button>
-      <button class="ghost" id="lblPatch">Failed repair</button>
+      <button class="send" id="lblPothole">Pothole</button>
+      <button class="ghost danger" id="lblNo">Not pothole</button>
     </div>
     <div class="btn-row">
       <button class="ghost" id="lblSurface">Surface breakup</button>
@@ -167,8 +200,6 @@
     <div class="btn-row">
       <button class="ghost danger" id="lblNo">Undamaged</button>
       <button class="ghost" id="lblSkip">Skip</button>
-    </div>
-    <div class="btn-row">
       <button class="ghost" id="reviewBack">Done</button>
     </div>
   </div>
@@ -177,10 +208,12 @@
     <div class="card">
       <div class="verdict" id="settingsTitle">Settings</div>
       <div class="meta" id="settingsHint" style="margin-bottom:6px"></div>
-      <label id="langLabel">Language / ಭಾಷೆ</label>
+      <label id="langLabel">Language / ಭಾಷೆ / भाषा / বাংলা</label>
       <select id="setLang" style="width:100%;background:#131417;color:#f2f2f4;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit">
         <option value="en">English</option>
         <option value="kn">ಕನ್ನಡ</option>
+        <option value="mr">मराठी</option>
+        <option value="bn">বাংলা</option>
       </select>
       <label id="providerLabel">Vision provider</label>
       <select id="setProvider">
@@ -197,12 +230,23 @@
       <label id="detailLabel">Image detail</label>
       <select id="setDetail"></select>
       <div class="meta" id="accuracyNote"></div>
+      <label id="captureSourceLabel" for="setCaptureSource">Drive video source</label>
+      <select id="setCaptureSource">
+        <option id="phoneCameraOption" value="phone_camera">Phone camera</option>
+        <option id="dashcamOption" value="dashcam">Dashcam</option>
+      </select>
+      <div class="meta" id="captureSourceNote">The selected source is used the next time Drive starts.</div>
+      <div id="dashcamSettings" class="hidden">
+        <label id="dashcamRtspLabel" for="setDashcamRtspUrl">Dashcam RTSP URL</label>
+        <input type="password" id="setDashcamRtspUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="dashcamRtspNote" placeholder="rtsp://192.168.1.1:554/live">
+        <div class="meta" id="dashcamRtspNote" aria-live="polite">Connect this phone to the dashcam's Wi-Fi. Drive uses this phone's GPS, but not its camera or audio. H.264 RTSP over TCP is supported. Local RTSP is normally unencrypted, so use only a trusted dashcam Wi-Fi. The address and any credentials are obscured here and saved only on this device.</div>
+      </div>
       <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-size:13px;color:#f2f2f4">
         <input type="checkbox" id="setDebug" style="width:18px;height:18px;accent-color:var(--accent)">
         <span id="debugLabel">Debug mode: keep the drive video after analysing it</span>
       </label>
       <div class="meta" id="debugNote"></div>
-      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:#f2f2f4">
+      <label id="recordSetting" style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:#f2f2f4">
         <input type="checkbox" id="setRecord" style="width:18px;height:18px;accent-color:var(--accent)">
         <span id="recordLabel">Record video during a drive</span>
       </label>
@@ -234,7 +278,7 @@
 
   <div id="dataConsent" class="hidden">
     <div class="card">
-      <div class="verdict" id="privacyTitle">Before camera and location access</div>
+      <div class="verdict" id="privacyTitle">Before capture and location access</div>
       <p class="meta" id="privacyBody" style="font-size:13px;line-height:1.5;margin-top:8px"></p>
       <p class="meta" id="privacyLocal" style="font-size:13px;line-height:1.5;margin-top:10px"></p>
       <p class="meta" id="privacyGovernment" style="font-size:13px;line-height:1.5;margin-top:10px"></p>
@@ -288,7 +332,7 @@ for (const detail of LLM_UI_CONFIG.allowedImageDetails) {
   $("setDetail").appendChild(option);
 }
 
-// ---------- i18n (English / Kannada) ----------
+// ---------- i18n (English / Kannada / Marathi) ----------
 const I18N = {
   en: {
     sub: "Capture it. Verify the damage. Email the responsible authority.",
@@ -362,6 +406,10 @@ const I18N = {
     email_waiting_dedupe: "Waiting for the shared-map duplicate check before email is enabled.",
     seen_count: "{n} sightings across devices",
     no_location: "The location could not be determined.",
+    location_uncertain: "GPS is not accurate enough to choose an authority.",
+    location_uncertain_help: "Road damage was confirmed, but the frame location is not accurate enough to choose a recipient. Retake it with a fresh GPS fix; for an uncalibrated dashcam stream, use Phone camera when automatic authority and tender routing is required. This report was saved without a recipient.",
+    jurisdiction_unavailable: "Verified routing data could not be downloaded or read.",
+    jurisdiction_unavailable_help: "Road damage was confirmed, but the app will not guess a civic authority without its verified state pack. Check the connection and try again; this report was saved without a recipient.",
     road_unknown: "Could not check who owns this road",
     road_unknown_help: "The app could not reach the state road network to check whether this is a national, state, or district highway, so it will not name a city officer for a road that may not be theirs. Try again when you have a signal.",
     nat_highway: "{road} is a national highway",
@@ -375,10 +423,24 @@ const I18N = {
     no_address: "No published address for {body}.",
     no_address_help: "Road damage was confirmed and the responsible local body identified, but the app holds no official email for it and will not guess one. The photo and location are saved; the address can be added to the directory.",
     no_location_help: "Road damage was confirmed, but without a GPS fix the app cannot tell which corporation is responsible, so it will not address a complaint. The photo is saved.",
+    civic_no_location_help: "The issue was saved, but without a GPS fix the app cannot choose a civic authority. Retake the photo with location switched on.",
+    civic_location_uncertain_help: "The issue was saved, but the GPS accuracy could cross a civic boundary. Retake it with a fresh, more accurate fix.",
+    civic_jurisdiction_unavailable_help: "The issue was saved, but verified civic-routing data could not be read. Check the connection and try again; the app will not guess an authority.",
+    civic_rural: "This location is in {body} gram panchayat, outside supported urban coverage.",
+    civic_rural_help: "The issue and location are saved, but this app does not yet hold a verified complaint route for that rural body.",
+    civic_no_address_help: "The civic body was identified, but the app holds no verified complaint address for it and will not guess one. The photo and location are saved.",
+    civic_unsupported: "No verified {type} channel for {body}.",
+    civic_unsupported_help: "The issue and evidence are saved, but this app has not verified that the suggested recipient accepts this category, so it will not open or address a complaint to a guess.",
+    civic_outside_coverage_help: "This point is outside India's verified State/UT boundaries, or exact routing data is unavailable. The photo and location are saved without a recipient.",
+    retry_routing_btn: "Retry routing",
+    retry_routing_unchanged: "Routing is still unavailable. The original photo and location remain saved; try again when the connection or routing data is available.",
+    confirm_import_location: "This browser may have returned an existing photo. Attach your current GPS location only if the photo shows the place where you are now.",
+    capture_provenance_camera: "Taken now with the app camera",
+    capture_provenance_import: "Selected/imported photo · original capture time not verified",
     review_btn: "Review and label frames", export_btn: "Export labelled dataset",
     dash_btn: "&#128506;&#65039; &nbsp;Public pothole map", dash_title: "Your contribution",
     dash_range: "{days} of reporting · first on {first}",
-    dash_empty: "No road damage reported yet. Your map fills up as you drive.",
+    dash_empty: "No reports yet. Your map fills up as you report issues or drive.",
     day_one: "1 day", day_many: "{n} days",
     stat_found: "damage events found", stat_reported: "email drafts opened", stat_frames: "events checked",
     stat_drives: "drives", stat_footage: "MB of footage", stat_km: "km of road covered",
@@ -438,10 +500,10 @@ const I18N = {
     lbl_rut: "Rut / depression", lbl_no: "Undamaged", lbl_skip: "Skip", lbl_done: "Done",
     review_empty: "Nothing left to label. Drive with debug mode on to collect frames.",
     review_progress: "{n} left to label · {done} labelled so far",
-    model_said: "The app said: {verdict} · {assessment}",
+    model_said: "The app said: {verdict}",
     export_ready: "{n} labelled frames, {mb} MB. Choose where to send it.",
     outside_coverage: "This location is outside the area this app covers.",
-    outside_coverage_help: "This point is outside Karnataka, and the officer directory only covers Karnataka local bodies, so there is no authority this app can correctly address. The photo and location are saved.",
+    outside_coverage_help: "This point is outside India's verified State/UT and mapped National Highway coverage, or exact routing data is unavailable. The photo and location are saved without a recipient.",
     size_small: "small", size_medium: "medium", size_large: "large",
     damage_pothole_cavity: "pothole cavity", damage_failed_patch: "failed road repair",
     damage_surface_breakup: "broken road surface", damage_rut_or_depression: "road rut / depression",
@@ -555,6 +617,10 @@ const I18N = {
     email_waiting_dedupe: "ಇಮೇಲ್ ಸಕ್ರಿಯವಾಗುವ ಮೊದಲು ಹಂಚಿದ ನಕ್ಷೆಯ ನಕಲಿ ವರದಿ ಪರಿಶೀಲನೆಗಾಗಿ ಕಾಯಲಾಗುತ್ತಿದೆ.",
     seen_count: "ಸಾಧನಗಳಾದ್ಯಂತ {n} ವೀಕ್ಷಣೆಗಳು",
     no_location: "ಸ್ಥಳ ಪತ್ತೆಯಾಗಲಿಲ್ಲ.",
+    location_uncertain: "ಅಧಿಕಾರಿಯನ್ನು ಆಯ್ಕೆ ಮಾಡಲು GPS ಸಾಕಷ್ಟು ನಿಖರವಾಗಿಲ್ಲ.",
+    location_uncertain_help: "ರಸ್ತೆ ಹಾನಿ ದೃಢಪಟ್ಟಿದೆ, ಆದರೆ ಸ್ವೀಕರಿಸುವವರನ್ನು ಆಯ್ಕೆ ಮಾಡಲು ಫ್ರೇಮ್ ಸ್ಥಳ ಸಾಕಷ್ಟು ನಿಖರವಾಗಿಲ್ಲ. ಹೊಸ GPS ಸ್ಥಳದೊಂದಿಗೆ ಮತ್ತೆ ಸೆರೆಹಿಡಿಯಿರಿ; ಕ್ಯಾಲಿಬ್ರೇಟ್ ಮಾಡದ ಡ್ಯಾಶ್‌ಕ್ಯಾಮ್‌ಗೆ ಸ್ವಯಂ ಪ್ರಾಧಿಕಾರ ಮತ್ತು ಟೆಂಡರ್ ಮಾರ್ಗ ಬೇಕಾದರೆ ಫೋನ್ ಕ್ಯಾಮೆರಾ ಬಳಸಿ. ಈ ವರದಿ ಸ್ವೀಕರಿಸುವವರಿಲ್ಲದೆ ಉಳಿಸಲಾಗಿದೆ.",
+    jurisdiction_unavailable: "ಪರಿಶೀಲಿತ ರೂಟಿಂಗ್ ಡೇಟಾವನ್ನು ಡೌನ್‌ಲೋಡ್ ಮಾಡಲು ಅಥವಾ ಓದಲು ಆಗಲಿಲ್ಲ.",
+    jurisdiction_unavailable_help: "ಪರಿಶೀಲಿತ ರಾಜ್ಯ ಪ್ಯಾಕ್ ಇಲ್ಲದೆ ಆ್ಯಪ್ ಯಾವುದೇ ನಾಗರಿಕ ಸಂಸ್ಥೆಯನ್ನು ಊಹಿಸುವುದಿಲ್ಲ. ಸಂಪರ್ಕ ಪರಿಶೀಲಿಸಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ; ವರದಿ ಸ್ವೀಕರಿಸುವವರಿಲ್ಲದೆ ಉಳಿಸಲಾಗಿದೆ.",
     road_unknown: "ಈ ರಸ್ತೆ ಯಾರ ವ್ಯಾಪ್ತಿಗೆ ಬರುತ್ತದೆ ಎಂದು ಪರಿಶೀಲಿಸಲಾಗಲಿಲ್ಲ",
     road_unknown_help: "ಇದು ರಾಷ್ಟ್ರೀಯ, ರಾಜ್ಯ ಅಥವಾ ಜಿಲ್ಲಾ ಹೆದ್ದಾರಿಯೇ ಎಂದು ಪರಿಶೀಲಿಸಲು ರಾಜ್ಯ ರಸ್ತೆ ಜಾಲವನ್ನು ತಲುಪಲಾಗಲಿಲ್ಲ. ಆದ್ದರಿಂದ ಬೇರೆಯವರ ರಸ್ತೆಗೆ ನಗರ ಅಧಿಕಾರಿಯ ಹೆಸರು ಸೂಚಿಸುವುದಿಲ್ಲ. ಸಿಗ್ನಲ್ ಬಂದ ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.",
     nat_highway: "{road} ಒಂದು ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿ",
@@ -568,10 +634,24 @@ const I18N = {
     no_address: "{body} ಗೆ ಪ್ರಕಟಿತ ವಿಳಾಸ ಇಲ್ಲ.",
     no_address_help: "ಗುಂಡಿ ದೃಢಪಟ್ಟಿದೆ ಮತ್ತು ಜವಾಬ್ದಾರ ಸಂಸ್ಥೆ ಗುರುತಿಸಲಾಗಿದೆ, ಆದರೆ ಅದರ ಅಧಿಕೃತ ಇಮೇಲ್ ಆ್ಯಪ್‌ನಲ್ಲಿ ಇಲ್ಲ, ಮತ್ತು ಊಹಿಸುವುದಿಲ್ಲ. ಫೋಟೋ ಉಳಿಸಲಾಗಿದೆ.",
     no_location_help: "ಗುಂಡಿ ದೃಢಪಟ್ಟಿದೆ, ಆದರೆ GPS ಇಲ್ಲದೆ ಯಾವ ಪಾಲಿಕೆ ಜವಾಬ್ದಾರಿ ಎಂದು ತಿಳಿಯದು, ಆದ್ದರಿಂದ ದೂರು ಸಿದ್ಧಪಡಿಸಿಲ್ಲ. ಫೋಟೋ ಉಳಿಸಲಾಗಿದೆ.",
+    civic_no_location_help: "ಸಮಸ್ಯೆಯನ್ನು ಉಳಿಸಲಾಗಿದೆ, ಆದರೆ GPS ಸ್ಥಳವಿಲ್ಲದೆ ನಾಗರಿಕ ಸಂಸ್ಥೆಯನ್ನು ಆಯ್ಕೆ ಮಾಡಲಾಗುವುದಿಲ್ಲ. ಸ್ಥಳವನ್ನು ಆನ್ ಮಾಡಿ ಮತ್ತೆ ಫೋಟೋ ತೆಗೆಯಿರಿ.",
+    civic_location_uncertain_help: "ಸಮಸ್ಯೆಯನ್ನು ಉಳಿಸಲಾಗಿದೆ, ಆದರೆ GPS ನಿಖರತೆ ನಾಗರಿಕ ಗಡಿಯನ್ನು ದಾಟಬಹುದು. ಹೆಚ್ಚು ನಿಖರವಾದ ಹೊಸ ಸ್ಥಳದೊಂದಿಗೆ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.",
+    civic_jurisdiction_unavailable_help: "ಸಮಸ್ಯೆಯನ್ನು ಉಳಿಸಲಾಗಿದೆ, ಆದರೆ ಪರಿಶೀಲಿತ ನಾಗರಿಕ ರೂಟಿಂಗ್ ಡೇಟಾವನ್ನು ಓದಲು ಆಗಲಿಲ್ಲ. ಸಂಪರ್ಕ ಪರಿಶೀಲಿಸಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ; ಆ್ಯಪ್ ಸಂಸ್ಥೆಯನ್ನು ಊಹಿಸುವುದಿಲ್ಲ.",
+    civic_rural: "ಈ ಸ್ಥಳ {body} ಗ್ರಾಮ ಪಂಚಾಯತ್‌ನಲ್ಲಿದೆ ಮತ್ತು ಬೆಂಬಲಿತ ನಗರ ವ್ಯಾಪ್ತಿಯ ಹೊರಗಿದೆ.",
+    civic_rural_help: "ಸಮಸ್ಯೆ ಮತ್ತು ಸ್ಥಳವನ್ನು ಉಳಿಸಲಾಗಿದೆ, ಆದರೆ ಈ ಗ್ರಾಮೀಣ ಸಂಸ್ಥೆಗೆ ಪರಿಶೀಲಿತ ದೂರು ಮಾರ್ಗ ಇನ್ನೂ ಲಭ್ಯವಿಲ್ಲ.",
+    civic_no_address_help: "ನಾಗರಿಕ ಸಂಸ್ಥೆಯನ್ನು ಗುರುತಿಸಲಾಗಿದೆ, ಆದರೆ ಅದರ ಪರಿಶೀಲಿತ ದೂರು ವಿಳಾಸ ಆ್ಯಪ್‌ನಲ್ಲಿ ಇಲ್ಲ ಮತ್ತು ಆ್ಯಪ್ ಊಹಿಸುವುದಿಲ್ಲ. ಫೋಟೋ ಮತ್ತು ಸ್ಥಳ ಉಳಿಸಲಾಗಿದೆ.",
+    civic_unsupported: "{body} ಗೆ ಪರಿಶೀಲಿತ {type} ದೂರು ಮಾರ್ಗ ಇಲ್ಲ.",
+    civic_unsupported_help: "ಸಮಸ್ಯೆ ಮತ್ತು ಸಾಕ್ಷಿ ಉಳಿಸಲಾಗಿದೆ, ಆದರೆ ಸೂಚಿಸಿದ ಸ್ವೀಕರಿಸುವವರು ಈ ವರ್ಗವನ್ನು ಸ್ವೀಕರಿಸುತ್ತಾರೆ ಎಂಬುದು ಪರಿಶೀಲಿತವಾಗಿಲ್ಲ; ಆ್ಯಪ್ ಊಹಿಸಿ ದೂರು ತೆರೆಯುವುದಿಲ್ಲ.",
+    civic_outside_coverage_help: "ಈ ಸ್ಥಳವು ಭಾರತದ ಪರಿಶೀಲಿತ ರಾಜ್ಯ/ಕೇಂದ್ರಾಡಳಿತ ಪ್ರದೇಶದ ಗಡಿಯ ಹೊರಗಿದೆ ಅಥವಾ ನಿಖರ ಮಾರ್ಗದರ್ಶನ ದತ್ತಾಂಶ ಲಭ್ಯವಿಲ್ಲ. ಫೋಟೋ ಮತ್ತು ಸ್ಥಳವನ್ನು ಸ್ವೀಕರಿಸುವವರಿಲ್ಲದೆ ಉಳಿಸಲಾಗಿದೆ.",
+    retry_routing_btn: "ಮಾರ್ಗವನ್ನು ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ",
+    retry_routing_unchanged: "ಮಾರ್ಗ ಇನ್ನೂ ಲಭ್ಯವಿಲ್ಲ. ಮೂಲ ಚಿತ್ರ ಮತ್ತು ಸ್ಥಳ ಉಳಿದಿವೆ; ಸಂಪರ್ಕ ಅಥವಾ ಮಾರ್ಗ ಮಾಹಿತಿ ಲಭ್ಯವಾದಾಗ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.",
+    confirm_import_location: "ಈ ಬ್ರೌಸರ್ ಹಳೆಯ ಚಿತ್ರವನ್ನು ಆಯ್ಕೆ ಮಾಡಿರಬಹುದು. ಚಿತ್ರವು ನೀವು ಈಗಿರುವ ಸ್ಥಳವನ್ನೇ ತೋರಿಸಿದರೆ ಮಾತ್ರ ಪ್ರಸ್ತುತ GPS ಸ್ಥಳವನ್ನು ಜೋಡಿಸಿ.",
+    capture_provenance_camera: "ಆ್ಯಪ್ ಕ್ಯಾಮೆರಾದಿಂದ ಈಗ ತೆಗೆದದ್ದು",
+    capture_provenance_import: "ಆಯ್ಕೆ/ಆಮದು ಮಾಡಿದ ಚಿತ್ರ · ಮೂಲ ಸೆರೆ ಸಮಯ ಪರಿಶೀಲಿಸಲಾಗಿಲ್ಲ",
     review_btn: "ಫ್ರೇಮ್‌ಗಳನ್ನು ಪರಿಶೀಲಿಸಿ ಮತ್ತು ಗುರುತಿಸಿ", export_btn: "ಗುರುತಿಸಿದ ಡೇಟಾಸೆಟ್ ರಫ್ತು ಮಾಡಿ",
     dash_btn: "&#128506;&#65039; &nbsp;ಸಾರ್ವಜನಿಕ ರಸ್ತೆ ಗುಂಡಿ ನಕ್ಷೆ", dash_title: "ನಿಮ್ಮ ಕೊಡುಗೆ",
     dash_range: "{days} ವರದಿ · ಮೊದಲನೆಯದು {first}",
-    dash_empty: "ಇನ್ನೂ ಗುಂಡಿಗಳ ವರದಿ ಇಲ್ಲ. ಡ್ರೈವ್ ಮಾಡಿದಂತೆ ನಕ್ಷೆ ತುಂಬುತ್ತದೆ.",
+    dash_empty: "ಇನ್ನೂ ವರದಿಗಳಿಲ್ಲ. ಸಮಸ್ಯೆಗಳನ್ನು ವರದಿ ಮಾಡಿದಂತೆ ಅಥವಾ ಡ್ರೈವ್ ಮಾಡಿದಂತೆ ನಕ್ಷೆ ತುಂಬುತ್ತದೆ.",
     day_one: "1 ದಿನ", day_many: "{n} ದಿನಗಳು",
     stat_found: "ಗುಂಡಿಗಳು ಪತ್ತೆ", stat_reported: "ತೆರೆದ ಇಮೇಲ್ ಕರಡುಗಳು", stat_frames: "ಫ್ರೇಮ್ ಪರಿಶೀಲನೆ",
     stat_drives: "ಡ್ರೈವ್‌ಗಳು", stat_footage: "MB ವಿಡಿಯೋ", stat_km: "ಕಿಮೀ ರಸ್ತೆ",
@@ -631,10 +711,10 @@ const I18N = {
     lbl_rut: "ರಸ್ತೆ ಕುಸಿತ", lbl_no: "ಹಾನಿ ಇಲ್ಲ", lbl_skip: "ಬಿಟ್ಟುಬಿಡಿ", lbl_done: "ಮುಗಿಯಿತು",
     review_empty: "ಗುರುತಿಸಲು ಏನೂ ಉಳಿದಿಲ್ಲ. ಡೀಬಗ್ ಮೋಡ್ ಆನ್ ಮಾಡಿ ಡ್ರೈವ್ ಮಾಡಿ.",
     review_progress: "{n} ಬಾಕಿ · {done} ಗುರುತಿಸಲಾಗಿದೆ",
-    model_said: "ಆ್ಯಪ್ ಹೇಳಿದ್ದು: {verdict} · {assessment}",
+    model_said: "ಆ್ಯಪ್ ಹೇಳಿದ್ದು: {verdict}",
     export_ready: "{n} ಗುರುತಿಸಿದ ಫ್ರೇಮ್‌ಗಳು, {mb} MB. ಎಲ್ಲಿಗೆ ಕಳುಹಿಸಬೇಕೆಂದು ಆಯ್ಕೆಮಾಡಿ.",
     outside_coverage: "ಈ ಸ್ಥಳ ಈ ಆ್ಯಪ್ ಒಳಗೊಂಡ ವ್ಯಾಪ್ತಿಯ ಹೊರಗಿದೆ.",
-    outside_coverage_help: "ಈ ಸ್ಥಳ ಕರ್ನಾಟಕದ ಹೊರಗಿದೆ. ಅಧಿಕಾರಿಗಳ ಪಟ್ಟಿ ಕರ್ನಾಟಕದ ಸ್ಥಳೀಯ ಸಂಸ್ಥೆಗಳಿಗೆ ಮಾತ್ರ ಸೀಮಿತವಾಗಿದೆ. ಆದ್ದರಿಂದ ಸರಿಯಾದ ಅಧಿಕಾರಿಯನ್ನು ಸೂಚಿಸಲು ಸಾಧ್ಯವಿಲ್ಲ. ಫೋಟೋ ಮತ್ತು ಸ್ಥಳ ಉಳಿಸಲಾಗಿದೆ.",
+    outside_coverage_help: "ಈ ಸ್ಥಳವು ಭಾರತದ ಪರಿಶೀಲಿತ ರಾಜ್ಯ/ಕೇಂದ್ರಾಡಳಿತ ಪ್ರದೇಶ ಮತ್ತು ನಕ್ಷೆಗೊಂಡ ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿ ವ್ಯಾಪ್ತಿಯ ಹೊರಗಿದೆ ಅಥವಾ ನಿಖರ ಮಾರ್ಗದರ್ಶನ ದತ್ತಾಂಶ ಲಭ್ಯವಿಲ್ಲ. ಫೋಟೋ ಮತ್ತು ಸ್ಥಳವನ್ನು ಸ್ವೀಕರಿಸುವವರಿಲ್ಲದೆ ಉಳಿಸಲಾಗಿದೆ.",
     size_small: "ಸಣ್ಣ", size_medium: "ಮಧ್ಯಮ", size_large: "ದೊಡ್ಡ",
     damage_pothole_cavity: "ರಸ್ತೆ ಗುಂಡಿ", damage_failed_patch: "ವಿಫಲವಾದ ರಸ್ತೆ ದುರಸ್ತಿ",
     damage_surface_breakup: "ಹಾಳಾದ ರಸ್ತೆ ಮೇಲ್ಮೈ", damage_rut_or_depression: "ರಸ್ತೆ ಕುಸಿತ",
@@ -648,7 +728,6 @@ const I18N = {
     early_no: "ಈ ಫೋಟೋದಲ್ಲಿ ರಸ್ತೆ ಹಾನಿ ಇಲ್ಲ.",
     verdict_sent: "ಇಮೇಲ್ ಕರಡು ತೆರೆಯಲಾಗಿದೆ. ಕಳುಹಿಸದೆ ಮುಚ್ಚಿದ್ದರೆ ಇಮೇಲ್ ದೂರು ಅನ್ನು ಮತ್ತೆ ಒತ್ತಿ.",
     verdict_queued: "ನಿಮ್ಮ ಇಮೇಲ್ ಆ್ಯಪ್‌ನಲ್ಲಿ ತೆರೆಯಲಾಗಿದೆ. ಕಳುಹಿಸಿಲ್ಲದಿದ್ದರೆ ತಿದ್ದಿ ಮತ್ತೆ ತೆರೆಯಿರಿ.",
-    confidence: "ವಿಶ್ವಾಸ",
     email_subject_label: "ಇಮೇಲ್ ವಿಷಯ",
     email_body_label: "ಇಮೇಲ್ ಪಠ್ಯ (ಕಳುಹಿಸುವ ಮೊದಲು ಪರಿಶೀಲಿಸಿ)",
     routes_to: "ಯಾರಿಗೆ:",
@@ -675,6 +754,401 @@ const I18N = {
     camera_failed: "ಕ್ಯಾಮೆರಾ ಪ್ರವೇಶ ವಿಫಲ: ",
     drive_stopped: "ಡ್ರೈವ್ ಮೋಡ್ ನಿಂತಿದೆ: ",
     the_officer: "ಸಂಬಂಧಿತ ಅಧಿಕಾರಿ",
+  },
+  mr: {
+    sub: "फोटो घ्या. समस्या पडताळा. सुचवलेल्या कार्यालयासाठी तक्रारीचा मसुदा तयार करा.",
+    report_btn: "&#128247; &nbsp;फोटो",
+    issue_picker_title: "तक्रार",
+    issue_picker_hint: "सुरक्षितपणे थांबल्यावर समस्या निवडा आणि स्पष्ट फोटो घ्या.",
+    issue_road: "खड्डा", issue_garbage: "कचरा", issue_open_manhole: "मॅनहोल",
+    issue_road_damage: "खड्डा", issue_garbage_label: "कचरा",
+    issue_open_manhole_label: "उघडे / खराब मॅनहोल",
+    verdict_civic_prepared: "तुमच्या फोटोवरून {type} तक्रार तयार केली",
+    drive_btn: "&#128663; &nbsp;ड्राइव्ह",
+    your_reports: "तुमचे अहवाल",
+    no_reports: "अजून कोणतेही अहवाल नाहीत.",
+    banner_setup: "फोटो आणि ड्राइव्ह वापरण्यासाठी OpenAI API की जोडा.",
+    settings_title: "सेटिंग्ज",
+    key_label: "OpenAI API की (येथे जतन होते; विनंतीचे प्रमाणीकरण करण्यासाठी OpenAI कडे पाठवली जाते)",
+    name_label: "तुमचे नाव (तक्रारीच्या ईमेलमध्ये वापरले जाईल)",
+    name_placeholder: "ईमेलसाठी वापरायचे नाव",
+    model_label: "फोटो मॉडेल",
+    detail_label: "फोटो तपशील",
+    accuracy_note: "Drive gpt-5.6/high वापरते; हे पर्याय फक्त Photo साठी आहेत.",
+    capture_source_label: "ड्राइव्ह व्हिडिओ स्रोत",
+    phone_camera_option: "फोन कॅमेरा",
+    dashcam_option: "डॅशकॅम",
+    capture_source_note: "निवडलेला स्रोत पुढील ड्राइव्ह सुरू झाल्यावर वापरला जाईल.",
+    dashcam_capture_source_note: "निवडलेला स्रोत पुढील ड्राइव्हमध्ये वापरला जाईल. डॅशकॅम व्हिडिओचे थेट विश्लेषण होते. RTSP सेन्सरची प्रत्यक्ष कॅप्चर वेळ देत नसल्यामुळे, कॅलिब्रेशन नसलेल्या डॅशकॅम तपासणीचा पुरावा जतन होतो; संस्था, टेंडर किंवा दुरुस्ती तपासणीचे स्वयंचलित routing होत नाही. ऐच्छिक स्थानिक रेकॉर्डिंग फक्त फोन कॅमेरासाठी उपलब्ध आहे.",
+    dashcam_rtsp_label: "डॅशकॅम RTSP URL",
+    dashcam_rtsp_note: "हा फोन डॅशकॅमच्या Wi-Fi ला जोडा. Drive या फोनचा GPS वापरते, पण कॅमेरा किंवा ऑडिओ वापरत नाही. फक्त TCP वर H.264 RTSP समर्थित आहे. स्थानिक RTSP सहसा एन्क्रिप्ट केलेले नसते; फक्त विश्वासार्ह डॅशकॅम Wi-Fi वापरा. क्रेडेन्शियल्ससह पत्ता येथे लपवला जातो आणि फक्त या डिव्हाइसवर जतन होतो.",
+    dashcam_rtsp_invalid: "पूर्ण rtsp:// पत्ता द्या, उदाहरणार्थ rtsp://192.168.1.1:554/live.",
+    dashcam_native_only: "डॅशकॅम इनपुट Android अॅपमध्ये उपलब्ध आहे. या ब्राउझरमध्ये फोन कॅमेरा निवडा.",
+    debug_label: "डीबग मोड: विश्लेषणानंतरही ड्राइव्हचा व्हिडिओ जतन करा",
+    settings_note: "खड्ड्यांचे फोटो आणि व्हिडिओतील फ्रेम्स तपासणीसाठी OpenAI कडे पाठवल्या जातात; त्यात वाहन क्रमांक किंवा चेहरे असू शकतात. अचूक स्थान OpenStreetMap/Nominatim कडे पाठवले जाते; कर्नाटकासाठी Karnataka GIS आणि हैदराबादसाठी Telangana GIS वापरले जाते. पडताळलेला राज्य pack किंवा 2° राष्ट्रीय महामार्ग tile GitHub Pages वरून डाउनलोड होऊन या साधनावर जतन होतो; त्या विनंतीत राज्य किंवा अंदाजे tile व सामान्य कनेक्शन माहिती दिसते, अचूक स्थान नाही. API की फक्त OpenAI कडे जाते. अॅप तक्रार आपोआप सादर करत नाही.",
+    independent_note: "हे स्वतंत्र, अनधिकृत अॅप आहे. कोणत्याही सरकारी संस्थेशी संलग्न नाही किंवा तिची मान्यता नाही. सुचवलेले कार्यालय पाठवण्यापूर्वी तपासा.",
+    privacy_title: "कॅप्चर आणि स्थान वापरण्यापूर्वी",
+    privacy_permission: "अॅप अचूक स्थानाची आणि Phone camera निवडले असेल तेव्हाच कॅमेऱ्याची परवानगी मागते.",
+    privacy_source: "Drive Mode ऑडिओ वापरत नाही. ते या फोनचा कॅमेरा किंवा तुम्ही कॉन्फिगर केलेला dashcam RTSP stream, आणि या फोनचे स्थान—Maps किंवा कॉल स्क्रीन समोर असतानाही—पार्श्वभूमीत वापरते.",
+    privacy_body: "पुढे गेल्यास अॅप कॅमेरा आणि अचूक स्थान वापरण्याची परवानगी मागेल. ड्राइव्ह मोड सुरू असताना, अॅप दिसत नसले किंवा वापरात नसले—Maps किंवा कॉल स्क्रीन समोर असली तरी—रस्त्याच्या नुकसानीला स्थान व मार्ग देण्यासाठी अचूक स्थान गोळा केले जाते. खड्ड्यांचे फोटो किंवा ड्राइव्ह मोडमधील निवडक फ्रेम्स API कीसह OpenAI कडे पाठवल्या जातात. नंतरच्या अचूक लाइव्ह-ड्राइव्ह पुनर्भेटीत, जतन केलेला जुना नुकसान फोटो आणि सध्याची दृश्ये दुरुस्ती पडताळणीसाठी OpenAI कडे एकत्र पाठवली जाऊ शकतात. अचूक स्थान OpenStreetMap/Nominatim कडे जाते; कर्नाटकासाठी Karnataka GIS आणि हैदराबादसाठी Telangana GIS वापरले जाते. आवश्यक राज्य routing pack GitHub Pages वरून डाउनलोड होतो. प्रक्रिया भारताबाहेर होऊ शकते.",
+    privacy_local: "ड्राइव्ह मोडमध्ये ऑडिओ वापरला जात नाही. ड्राइव्ह मोड सक्रिय असताना, हे अॅप दिसत नसताना किंवा तुम्ही ते वापरत नसतानाही—Google Maps किंवा कॉल स्क्रीन समोर असली तरी—Android कॅमेरा आणि स्थान पार्श्वभूमीत वापरते. दिसणारी कायमची foreground-service सूचना हा वापर नेहमी दाखवते; अॅप किंवा सूचनेतून विराम द्या किंवा थांबवा. ड्राइव्ह मोड लाइव्ह विश्लेषणापूर्वी विरळ 720p पुरावा फ्रेम्स स्वतंत्रपणे अॅपच्या खाजगी साठवणीत ठेवतो, त्यामुळे खंडित किंवा ऑफलाइन कामाचे ड्राइव्हनंतर विश्लेषण करता येते. ऐच्छिक मूक व्हिडिओ डीफॉल्टने बंद असतो. अहवाल, फोटो, दुरुस्ती पुरावा, प्रत्यक्ष रस्त्याची स्थिती, व्हिडिओ, स्थान मार्ग, सेटिंग्ज, पडताळलेले राज्य packs आणि महामार्ग tiles हटवेपर्यंत साधनावर राहतात. प्रत्यक्ष रस्त्याची स्थिती अधिकृत तक्रार स्थितीपासून स्वतंत्रपणे नोंदवली जाते.",
+    privacy_government: "हे स्वतंत्र अॅप सरकारी सेवा नाही आणि तक्रार आपोआप सादर करत नाही. GitHub Pages ला तुमचा IP, वेळ, user agent आणि मागितलेला राज्य-pack किंवा 2° महामार्ग-tile मार्ग मिळतो; त्यामुळे राज्य किंवा अंदाजे tile समजू शकते, अचूक स्थान, फोटो किंवा अहवालाचा मजकूर नाही. वर सांगितल्याप्रमाणे कार्यक्षेत्र तपासण्यासाठी स्थान सरकारी GIS कडे जाऊ शकते. तुम्ही जाणीवपूर्वक handoff उघडता किंवा पूर्ण करता तेव्हाच तक्रारीचा मजकूर आणि फोटो अधिकृत तक्रार सेवेकडे जातात.",
+    privacy_link: "गोपनीयता धोरण", sources_link: "डेटा स्रोत आणि मर्यादा",
+    privacy_accept: "पुढे जा", privacy_decline: "आत्ता नको",
+    wipe_btn: "अॅपचा सर्व डेटा हटवा",
+    welcome_hint: "फोटो आणि ड्राइव्ह वापरण्यासाठी OpenAI API की जोडा. की या साधनावर जतन होते आणि फक्त विनंतीच्या प्रमाणीकरणासाठी OpenAI कडे जाते.",
+    key_required: "पुढे जाण्यासाठी OpenAI API की जोडा.",
+    back: "मागे", save: "जतन करा", discard: "रद्द करा", del: "हटवा", email_btn: "ईमेल",
+    stop: "&#9632; थांबवा", working: "प्रक्रिया सुरू आहे...",
+    chip_draft: "मसुदा", chip_sent: "सादर केल्याची नोंद", chip_queued: "ईमेलमध्ये उघडले",
+    chip_queued_bmc: "BMC माध्यम उघडले", chip_rejected: "खड्डा: नाही",
+    chip_review: "पुनर्तपासणी आवश्यक", chip_unrouted: "मार्ग निश्चित नाही",
+    chip_fixed: "दुरुस्त", chip_repair_review: "दुरुस्तीची तपासणी आवश्यक",
+    verdict_fixed: "नंतरच्या ड्राइव्हमध्ये दुरुस्ती झाल्याची पडताळणी",
+    verdict_repair_review: "संभाव्य दुरुस्ती आढळली — दोन्ही फोटो तुलना करा",
+    repair_evidence_label: "नंतरची पुनर्भेट",
+    repair_review_help: "अॅपला त्याच ठिकाणी पूर्ण दुरुस्ती झाल्याची शक्यता आढळली, पण ती आपोआप दुरुस्त म्हणून चिन्हांकित केलेली नाही. जुन्या खड्ड्याचा भाग अखंड दुरुस्ती सामग्रीने स्पष्टपणे झाकलेला असेल तरच पुष्टी करा.",
+    fixed_local_note: "ही फक्त प्रत्यक्ष स्थिती आहे; अधिकृत तक्रार बंद झाल्याचा दावा नाही. आधीची सबमिशन स्थिती बदलत नाही.",
+    fixed_action_blocked: "हा खड्डा दुरुस्त झाल्याची पडताळणी झाली आहे, त्यामुळे जुनी तक्रार पुन्हा दाखल करता येणार नाही.",
+    confirm_fixed_btn: "दुरुस्तीची पुष्टी करा", reopen_btn: "पुन्हा उघडे म्हणून चिन्हांकित करा",
+    stat_fixed: "पडताळलेली दुरुस्ती",
+    no_location: "स्थान निश्चित करता आले नाही.",
+    location_uncertain: "संस्था निवडण्यासाठी GPS स्थान पुरेसे अचूक नाही.",
+    location_uncertain_help: "रस्त्याचे नुकसान निश्चित झाले, पण प्राप्तकर्ता निवडण्यासाठी फ्रेमचे स्थान पुरेसे अचूक नाही. नवीन GPS fix घेऊन पुन्हा फोटो घ्या; कॅलिब्रेशन नसलेल्या डॅशकॅमसाठी स्वयंचलित संस्था आणि टेंडर routing हवे असल्यास फोन कॅमेरा वापरा. हा अहवाल प्राप्तकर्त्याशिवाय जतन केला आहे.",
+    jurisdiction_unavailable: "पडताळलेला routing डेटा डाउनलोड किंवा वाचता आला नाही.",
+    jurisdiction_unavailable_help: "पडताळलेल्या राज्य pack शिवाय अॅप कोणतीही नागरी संस्था अंदाजाने निवडणार नाही. कनेक्शन तपासून पुन्हा प्रयत्न करा; अहवाल प्राप्तकर्त्याशिवाय जतन केला आहे.",
+    road_unknown: "हा रस्ता कोणाच्या अखत्यारीत आहे ते तपासता आले नाही",
+    road_unknown_help: "हा राष्ट्रीय महामार्ग आहे का हे तपासण्यासाठी अॅपला राज्याच्या रस्ते जाळ्याशी संपर्क करता आला नाही. नेटवर्क मिळाल्यावर पुन्हा प्रयत्न करा.",
+    nat_highway: "{road} हा राष्ट्रीय महामार्ग आहे",
+    nat_highway_help: "रस्ता सेवेनुसार हा राष्ट्रीय महामार्ग आहे, पण पडताळलेल्या राष्ट्रीय tile ने नकाशातील संदर्भ सुरक्षितपणे ओळखला नाही. नगरपालिका प्राप्तकर्ता निवडलेला नाही. Rajmargyatra किंवा 1033 वापरा आणि देखभाल करणारी संस्था तपासा.",
+    rural_road: "हा रस्ता {body} ग्रामपंचायतीत आहे; शहर किंवा नगर क्षेत्रात नाही.",
+    rural_road_help: "रस्त्याचे नुकसान निश्चित झाले आहे, पण हे ठिकाण नागरी स्थानिक संस्थांच्या बाहेर आहे. फोटो आणि स्थान जतन केले आहे.",
+    no_address: "{body} चा प्रकाशित पत्ता उपलब्ध नाही.",
+    no_address_help: "जबाबदार स्थानिक संस्था निश्चित झाली, पण तिचा अधिकृत ईमेल उपलब्ध नाही आणि अॅप अंदाजाने पत्ता वापरणार नाही. फोटो आणि स्थान जतन केले आहे.",
+    no_location_help: "रस्त्याचे नुकसान निश्चित झाले, पण GPS स्थानाशिवाय जबाबदार महानगरपालिका ओळखता येत नाही. फोटो जतन केला आहे.",
+    civic_no_location_help: "समस्या जतन झाली आहे, पण GPS स्थानाशिवाय अॅप नागरी संस्था निवडू शकत नाही. स्थान सुरू करून पुन्हा फोटो घ्या.",
+    civic_location_uncertain_help: "समस्या जतन झाली आहे, पण GPS अचूकतेची मर्यादा नागरी सीमा ओलांडू शकते. अधिक अचूक नवीन स्थानासह पुन्हा प्रयत्न करा.",
+    civic_jurisdiction_unavailable_help: "समस्या जतन झाली आहे, पण पडताळलेला नागरी routing डेटा वाचता आला नाही. कनेक्शन तपासा आणि पुन्हा प्रयत्न करा; अॅप संस्थेचा अंदाज करणार नाही.",
+    civic_rural: "हे स्थान {body} ग्रामपंचायतीत आहे आणि समर्थित शहरी क्षेत्राबाहेर आहे.",
+    civic_rural_help: "समस्या आणि स्थान जतन झाले आहेत, पण या ग्रामीण संस्थेसाठी पडताळलेला तक्रार मार्ग अजून उपलब्ध नाही.",
+    civic_no_address_help: "नागरी संस्था ओळखली आहे, पण तिचा पडताळलेला तक्रार पत्ता अॅपकडे नाही आणि अॅप अंदाज करणार नाही. फोटो आणि स्थान जतन झाले आहेत.",
+    civic_unsupported: "{body} साठी पडताळलेला {type} तक्रार मार्ग नाही.",
+    civic_unsupported_help: "समस्या आणि पुरावा जतन झाला आहे, पण सुचवलेला प्राप्तकर्ता हा प्रकार स्वीकारतो याची पडताळणी झालेली नाही; अॅप अंदाजाने तक्रार उघडणार नाही.",
+    civic_outside_coverage_help: "हे ठिकाण भारताच्या पडताळलेल्या राज्य/केंद्रशासित प्रदेश सीमांच्या बाहेर आहे किंवा अचूक मार्गदर्शन डेटा उपलब्ध नाही. फोटो आणि स्थान प्राप्तकर्त्याशिवाय जतन केले आहे.",
+    retry_routing_btn: "मार्ग पुन्हा तपासा",
+    retry_routing_unchanged: "मार्ग अजून उपलब्ध नाही. मूळ छायाचित्र आणि स्थान जतन आहेत; कनेक्शन किंवा मार्ग माहिती उपलब्ध झाल्यावर पुन्हा प्रयत्न करा.",
+    confirm_import_location: "या ब्राउझरने जुने छायाचित्र निवडले असू शकते. छायाचित्र तुम्ही सध्या जिथे आहात तेच ठिकाण दाखवत असेल तरच सध्याचे GPS स्थान जोडा.",
+    capture_provenance_camera: "अॅप कॅमेराने आत्ताच घेतलेले",
+    capture_provenance_import: "निवडलेले/आयात केलेले छायाचित्र · मूळ वेळ पडताळलेली नाही",
+    review_btn: "फ्रेम्स तपासा आणि लेबल करा", export_btn: "लेबल केलेला डेटासेट निर्यात करा",
+    dash_btn: "&#128506;&#65039; &nbsp;योगदान", dash_title: "तुमचे योगदान",
+    dash_range: "{days} चा अहवाल · पहिली नोंद {first}",
+    dash_empty: "अजून तक्रारी नाहीत. समस्या नोंदवल्यावर किंवा ड्राइव्ह केल्यावर नकाशा भरत जाईल.",
+    day_one: "1 दिवस", day_many: "{n} दिवस",
+    stat_found: "जतन केलेल्या तक्रारी", stat_reported: "पुष्टी केलेल्या नोंदी", stat_frames: "खड्ड्यांच्या तपासण्या",
+    stat_drives: "ड्राइव्ह", stat_footage: "MB व्हिडिओ", stat_km: "किमी तपासलेला रस्ता",
+    by_type: "तक्रारीच्या प्रकारानुसार", by_size: "खड्ड्याच्या आकारानुसार", by_area: "महानगरपालिकेनुसार",
+    map_pins: "{n} ठिकाणे", map_empty: "नकाशावर अजून खड्डे नाहीत.",
+    map_offline: "नकाशासाठी इंटरनेट आवश्यक आहे. ठिकाणे तरीही खाली दाखवली आहेत.",
+    zoom_hint: "झूमसाठी पिंच करा · हलवण्यासाठी ओढा · रीसेटसाठी दोनदा टॅप करा",
+    rec_suffix: "· रेकॉर्डिंग {mb} MB", rec_failed: "· रेकॉर्डिंग होत नाही",
+    net_trouble: "नेटवर्कची अडचण आहे; स्कॅन सुरू आहे ({n} फ्रेम्स प्रतीक्षेत)",
+    capture_failing: "कॅमेरा फ्रेम्स देत नाही. ड्राइव्ह थांबवून पुन्हा सुरू करा.",
+    camera_lost: "कॅमेरा थांबला आहे; कदाचित दुसरे अॅप तो वापरत आहे. स्कॅन आपोआप पुन्हा सुरू होईल.",
+    camera_low_quality: "कॅमेरा फक्त {width}px / {fps}fps", coverage_dropped: "रांगेतील घटना वगळल्या",
+    drive_end_failed: "नेटवर्कमुळे {n} फ्रेम्स तपासता आल्या नाहीत.",
+    footage_line: "व्हिडिओ: {mb} MB · {segments} क्लिप्स", analyse_btn: "व्हिडिओचे विश्लेषण करा",
+    delete_footage: "व्हिडिओ हटवा", analysing: "फ्रेम {i} पैकी {n} · {found} नवीन",
+    analyse_done: "व्हिडिओचे विश्लेषण पूर्ण: {n} फ्रेम्समधून {found} नवीन खड्डे.",
+    analyse_none: "या ड्राइव्हचा कोणताही व्हिडिओ जतन केलेला नाही.",
+    analysing_dup: "({n} आधीच नोंदवलेल्या)", analyse_dup: "त्यापैकी {n} घटना आधीच नोंदवल्या होत्या.",
+    already_one: "आधीच नोंदवलेली {n} घटना", already_many: "आधीच नोंदवलेल्या {n} घटना",
+    frames_no_permission: "फ्रेम्स जतन करण्याची परवानगी मिळाली नाही. त्या जतन न करता विश्लेषण करायचे का?",
+    analysing_failed: "· {n} अयशस्वी",
+    analyse_incomplete: "पूर्ण करता आले नाही: {n} पैकी {failed} फ्रेम्स तपासल्या गेल्या नाहीत ({err}). निष्कर्ष घोषित केलेला नाही आणि व्हिडिओ जतन केला आहे.",
+    debug_note: "चालू: विश्लेषणानंतरही व्हिडिओ राहतो. बंद: हानीच्या घटना काढल्यानंतर व्हिडिओ हटवला जातो.",
+    record_label: "ड्राइव्हदरम्यान स्थानिक व्हिडिओ रेकॉर्ड करा (ऑडिओ नाही; सुरुवातीला बंद)",
+    drive_limit_label: "ड्राइव्ह बॅटरी मर्यादा",
+    drive_limit_note: "फक्त सक्रिय वेळ मोजली जाते. वेळ संपल्यावर ड्राइव्ह आपोआप थांबते; विरामाची वेळ मोजली जात नाही.",
+    keep_frames_label: "विश्लेषित केलेली प्रत्येक फ्रेम साधनावर जतन करा",
+    keep_frames_note: "AI ने तपासलेली प्रत्येक फ्रेम आणि निष्कर्ष Documents/pothole-frames मध्ये लिहिला जातो. प्रत्येक फ्रेम साधारण 300 KB असू शकते.",
+    frames_saved: "{n} फ्रेम्स Documents/{dir} मध्ये लिहिल्या.", frames_failed: "फ्रेम्स साधनावर लिहिता आल्या नाहीत.",
+    footage_freed: "व्हिडिओ हटवला; {mb} MB जागा मोकळी झाली.", footage_kept: "व्हिडिओ जतन केला आहे (डीबग मोड).",
+    offer_analyse: "या ड्राइव्हच्या व्हिडिओचे आता विश्लेषण करायचे का? {clips} क्लिप्स, {mb} MB. आढळलेले खड्डे फोटो म्हणून ठेवले जातील.",
+    confirm_delete_footage: "या ड्राइव्हचा रेकॉर्ड केलेला व्हिडिओ हटवायचा का? अहवाल जतन राहतील.",
+    drive_group: "{date} · {found}{known} · {checked} थेट फ्रेम्स तपासल्या{video}",
+    drive_video_suffix: " · {n} व्हिडिओ फ्रेम्स तपासल्या", drive_group_partial: "{date} · {found} · {kept} जतन केले",
+    lbl_pothole: "रस्त्यातील खड्डा", lbl_no: "खड्डा नाही", lbl_skip: "वगळा", lbl_done: "पूर्ण",
+    review_empty: "लेबल करण्यासाठी काहीही उरलेले नाही. फ्रेम्स गोळा करण्यासाठी डीबग मोड सुरू ठेवून ड्राइव्ह करा.",
+    review_progress: "{n} लेबल करणे बाकी · आतापर्यंत {done} लेबल केले",
+    model_said: "अॅपचा निष्कर्ष: {verdict}",
+    export_ready: "{n} लेबल केलेल्या फ्रेम्स, {mb} MB. कुठे पाठवायचे ते निवडा.",
+    outside_coverage: "हे स्थान अॅपच्या कार्यक्षेत्राबाहेर आहे.",
+    outside_coverage_help: "हे ठिकाण भारताच्या पडताळलेल्या राज्य/केंद्रशासित प्रदेश व नकाशित राष्ट्रीय महामार्ग क्षेत्राबाहेर आहे किंवा अचूक मार्गदर्शन डेटा उपलब्ध नाही. फोटो आणि स्थान प्राप्तकर्त्याशिवाय जतन केले आहे.",
+    size_small: "लहान", size_medium: "मध्यम", size_large: "मोठे",
+    damage_pothole_cavity: "रस्त्यातील खड्डा", damage_failed_patch: "उखडलेली रस्ता दुरुस्ती",
+    damage_surface_breakup: "उखडलेला रस्ता पृष्ठभाग", damage_rut_or_depression: "रस्त्यावरील चर / खोलगट भाग",
+    damage_other_road_damage: "रस्त्याचे इतर नुकसान", damage_none: "नोंदवण्यायोग्य नुकसान नाही",
+    assessment_clear: "स्पष्ट", assessment_probable: "संभाव्य", assessment_uncertain: "अनिश्चित", assessment_absent: "आढळले नाही",
+    verdict_detected: "खड्डा: होय",
+    verdict_review: "संभाव्य {type} — नोंदवण्यापूर्वी पुन्हा फोटो घ्या किंवा तपासा",
+    verdict_rejected: "खड्डा: नाही",
+    early_yes: "खड्डा: होय. तक्रार तयार करत आहे...",
+    early_review: "रस्त्याचे संभाव्य नुकसान. अधिक स्पष्ट फोटो आवश्यक आहे.",
+    early_no: "खड्डा: नाही.",
+    verdict_sent: "सादर केल्याची नोंद", verdict_queued: "ईमेल अॅपमध्ये उघडले आहे; हे पाठवले असल्याचा पुरावा नाही.",
+    email_subject_label: "ईमेलचा विषय",
+    email_body_label: "ईमेलचा मजकूर (पाठवण्यापूर्वी तपासा)", routes_to: "यांच्याकडे पाठवले जाईल:",
+    getting_location: "तुमचे स्थान मिळवत आहे...", waiting_gps: "GPS ची प्रतीक्षा करत आहे...",
+    gps_30s: "30 सेकंदांनंतरही GPS स्थान मिळाले नाही. उच्च अचूकतेसह स्थान सेवा सुरू आहे का ते तपासा.",
+    gps_lost: "GPS सिग्नल हरवला; नवीन स्थानाची प्रतीक्षा करत आहे...",
+    holding: "स्थान स्थिर ({checked} तपासले, {found} आढळले)",
+    scanning: "स्कॅन सुरू ({mode})... {checked} तपासले{analyzing}", analyzing_suffix: ", {n} चे विश्लेषण सुरू",
+    potholes_one: "{n} खड्डा", potholes_many: "{n} खड्डे",
+    drive_tip: "वाहन सुरू करण्यापूर्वी कॅमेरा असा लावा की रस्ता नारिंगी मार्गदर्शकात भरलेला दिसेल. प्रत्येक तपासणीत तीन फ्रेम्स वापरल्या जातात. वाहन चालवताना फोन हाताळू नका.",
+    drive_end: "ड्राइव्ह पूर्ण: {found} आढळले, {checked} फ्रेम्स तपासल्या.",
+    drive_end_known: "ड्राइव्ह पूर्ण: नवीन अहवाल नाही; {already} पुन्हा दिसले, {checked} फ्रेम्स तपासल्या.",
+    drive_seen_suffix: " {already} पुन्हा दिसले.",
+    drive_end_zero: "या ड्राइव्हमध्ये खड्डे आढळले नाहीत ({checked} तपासण्या{debug}).",
+    debug_saved_suffix: ", डीबग फ्रेम्स पुनर्तपासणीसाठी जतन केल्या",
+    confirm_send: "{to} यांना उद्देशून तयार केलेली तक्रार तुमच्या ईमेल अॅपमध्ये उघडायची का?",
+    confirm_suggested_email: "स्थानावरून {authority} ही संस्था सुचते, पण यावरून रस्त्याची मालकी सिद्ध होत नाही. {to} यांना उद्देशून तक्रार ईमेल अॅपमध्ये उघडायची का?",
+    open_official_btn: "{name} उघडा", share_evidence_btn: "पुरावा शेअर करा",
+    copy_whatsapp_btn: "WhatsApp मजकूर कॉपी करा",
+    portal_fields_btn: "पोर्टल तपशील",
+    portal_fields_title: "पोर्टल तपशील",
+    portal_fields_hint: "हे तपशील अधिकृत तक्रार पोर्टलमध्ये कॉपी करा. अचूक रस्त्याची जबाबदारी पडताळल्यानंतरच कंत्राटाचे तपशील दिसतील.",
+    copy_all_btn: "सर्व कॉपी करा",
+    copied_message: "कॉपी झाले.",
+    official_whatsapp_btn: "अधिकृत WhatsApp", official_call_btn: "{number} वर कॉल करा",
+    confirm_whatsapp_share: "या अहवालाचा मजकूर आणि अचूक स्थान घेऊन {authority} चे अधिकृत WhatsApp उघडायचे का? WhatsApp मध्ये Send दाबेपर्यंत काहीही पाठवले जाणार नाही.",
+    official_disclaimer: "सुचवलेली नागरी संस्था: {authority}. यावरून त्या रस्त्याची मालकी सिद्ध होत नाही. हे स्वतंत्र अॅप फक्त पुरावा तयार करते; {service} मध्ये स्वतः तक्रार पूर्ण करा आणि अधिकृत संदर्भ क्रमांक जतन करा.",
+    authority_disclaimer: "स्थानावरून सुचवलेली नागरी संस्था: {authority}. रस्त्याची मालकी पडताळलेली नाही; पाठवण्यापूर्वी प्राप्तकर्ता तपासा.",
+    official_civic_disclaimer: "सुचवलेली नागरी संस्था: {authority}. तिचे कार्यक्षेत्र तपासा आणि {service} मध्ये योग्य समस्या वर्ग निवडा. हे स्वतंत्र अॅप फक्त पुरावा तयार करते; तक्रार स्वतः पूर्ण करा आणि अधिकृत संदर्भ क्रमांक जतन करा.",
+    authority_civic_disclaimer: "स्थानावरून सुचवलेली नागरी संस्था: {authority}. पाठवण्यापूर्वी तिचे कार्यक्षेत्र आणि तक्रारीचा वर्ग तपासा.",
+    confirm_suggested_civic_email: "स्थानावरून {authority} सुचवले आहे. {to} ला ईमेल उघडण्यापूर्वी नागरी कार्यक्षेत्र आणि वर्ग तपासा.",
+    routing_match: "मार्ग सूचक: {field} = {value}. सादर करण्यापूर्वी पडताळा करा.",
+    alternate_handoff_btn: "{name} उघडा",
+    confirm_official_handoff: "तयार तपशील कॉपी करून सुचवलेल्या {authority} साठी {service} उघडायचे का? येथे फक्त माध्यम उघडल्याची नोंद होईल; तक्रार सादर झाल्याची नाही.",
+    official_grievance_generic_label: "अधिकृत तक्रार/संदर्भ क्रमांक",
+    official_grievance_generic_placeholder: "अधिकृत सेवेकडून मिळालेला क्रमांक भरा",
+    chip_queued_official: "अधिकृत माध्यम उघडले",
+    bmc_prepare_btn: "मुंबईसाठी अहवाल तयार करा", bmc_share_btn: "पुरावा शेअर करा",
+    bmc_quickfix_btn: "Pothole QuickFix उघडा", bmc_whatsapp_btn: "BMC ला WhatsApp करा",
+    bmc_call_btn: "1916 वर कॉल करा",
+    bmc_disclaimer: "हे स्वतंत्र अॅप पुरावा तयार करते; BMC कडे तक्रार दाखल करत नाही. पुरावा तपासा आणि अधिकृत BMC माध्यमातून स्वतः नोंदवा. अधिकृत तक्रार क्रमांकाशिवाय सादर केल्याची नोंद करू नका.",
+    bmc_ward: "सुचवलेला BMC विभाग: {ward} (OpenStreetMap वरून; अधिकृत अॅपमध्ये पडताळा करा)",
+    complaint_title_label: "तक्रारीचे शीर्षक", complaint_body_label: "तक्रारीचा तपशील (शेअर करण्यापूर्वी तपासा)",
+    official_grievance_label: "अधिकृत BMC तक्रार क्रमांक", official_grievance_placeholder: "BMC कडून मिळालेला क्रमांक भरा",
+    mark_submitted_btn: "सादर केले असे नोंदवा", submitted_reference: "अधिकृत तक्रार क्रमांक: {id}",
+    confirm_bmc_handoff: "BMC चे अधिकृत Pothole QuickFix अॅप उघडायचे का? येथे फक्त माध्यम उघडल्याची नोंद होईल; तक्रार सादर झाल्याची नाही.",
+    confirm_mark_submitted: "तुम्ही अधिकृत माध्यमातून तक्रार पूर्णपणे सादर केली आहे याची खात्री आहे का?",
+    evidence_shared: "पुरावा तयार आहे. शेअर शीटमधून अधिकृत BMC माध्यम निवडा.",
+    confirm_delete: "हा अहवाल हटवायचा का?",
+    confirm_wipe: "API की, सेटिंग्ज, अहवाल, फोटो, व्हिडिओ आणि निर्यात केलेल्या डीबग फ्रेम्ससह या फोनवरील अॅपचा सर्व डेटा हटवायचा का?",
+    camera_failed: "कॅमेरा वापरता आला नाही: ", drive_stopped: "ड्राइव्ह मोड थांबला: ",
+    the_officer: "संबंधित अधिकारी",
+  },
+  bn: {
+    sub: "ছবি তুলুন। সমস্যাটি যাচাই করুন। প্রস্তাবিত দপ্তরের জন্য অভিযোগের খসড়া তৈরি করুন।",
+    report_btn: "&#128247; &nbsp;ছবি",
+    issue_picker_title: "অভিযোগ",
+    issue_picker_hint: "নিরাপদে থামার পরে সমস্যাটি বেছে নিয়ে একটি পরিষ্কার ছবি তুলুন।",
+    issue_road: "গর্ত", issue_garbage: "আবর্জনা", issue_open_manhole: "ম্যানহোল",
+    issue_road_damage: "রাস্তার গর্ত", issue_garbage_label: "আবর্জনা",
+    issue_open_manhole_label: "খোলা / ক্ষতিগ্রস্ত ম্যানহোল",
+    verdict_civic_prepared: "আপনার ছবি থেকে {type} অভিযোগ প্রস্তুত হয়েছে",
+    drive_btn: "&#128663; &nbsp;ড্রাইভ",
+    your_reports: "আপনার রিপোর্ট",
+    no_reports: "এখনও কোনও রিপোর্ট নেই।",
+    banner_setup: "ছবি ও ড্রাইভ ব্যবহার করতে OpenAI API key যোগ করুন।",
+    settings_title: "সেটিংস",
+    key_label: "OpenAI API key (এখানে সংরক্ষিত; অনুমোদনের পরিচয় হিসেবে OpenAI-তে পাঠানো হয়)",
+    name_label: "আপনার নাম (অভিযোগের ইমেলে ব্যবহৃত হবে)",
+    name_placeholder: "ইমেলের জন্য ব্যবহৃত নাম",
+    model_label: "ছবির মডেল",
+    detail_label: "ছবির বিশদতা",
+    accuracy_note: "Drive gpt-5.6/high ব্যবহার করে; এই বিকল্পগুলি শুধু Photo-র জন্য।",
+    capture_source_label: "ড্রাইভ ভিডিও উৎস",
+    phone_camera_option: "ফোন ক্যামেরা",
+    dashcam_option: "ড্যাশক্যাম",
+    capture_source_note: "পরবর্তী Drive শুরু হলে নির্বাচিত উৎসটি ব্যবহার করা হবে।",
+    dashcam_capture_source_note: "পরবর্তী Drive-এ নির্বাচিত উৎসটি ব্যবহার করা হবে। ড্যাশক্যাম ভিডিও সরাসরি বিশ্লেষণ করা হয়। RTSP সেন্সরের প্রকৃত capture time দেয় না, তাই calibration না-করা dashcam detection প্রমাণ সংরক্ষণ করে; authority, tender বা repair check স্বয়ংক্রিয়ভাবে route করে না। ঐচ্ছিক স্থানীয় recording শুধু ফোন ক্যামেরায় পাওয়া যায়।",
+    dashcam_rtsp_label: "ড্যাশক্যাম RTSP URL",
+    dashcam_rtsp_note: "ফোনটিকে ড্যাশক্যামের Wi-Fi-তে যুক্ত করুন। Drive এই ফোনের GPS ব্যবহার করে, কিন্তু ক্যামেরা বা অডিও ব্যবহার করে না। শুধু TCP-এর মাধ্যমে H.264 RTSP সমর্থিত। স্থানীয় RTSP সাধারণত এনক্রিপ্ট করা থাকে না; শুধু বিশ্বস্ত ড্যাশক্যাম Wi-Fi ব্যবহার করুন। পরিচয়পত্র-সহ ঠিকানাটি এখানে আড়াল করা থাকে এবং শুধু এই ডিভাইসেই সংরক্ষিত হয়।",
+    dashcam_rtsp_invalid: "একটি পূর্ণ rtsp:// ঠিকানা লিখুন, যেমন rtsp://192.168.1.1:554/live।",
+    dashcam_native_only: "ড্যাশক্যাম ইনপুট Android অ্যাপে পাওয়া যায়। এই ব্রাউজারে ফোন ক্যামেরা বেছে নিন।",
+    debug_label: "ডিবাগ মোড: বিশ্লেষণের পরেও ড্রাইভের ভিডিও রাখুন",
+    settings_note: "রাস্তার গর্তের ছবি ও ভিডিওর ফ্রেম শনাক্তকরণের জন্য OpenAI-তে পাঠানো হয়; তাতে নম্বরপ্লেট বা মুখ থাকতে পারে। সঠিক অবস্থান OpenStreetMap/Nominatim-এ পাঠানো হয়; কর্ণাটকের জন্য Karnataka GIS এবং হায়দরাবাদের জন্য Telangana GIS ব্যবহার করা হয়। যাচাই-করা রাজ্য pack বা 2° জাতীয় সড়ক tile GitHub Pages থেকে ডাউনলোড হয়ে ডিভাইসে থাকে; অনুরোধটি রাজ্য বা আনুমানিক tile ও সাধারণ সংযোগের তথ্য প্রকাশ করে, সঠিক অবস্থান নয়। API key কেবল OpenAI-তে যায়। অ্যাপ নিজে থেকে অভিযোগ জমা দেয় না।",
+    independent_note: "এটি একটি স্বাধীন, বেসরকারি অ্যাপ। কোনও সরকারি সংস্থার সঙ্গে এর সম্পর্ক নেই এবং কোনও সরকারি সংস্থা এটি অনুমোদন করেনি। প্রাপক নির্বাচন সর্বোত্তম প্রচেষ্টার ভিত্তিতে; পাঠানোর আগে যাচাই করুন।",
+    privacy_title: "ক্যাপচার ও অবস্থান ব্যবহারের আগে",
+    privacy_permission: "অ্যাপটি নির্ভুল অবস্থানের এবং Phone camera বাছা থাকলে তবেই ক্যামেরার অনুমতি চায়।",
+    privacy_source: "Drive Mode অডিও ব্যবহার করে না। এটি এই ফোনের ক্যামেরা বা আপনার কনফিগার করা dashcam RTSP stream, এবং এই ফোনের অবস্থান—Maps বা কল স্ক্রিন সামনে থাকলেও—ব্যাকগ্রাউন্ডে ব্যবহার করে।",
+    privacy_body: "এগিয়ে গেলে অ্যাপটি ক্যামেরা ও নির্ভুল অবস্থানের অনুমতি চাইবে। ড্রাইভ মোড চলার সময়, অ্যাপ দৃশ্যমান বা ব্যবহারে না থাকলেও—Maps বা কল স্ক্রিন সামনে থাকলেও—রাস্তার ক্ষতি ট্যাগ ও রুট করতে নির্ভুল অবস্থান সংগ্রহ করা হয়। রাস্তার গর্তের ছবি বা ড্রাইভ মোডের নির্বাচিত ফ্রেম API key-সহ OpenAI-তে পাঠানো হয়। পরবর্তী নির্ভুল লাইভ-ড্রাইভ পুনরায় যাওয়ার সময়, সংরক্ষিত আগের ক্ষতির ছবি এবং বর্তমান দৃশ্য মেরামত যাচাইয়ের জন্য একসঙ্গে OpenAI-তে পাঠানো হতে পারে। সঠিক স্থানাঙ্ক OpenStreetMap/Nominatim-এ যায়; কর্ণাটকের জন্য Karnataka GIS এবং হায়দরাবাদের জন্য Telangana GIS ব্যবহার করা হয়। প্রয়োজনীয় রাজ্য routing pack GitHub Pages থেকে ডাউনলোড হয়। তথ্য ভারতের বাইরেও প্রক্রিয়াকৃত হতে পারে।",
+    privacy_local: "ড্রাইভ মোডে অডিও ব্যবহার হয় না। ড্রাইভ মোড সক্রিয় থাকলে, এই অ্যাপটি দৃশ্যমান না থাকলেও বা আপনি ব্যবহার না করলেও—Google Maps বা কল স্ক্রিন সামনে থাকলেও—Android ক্যামেরা ও অবস্থান ব্যাকগ্রাউন্ডে ব্যবহার করে। দৃশ্যমান স্থায়ী foreground-service বিজ্ঞপ্তি এই ব্যবহার সব সময় দেখায়; অ্যাপ বা বিজ্ঞপ্তি থেকে বিরতি দিন বা বন্ধ করুন। ড্রাইভ মোড লাইভ বিশ্লেষণের আগে বিরল 720p প্রমাণ ফ্রেম আলাদাভাবে অ্যাপের ব্যক্তিগত স্টোরেজে রাখে, তাই বাধাগ্রস্ত বা অফলাইন কাজ ড্রাইভের পরে বিশ্লেষণ করা যায়। ঐচ্ছিক নীরব ভিডিও ডিফল্টভাবে বন্ধ থাকে। রিপোর্ট, ছবি, মেরামতের প্রমাণ, রাস্তার বাস্তব অবস্থা, ভিডিও, অবস্থানের ট্র্যাক, সেটিংস, যাচাই-করা রাজ্য pack ও জাতীয় সড়ক tile মুছে না ফেলা পর্যন্ত থাকে। রাস্তার বাস্তব অবস্থা সরকারি অভিযোগের অবস্থা থেকে আলাদাভাবে রাখা হয়।",
+    privacy_government: "এই স্বাধীন অ্যাপটি সরকারি পরিষেবা নয় এবং নিজে থেকে অভিযোগ জমা দেয় না। GitHub Pages আপনার IP, সময়, user agent ও চাওয়া রাজ্য-pack বা 2° জাতীয় সড়ক-tile পথ পায়; এতে রাজ্য বা আনুমানিক tile বোঝা যায়, সঠিক স্থানাঙ্ক, ছবি বা রিপোর্টের বিষয় নয়। উপরে জানানো নিয়মে এলাকা যাচাই করতে অবস্থান সরকারি GIS-এ পাঠানো হতে পারে। আপনি ইচ্ছাকৃতভাবে handoff খুললে বা সম্পূর্ণ করলেই অভিযোগের লেখা ও ছবি সরকারি অভিযোগ পরিষেবায় যায়।",
+    privacy_link: "গোপনীয়তা নীতি", sources_link: "তথ্যের উৎস ও সীমাবদ্ধতা",
+    privacy_accept: "এগিয়ে যান", privacy_decline: "এখন নয়",
+    wipe_btn: "অ্যাপের সব তথ্য মুছুন",
+    welcome_hint: "ছবি ও ড্রাইভ ব্যবহার করতে OpenAI API key যোগ করুন। key এই ডিভাইসে থাকে এবং শুধু অনুরোধের অনুমোদন হিসেবে OpenAI-তে যায়।",
+    key_required: "এগিয়ে যেতে OpenAI API key যোগ করুন।",
+    back: "ফিরে যান", save: "সংরক্ষণ করুন", discard: "বাদ দিন", del: "মুছুন", email_btn: "ইমেল", stop: "&#9632; থামান", working: "কাজ চলছে...",
+    chip_draft: "খসড়া", chip_sent: "জমা হয়েছে বলে চিহ্নিত", chip_queued: "ইমেলে খোলা হয়েছে", chip_queued_bmc: "BMC পরিষেবা খোলা হয়েছে", chip_rejected: "রাস্তার গর্ত: না", chip_review: "যাচাই প্রয়োজন",
+    chip_unrouted: "প্রাপক নির্ধারিত নয়",
+    chip_fixed: "মেরামত হয়েছে", chip_repair_review: "মেরামত যাচাই দরকার",
+    verdict_fixed: "পরবর্তী ড্রাইভে মেরামত হয়েছে বলে যাচাই করা হয়েছে",
+    verdict_repair_review: "সম্ভাব্য মেরামত পাওয়া গেছে — দুটি ছবি তুলনা করুন",
+    repair_evidence_label: "পরবর্তী পুনরায় দেখা",
+    repair_review_help: "অ্যাপ একই স্থানে সম্ভাব্য সম্পূর্ণ মেরামত পেয়েছে, কিন্তু নিজে থেকে মেরামত হয়েছে বলে চিহ্নিত করেনি। পুরোনো গর্তের জায়গাটি অক্ষত মেরামতের উপাদানে স্পষ্টভাবে ঢাকা থাকলেই নিশ্চিত করুন।",
+    fixed_local_note: "এটি শুধু রাস্তার বাস্তব অবস্থা; সরকারি অভিযোগ বন্ধ হয়েছে—এমন দাবি নয়। আগের জমা দেওয়ার অবস্থা অপরিবর্তিত থাকে।",
+    fixed_action_blocked: "এই গর্তটি মেরামত হয়েছে বলে যাচাই করা হয়েছে, তাই পুরোনো অভিযোগটি আবার দায়ের করা যাবে না।",
+    confirm_fixed_btn: "মেরামত নিশ্চিত করুন", reopen_btn: "আবার খোলা হিসেবে চিহ্নিত করুন",
+    stat_fixed: "যাচাইকৃত মেরামত",
+    no_location: "অবস্থান নির্ধারণ করা যায়নি।",
+    location_uncertain: "কর্তৃপক্ষ বাছতে GPS যথেষ্ট নির্ভুল নয়।",
+    location_uncertain_help: "রাস্তার ক্ষতি নিশ্চিত হয়েছে, কিন্তু প্রাপক বাছার জন্য frame location যথেষ্ট নির্ভুল নয়। নতুন GPS fix নিয়ে আবার ছবি তুলুন; calibration না-করা dashcam stream-এ স্বয়ংক্রিয় authority ও tender routing দরকার হলে Phone camera ব্যবহার করুন। রিপোর্টটি প্রাপক ছাড়াই সংরক্ষিত হয়েছে।",
+    jurisdiction_unavailable: "যাচাই-করা routing data ডাউনলোড বা পড়া যায়নি।",
+    jurisdiction_unavailable_help: "যাচাই-করা রাজ্য pack ছাড়া অ্যাপটি কোনও কর্তৃপক্ষ অনুমান করবে না। সংযোগ দেখে আবার চেষ্টা করুন; রিপোর্টটি প্রাপক ছাড়াই সংরক্ষিত হয়েছে।",
+    road_unknown: "এই রাস্তার মালিকানা যাচাই করা যায়নি",
+    road_unknown_help: "রাস্তাটি জাতীয় সড়ক কি না দেখতে অ্যাপটি রাজ্যের সড়ক নেটওয়ার্কে পৌঁছতে পারেনি। অন্য সংস্থার রাস্তার জন্য কোনও পৌর আধিকারিকের নাম অনুমান করা হবে না। সংযোগ ফিরে এলে আবার চেষ্টা করুন।",
+    nat_highway: "{road} একটি জাতীয় সড়ক",
+    nat_highway_help: "একটি সড়ক পরিষেবা এটিকে জাতীয় সড়ক বলেছে, কিন্তু যাচাই-করা জাতীয় tile নিরাপদে মানচিত্রের রেফারেন্স শনাক্ত করতে পারেনি। কোনও পুর কর্তৃপক্ষকে প্রাপক করা হয়নি। Rajmargyatra বা 1033 ব্যবহার করে রক্ষণাবেক্ষণকারী সংস্থা যাচাই করুন।",
+    rural_road: "এই রাস্তা {body} গ্রাম পঞ্চায়েতের অন্তর্গত, কোনও শহর বা পুর এলাকার নয়।",
+    rural_road_help: "রাস্তার ক্ষতি নিশ্চিত হয়েছে, কিন্তু স্থানটি কোনও নগর স্থানীয় সংস্থার মধ্যে নয়। তাই এটি পুরসভার বদলে রাজ্য PWD বা পঞ্চায়েতের প্রকৌশল বিভাগের আওতায় পড়তে পারে। ওই দপ্তরগুলি এখনও ডিরেক্টরিতে নেই, তাই অভিযোগে কোনও প্রাপক দেওয়া হয়নি। ছবি ও অবস্থান সংরক্ষিত আছে।",
+    no_address: "{body}-এর কোনও প্রকাশিত যোগাযোগের ঠিকানা নেই।",
+    no_address_help: "রাস্তার ক্ষতি এবং সংশ্লিষ্ট স্থানীয় সংস্থা শনাক্ত হয়েছে, কিন্তু অ্যাপে তার কোনও সরকারি ইমেল নেই এবং অ্যাপটি ঠিকানা অনুমান করবে না। ছবি ও অবস্থান সংরক্ষিত আছে; যাচাই করা ঠিকানা পরে ডিরেক্টরিতে যোগ করা যাবে।",
+    no_location_help: "রাস্তার ক্ষতি নিশ্চিত হয়েছে, কিন্তু GPS অবস্থান ছাড়া কোন পৌরসংস্থা দায়িত্বে তা জানা যায় না। তাই অভিযোগে কোনও প্রাপক দেওয়া হয়নি। ছবিটি সংরক্ষিত আছে।",
+    civic_no_location_help: "সমস্যাটি সংরক্ষিত হয়েছে, কিন্তু GPS অবস্থান ছাড়া অ্যাপ কোনও পৌর কর্তৃপক্ষ বেছে নিতে পারে না। অবস্থান চালু করে আবার ছবি তুলুন।",
+    civic_location_uncertain_help: "সমস্যাটি সংরক্ষিত হয়েছে, কিন্তু GPS-এর নির্ভুলতার সীমা পৌরসীমা পেরোতে পারে। আরও নির্ভুল নতুন অবস্থান নিয়ে আবার চেষ্টা করুন।",
+    civic_jurisdiction_unavailable_help: "সমস্যাটি সংরক্ষিত হয়েছে, কিন্তু যাচাই-করা পৌর routing তথ্য পড়া যায়নি। সংযোগ পরীক্ষা করে আবার চেষ্টা করুন; অ্যাপ কর্তৃপক্ষ অনুমান করবে না।",
+    civic_rural: "এই স্থানটি {body} গ্রাম পঞ্চায়েতে এবং সমর্থিত নগর এলাকার বাইরে।",
+    civic_rural_help: "সমস্যা ও অবস্থান সংরক্ষিত আছে, কিন্তু এই গ্রামীণ সংস্থার জন্য যাচাই-করা অভিযোগের পথ এখনও নেই।",
+    civic_no_address_help: "পৌর সংস্থাটি শনাক্ত হয়েছে, কিন্তু অ্যাপে তার যাচাই-করা অভিযোগের ঠিকানা নেই এবং অ্যাপ অনুমান করবে না। ছবি ও অবস্থান সংরক্ষিত আছে।",
+    civic_unsupported: "{body}-এর জন্য যাচাই-করা {type} অভিযোগের পথ নেই।",
+    civic_unsupported_help: "সমস্যা ও প্রমাণ সংরক্ষিত হয়েছে, কিন্তু প্রস্তাবিত প্রাপক এই বিভাগটি নেয় কি না যাচাই করা হয়নি; অ্যাপ অনুমান করে অভিযোগ খুলবে না।",
+    civic_outside_coverage_help: "এই স্থানটি ভারতের যাচাই-করা রাজ্য/কেন্দ্রশাসিত অঞ্চলের সীমানার বাইরে, অথবা নির্ভুল রাউটিং তথ্য পাওয়া যায়নি। ছবি ও অবস্থান কোনও প্রাপক ছাড়াই সংরক্ষিত হয়েছে।",
+    retry_routing_btn: "রাউটিং আবার চেষ্টা করুন",
+    retry_routing_unchanged: "রাউটিং এখনও পাওয়া যাচ্ছে না। মূল ছবি ও অবস্থান সংরক্ষিত আছে; সংযোগ বা রাউটিং তথ্য পাওয়া গেলে আবার চেষ্টা করুন।",
+    confirm_import_location: "এই ব্রাউজারটি পুরনো ছবি ফিরিয়ে দিতে পারে। ছবিটি আপনি এখন যেখানে আছেন সেই স্থানটি দেখালেই কেবল বর্তমান GPS অবস্থান যুক্ত করুন।",
+    capture_provenance_camera: "অ্যাপ ক্যামেরায় এখন তোলা",
+    capture_provenance_import: "বেছে নেওয়া/আমদানি করা ছবি · আসল তোলার সময় যাচাই হয়নি",
+    review_btn: "ফ্রেম যাচাই করে লেবেল দিন", export_btn: "লেবেল দেওয়া ডেটাসেট এক্সপোর্ট করুন",
+    dash_btn: "&#128506;&#65039; &nbsp;অবদান", dash_title: "আপনার অবদান",
+    dash_range: "{days} ধরে রিপোর্ট · প্রথম রিপোর্ট {first}",
+    dash_empty: "এখনও কোনও রিপোর্ট নেই। সমস্যা রিপোর্ট করা বা ড্রাইভ করার সঙ্গে সঙ্গে মানচিত্র পূর্ণ হবে।",
+    day_one: "1 দিন", day_many: "{n} দিন",
+    stat_found: "সংরক্ষিত রিপোর্ট", stat_reported: "নিশ্চিতভাবে জমা দেওয়া অভিযোগ", stat_frames: "রাস্তার গর্ত পরীক্ষা",
+    stat_drives: "ড্রাইভ", stat_footage: "MB ভিডিও ফুটেজ", stat_km: "কিমি রাস্তা পর্যবেক্ষণ",
+    by_type: "রিপোর্টের ধরন অনুযায়ী", by_size: "রাস্তার গর্তের আকার অনুযায়ী", by_area: "পৌরসংস্থা অনুযায়ী", map_pins: "{n}টি পিন",
+    map_empty: "মানচিত্রে এখনও কোনও গর্ত নেই।",
+    map_offline: "মানচিত্রের টাইল দেখাতে ইন্টারনেট প্রয়োজন। অবস্থানগুলি নীচে তবুও দেখানো হচ্ছে।",
+    zoom_hint: "জুম করতে আঙুল ছড়ান · সরাতে টানুন · রিসেট করতে দু’বার ট্যাপ করুন",
+    rec_suffix: "· রেকর্ড হচ্ছে {mb} MB", rec_failed: "· রেকর্ড হচ্ছে না",
+    net_trouble: "সংযোগে সমস্যা; স্ক্যান চলছে ({n}টি ফ্রেম অপেক্ষায়)",
+    capture_failing: "ক্যামেরা থেকে ফ্রেম আসছে না। ড্রাইভ থামিয়ে আবার শুরু করুন।",
+    camera_lost: "ক্যামেরা সাময়িকভাবে থেমেছে—অন্য কোনও অ্যাপ এটি ব্যবহার করতে পারে। স্ক্যান নিজে থেকেই আবার শুরু হবে।",
+    camera_low_quality: "ক্যামেরা মাত্র {width}px / {fps}fps",
+    coverage_dropped: "সারিতে থাকা ঘটনা বাদ গেছে",
+    drive_end_failed: "সংযোগ সমস্যার কারণে {n}টি ফ্রেম পরীক্ষা করা যায়নি।",
+    footage_line: "ভিডিও: {mb} MB · {segments}টি ক্লিপ",
+    analyse_btn: "ভিডিও বিশ্লেষণ করুন", delete_footage: "ভিডিও মুছুন",
+    analysing: "ফ্রেম {i}/{n} · {found}টি নতুন",
+    analyse_done: "ভিডিও বিশ্লেষণ শেষ: {n}টি ফ্রেম থেকে {found}টি নতুন রাস্তার গর্ত পাওয়া গেছে।",
+    analyse_none: "এই ড্রাইভের কোনও ভিডিও সংরক্ষিত নেই।",
+    analysing_dup: "({n}টি আগেই রিপোর্ট করা)", analyse_dup: "এর মধ্যে {n}টি আগেই রিপোর্ট করা হয়েছিল।",
+    already_one: "আগেই রিপোর্ট করা {n}টি ঘটনা", already_many: "আগেই রিপোর্ট করা {n}টি ঘটনা",
+    frames_no_permission: "স্টোরেজে ফ্রেম সংরক্ষণের অনুমতি পাওয়া যায়নি। সংরক্ষণ না করেই বিশ্লেষণ করবেন?",
+    analysing_failed: "· {n}টি ব্যর্থ",
+    analyse_incomplete: "শেষ করা যায়নি: {n}টি ফ্রেমের মধ্যে {failed}টি পরীক্ষা করা হয়নি ({err})। তাই কোনও ফল দাবি করা হচ্ছে না এবং ভিডিওটি রেখে দেওয়া হয়েছে।",
+    debug_note: "চালু থাকলে: বিশ্লেষণের পরেও ভিডিও থাকে, ফলে ড্রাইভটি আবার পরীক্ষা করা বা উন্নত মডেল দিয়ে চালানো যায়। বন্ধ থাকলে: রাস্তার ক্ষতির ঘটনাগুলি ছবি হিসেবে নেওয়ার পর ভিডিও মুছে যায়।",
+    record_label: "ড্রাইভের সময় এই ডিভাইসে ভিডিও রেকর্ড করুন (অডিও নয়; ডিফল্টভাবে বন্ধ)",
+    drive_limit_label: "ড্রাইভ ব্যাটারি সীমা",
+    drive_limit_note: "শুধু সক্রিয় সময় গণনা হয়। সময় শেষ হলে ড্রাইভ নিজে থেকে থামে; বিরতির সময় গণনা হয় না।",
+    keep_frames_label: "বিশ্লেষণ করা প্রতিটি ফ্রেম ডিভাইসে সংরক্ষণ করুন",
+    keep_frames_note: "AI পরীক্ষা করা প্রতিটি ফ্রেম ও তার সিদ্ধান্ত এই ফোনের Documents/pothole-frames ফোল্ডারে লিখবে। Files অ্যাপে দেখা যাবে এবং মূল্যায়ন ডেটাসেট তৈরিতে ব্যবহার করা যাবে। জায়গা দ্রুত বাড়ে: প্রতি ফ্রেম প্রায় 300 KB।",
+    frames_saved: "{n}টি ফ্রেম Documents/{dir}-এ লেখা হয়েছে।",
+    frames_failed: "ডিভাইসে ফ্রেম লেখা যায়নি।",
+    footage_freed: "ভিডিও মুছে {mb} MB জায়গা খালি হয়েছে।",
+    footage_kept: "ভিডিও রাখা হয়েছে (ডিবাগ মোড)।",
+    offer_analyse: "এই ড্রাইভের ভিডিও এখন বিশ্লেষণ করবেন? {clips}টি ক্লিপ, {mb} MB। শনাক্ত রাস্তার গর্ত ছবি হিসেবে রাখা হবে; বাকিটা মুছে যাবে।",
+    confirm_delete_footage: "এই ড্রাইভের রেকর্ড করা ভিডিও মুছবেন? রিপোর্টগুলি থেকে যাবে।",
+    drive_group: "{date} · {found}{known} · {checked}টি লাইভ ফ্রেম পরীক্ষা{video}",
+    drive_video_suffix: " · {n}টি ভিডিও ফ্রেম পরীক্ষা",
+    drive_group_partial: "{date} · {found} · {kept}টি রাখা হয়েছে",
+    lbl_pothole: "রাস্তার গর্ত", lbl_no: "রাস্তার গর্ত নয়", lbl_skip: "এড়িয়ে যান", lbl_done: "শেষ",
+    review_empty: "লেবেল দেওয়ার মতো কিছু বাকি নেই। ফ্রেম সংগ্রহ করতে ডিবাগ মোড চালু রেখে ড্রাইভ করুন।",
+    review_progress: "{n}টি লেবেল দেওয়া বাকি · এখনও পর্যন্ত {done}টি সম্পন্ন",
+    model_said: "অ্যাপের সিদ্ধান্ত: {verdict}",
+    export_ready: "{n}টি লেবেল দেওয়া ফ্রেম, {mb} MB। কোথায় পাঠাবেন বেছে নিন।",
+    outside_coverage: "এই অবস্থানটি অ্যাপের আওতাভুক্ত এলাকার বাইরে।",
+    outside_coverage_help: "এই স্থানটি ভারতের যাচাই-করা রাজ্য/কেন্দ্রশাসিত অঞ্চল ও মানচিত্রভুক্ত জাতীয় সড়ক কভারেজের বাইরে, অথবা নির্ভুল রাউটিং তথ্য পাওয়া যায়নি। ছবি ও অবস্থান কোনও প্রাপক ছাড়াই সংরক্ষিত হয়েছে।",
+    size_small: "ছোট", size_medium: "মাঝারি", size_large: "বড়",
+    damage_pothole_cavity: "রাস্তার গর্ত", damage_failed_patch: "ভেঙে যাওয়া রাস্তা মেরামত",
+    damage_surface_breakup: "ভাঙা রাস্তার উপরিভাগ", damage_rut_or_depression: "চাকার খাঁজ / দেবে যাওয়া অংশ",
+    damage_other_road_damage: "রাস্তার অন্যান্য ক্ষতি", damage_none: "অভিযোগযোগ্য ক্ষতি নেই",
+    assessment_clear: "স্পষ্ট", assessment_probable: "সম্ভাব্য", assessment_uncertain: "অনিশ্চিত", assessment_absent: "নেই",
+    verdict_detected: "রাস্তার গর্ত: হ্যাঁ",
+    verdict_review: "সম্ভাব্য {type} — রিপোর্ট করার আগে আবার ছবি তুলুন বা যাচাই করুন",
+    verdict_rejected: "রাস্তার গর্ত: না",
+    early_yes: "রাস্তার গর্ত: হ্যাঁ। অভিযোগের খসড়া তৈরি হচ্ছে...",
+    early_review: "রাস্তার সম্ভাব্য ক্ষতি। আরও পরিষ্কার ছবি প্রয়োজন।",
+    early_no: "রাস্তার গর্ত: না।",
+    verdict_sent: "জমা হয়েছে বলে চিহ্নিত",
+    verdict_queued: "ইমেল অ্যাপে খোলা হয়েছে। পাঠিয়ে না থাকলে সম্পাদনা করে আবার পাঠান।",
+    email_subject_label: "ইমেলের বিষয়",
+    email_body_label: "ইমেলের বক্তব্য (পাঠানোর আগে যাচাই করুন)",
+    routes_to: "যে দপ্তরে যাবে:",
+    getting_location: "আপনার অবস্থান নেওয়া হচ্ছে...",
+    waiting_gps: "GPS-এর অপেক্ষা চলছে...",
+    gps_30s: "30 সেকেন্ড পরেও GPS অবস্থান পাওয়া যায়নি। উচ্চ নির্ভুলতাসহ লোকেশন চালু আছে কি না দেখুন।",
+    gps_lost: "GPS সংকেত হারিয়েছে; নতুন অবস্থানের অপেক্ষা চলছে...",
+    holding: "একই অবস্থানে ({checked}টি পরীক্ষা, {found}টি পাওয়া গেছে)",
+    scanning: "স্ক্যান চলছে ({mode})... {checked}টি পরীক্ষা{analyzing}",
+    analyzing_suffix: ", {n}টি বিশ্লেষণাধীন",
+    potholes_one: "{n}টি রাস্তার গর্ত", potholes_many: "{n}টি রাস্তার গর্ত",
+    drive_tip: "চলতে শুরু করার আগে ক্যামেরা এমনভাবে বসান যাতে কমলা নির্দেশকের মধ্যে চলার রাস্তা বেশি এবং আকাশ বা ড্যাশবোর্ড কম থাকে। প্রতিটি পরীক্ষায় পরপর তিনটি ফ্রেম নেওয়া হয়। ফিরে যাওয়ার বোতামেও ড্রাইভ বন্ধ হবে।",
+    drive_end: "ড্রাইভ শেষ: {found}টি পাওয়া গেছে, {checked}টি ফ্রেম পরীক্ষা করা হয়েছে।",
+    drive_end_known: "ড্রাইভ শেষ: নতুন রিপোর্ট নেই; {already} আবার দেখা গেছে, {checked}টি ফ্রেম পরীক্ষা করা হয়েছে।",
+    drive_seen_suffix: " {already} আবার দেখা গেছে।",
+    drive_end_zero: "এই ড্রাইভে রাস্তার গর্ত পাওয়া যায়নি ({checked}টি পরীক্ষা{debug})।",
+    debug_saved_suffix: ", যাচাইয়ের জন্য ডিবাগ ফ্রেম সংরক্ষিত",
+    confirm_send: "{to}-কে ঠিকানা দিয়ে অভিযোগটি ইমেল অ্যাপে খুলবেন?",
+    confirm_suggested_email: "অবস্থান অনুযায়ী {authority} প্রস্তাবিত, কিন্তু এতে রাস্তার মালিকানা প্রমাণিত নয়। {to}-কে ঠিকানা দিয়ে অভিযোগটি ইমেল অ্যাপে খুলবেন?",
+    open_official_btn: "{name} খুলুন", share_evidence_btn: "প্রমাণ শেয়ার করুন",
+    copy_whatsapp_btn: "WhatsApp বক্তব্য কপি করুন",
+    portal_fields_btn: "পোর্টালের তথ্য",
+    portal_fields_title: "পোর্টালের তথ্য",
+    portal_fields_hint: "এই তথ্য সরকারি অভিযোগ পোর্টালে কপি করুন। নির্দিষ্ট রাস্তার দায়িত্ব যাচাই হলেই কেবল চুক্তির তথ্য দেখানো হবে।",
+    copy_all_btn: "সব কপি করুন",
+    copied_message: "কপি হয়েছে।",
+    official_whatsapp_btn: "সরকারি WhatsApp", official_call_btn: "{number} নম্বরে কল করুন",
+    confirm_whatsapp_share: "{authority}-এর সরকারি WhatsApp-এ এই রিপোর্টের বক্তব্য ও সঠিক অবস্থান খুলবেন? WhatsApp-এ Send না চাপা পর্যন্ত কিছুই পাঠানো হবে না।",
+    official_disclaimer: "প্রস্তাবিত পৌর কর্তৃপক্ষ: {authority}। এতে রাস্তার মালিকানা প্রমাণিত হয় না। এই স্বাধীন অ্যাপটি কেবল প্রমাণ প্রস্তুত করে; {service}-এ নিজে অভিযোগ নথিভুক্ত করুন এবং সরকারি রেফারেন্স নম্বরটি সংরক্ষণ করুন।",
+    authority_disclaimer: "অবস্থানের ভিত্তিতে প্রস্তাবিত পৌর কর্তৃপক্ষ: {authority}। রাস্তার মালিকানা যাচাই করা হয়নি; পাঠানোর আগে প্রাপক পরীক্ষা করুন।",
+    official_civic_disclaimer: "প্রস্তাবিত পৌর কর্তৃপক্ষ: {authority}। তার আওতা যাচাই করুন এবং {service}-এ সঠিক সমস্যার বিভাগ বেছে নিন। এই স্বাধীন অ্যাপটি কেবল প্রমাণ প্রস্তুত করে; নিজে অভিযোগ সম্পূর্ণ করুন এবং সরকারি রেফারেন্স নম্বর সংরক্ষণ করুন।",
+    authority_civic_disclaimer: "অবস্থানের ভিত্তিতে প্রস্তাবিত পৌর কর্তৃপক্ষ: {authority}। পাঠানোর আগে তার আওতা ও অভিযোগের বিভাগ যাচাই করুন।",
+    confirm_suggested_civic_email: "অবস্থান অনুযায়ী {authority} প্রস্তাবিত। {to}-কে ইমেল খোলার আগে পৌর আওতা ও বিভাগ যাচাই করুন।",
+    routing_match: "প্রাপক নির্বাচনের সূত্র: {field} = {value}। জমা দেওয়ার আগে যাচাই করুন।",
+    alternate_handoff_btn: "{name} খুলুন",
+    confirm_official_handoff: "প্রস্তুত তথ্য কপি করে প্রস্তাবিত কর্তৃপক্ষ {authority}-এর জন্য {service} খুলবেন? এতে শুধু পরিষেবাটি খোলার তথ্য রাখা হবে—অভিযোগ জমা হয়েছে বলে ধরা হবে না।",
+    official_grievance_generic_label: "সরকারি অভিযোগ/রেফারেন্স নম্বর",
+    official_grievance_generic_placeholder: "সরকারি পরিষেবা থেকে পাওয়া নম্বর লিখুন",
+    chip_queued_official: "সরকারি পরিষেবা খোলা হয়েছে",
+    bmc_prepare_btn: "মুম্বই রিপোর্ট তৈরি করুন", bmc_share_btn: "প্রমাণ শেয়ার করুন",
+    bmc_quickfix_btn: "Pothole QuickFix খুলুন", bmc_whatsapp_btn: "BMC WhatsApp",
+    bmc_call_btn: "1916 নম্বরে কল করুন",
+    bmc_disclaimer: "এই স্বাধীন অ্যাপটি প্রমাণ প্রস্তুত করে, কিন্তু BMC-তে অভিযোগ জমা দেয় না। যাচাই করে BMC-র কোনও সরকারি মাধ্যমে নিজে অভিযোগ সম্পূর্ণ করুন। সরকারি অভিযোগ নম্বর ছাড়া জমা হয়েছে বলে চিহ্নিত করবেন না।",
+    bmc_ward: "প্রস্তাবিত BMC ওয়ার্ড: {ward} (OpenStreetMap থেকে; সরকারি অ্যাপে যাচাই করুন)",
+    complaint_title_label: "অভিযোগের শিরোনাম", complaint_body_label: "অভিযোগের বিবরণ (শেয়ার করার আগে যাচাই করুন)",
+    official_grievance_label: "সরকারি BMC অভিযোগ নম্বর", official_grievance_placeholder: "BMC থেকে পাওয়া নম্বর লিখুন",
+    mark_submitted_btn: "জমা হয়েছে বলে চিহ্নিত করুন", submitted_reference: "সরকারি অভিযোগ নম্বর: {id}",
+    confirm_bmc_handoff: "BMC-র সরকারি Pothole QuickFix অ্যাপে যাবেন? এতে শুধু পরিষেবাটি খোলার তথ্য রাখা হবে, অভিযোগ জমা হয়েছে বলে ধরা হবে না।",
+    confirm_mark_submitted: "আপনি কি কোনও সরকারি মাধ্যমে অভিযোগ জমা দেওয়া সম্পূর্ণ করেছেন?",
+    evidence_shared: "প্রমাণ প্রস্তুত। শেয়ার শিট থেকে BMC-র একটি সরকারি মাধ্যম বেছে নিন।",
+    confirm_delete: "এই রিপোর্টটি মুছবেন?",
+    confirm_wipe: "API key, সেটিংস, রিপোর্ট, ছবি, ভিডিও এবং এক্সপোর্ট করা ডিবাগ ফ্রেম-সহ এই ফোন থেকে অ্যাপের সব তথ্য মুছবেন?",
+    camera_failed: "ক্যামেরা ব্যবহার করা যায়নি: ", drive_stopped: "ড্রাইভ মোড বন্ধ হয়েছে: ",
+    the_officer: "সংশ্লিষ্ট আধিকারিক",
   },
 };
 const LANG = LLM_UI_CONFIG.allowedLanguages.includes(localStorage.getItem("app_lang"))
@@ -728,18 +1202,78 @@ function show(screen) {
     $(s).classList.toggle("hidden", s !== screen);
   }
   window.scrollTo(0, 0);
+  return true;
 }
 
 function fmtDate(ts) { return new Date(ts * 1000).toLocaleString([], {day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"}); }
 
-const sendLabel = () => t("email_btn");
+const isOfficialHandoffReport = (r) => !!r
+  && (r.delivery_channel === "official_handoff" || r.delivery_channel === "bmc_quickfix");
+const officialServiceName = (r) => (LANG === "bn" && r && r.authority_id === "wb-kmc"
+  ? "KMC অভিযোগ প্রতিবিধান (Grievance 2.0)"
+  : LANG === "bn" && r && r.authority_id === "wb-statewide-unverified"
+    ? "West Bengal PGRS" : r && r.handoff_name)
+  || (r && r.delivery_channel === "bmc_quickfix" ? "BMC Pothole QuickFix" : "official service");
+const displayAuthorityName = (r) => LANG === "bn" && r && r.authority_id === "wb-kmc"
+  ? "কলকাতা পৌরসংস্থা (KMC)"
+  : LANG === "bn" && r && r.authority_id === "wb-statewide-unverified"
+    ? "পশ্চিমবঙ্গ PGRS — জেলা বা দপ্তর নির্বাচন করুন"
+    : (r && r.authority_name) || t("the_officer");
+const displayRouteName = (r) => LANG === "bn" && r
+  && r.authority_id === "wb-statewide-unverified"
+  ? "পশ্চিমবঙ্গ PGRS — জেলা বা দপ্তর নির্বাচন করুন"
+  : r && r.officer_name;
+const sendLabel = (r) => isOfficialHandoffReport(r)
+  ? t("open_official_btn", { name: officialServiceName(r) }) : t("email_btn");
 
-function chip(status) {
+function chip(status, report) {
   const labels = { draft: t("chip_draft"), sent: t("chip_sent"), queued: t("chip_queued"),
                    rejected: t("chip_rejected"), review: t("chip_review"),
                    unrouted: t("chip_unrouted"), duplicate: t("chip_duplicate") };
   const css = Object.prototype.hasOwnProperty.call(labels, status) ? status : "review";
   return `<span class="chip ${css}">${escapeHtml(labels[status] || status)}</span>`;
+}
+
+const physicalCondition = (report) => report && report.condition_status === "fixed"
+  ? "fixed" : report && report.condition_status === "repair_review" ? "repair_review" : "open";
+function conditionChip(report) {
+  const condition = physicalCondition(report);
+  if (!isRoadReport(report) || condition === "open") return "";
+  const css = condition === "fixed" ? "fixed" : "repair-review";
+  const label = condition === "fixed" ? t("chip_fixed") : t("chip_repair_review");
+  return `<span class="chip ${css}">${escapeHtml(label)}</span>`;
+}
+
+function setDashcamRtspFeedback(message = "", invalid = false) {
+  const input = $("setDashcamRtspUrl");
+  const note = $("dashcamRtspNote");
+  input.setAttribute("aria-invalid", invalid ? "true" : "false");
+  note.textContent = message || t("dashcam_rtsp_note");
+  note.style.color = invalid ? "var(--bad)" : "";
+}
+
+function updateCaptureSourceSettings() {
+  const dashcam = $("setCaptureSource").value === DASHCAM_CAPTURE_SOURCE;
+  $("dashcamSettings").classList.toggle("hidden", !dashcam);
+  $("setDashcamRtspUrl").disabled = !dashcam;
+  $("setRecord").disabled = dashcam;
+  $("recordSetting").style.opacity = dashcam ? ".6" : "";
+  const nativeOnly = dashcam && !nativeDrivePlugin();
+  $("captureSourceNote").textContent = nativeOnly
+    ? t("dashcam_native_only")
+    : t(dashcam ? "dashcam_capture_source_note" : "capture_source_note");
+  $("captureSourceNote").style.color = nativeOnly ? "#ffd9a8" : "";
+  setDashcamRtspFeedback();
+}
+
+function withoutLeadingSentences(value, count) {
+  let rest = String(value || "").trim();
+  for (let index = 0; index < count; index++) {
+    const sentence = rest.match(/^.*?[.।]\s*/u);
+    if (!sentence) return "";
+    rest = rest.slice(sentence[0].length).trim();
+  }
+  return rest;
 }
 
 function applyLang() {
@@ -760,9 +1294,16 @@ function applyLang() {
   $("providerPersonal").textContent = t("provider_personal");
   $("keyLabel").textContent = t("key_label");
   $("nameLabel").textContent = t("name_label");
+  $("setName").placeholder = t("name_placeholder");
   $("modelLabel").textContent = t("model_label");
   $("detailLabel").textContent = t("detail_label");
   $("accuracyNote").textContent = t("accuracy_note");
+  $("captureSourceLabel").textContent = t("capture_source_label");
+  $("phoneCameraOption").textContent = t("phone_camera_option");
+  $("dashcamOption").textContent = t("dashcam_option");
+  $("captureSourceNote").textContent = t("capture_source_note");
+  $("dashcamRtspLabel").textContent = t("dashcam_rtsp_label");
+  setDashcamRtspFeedback();
   $("debugLabel").textContent = t("debug_label");
   $("debugNote").innerHTML = t("debug_note");
   $("recordLabel").textContent = t("record_label");
@@ -773,8 +1314,12 @@ function applyLang() {
   $("settingsNote").textContent = t("settings_note");
   $("independentNote").textContent = t("independent_note");
   $("privacyTitle").textContent = t("privacy_title");
-  $("privacyBody").textContent = t("privacy_body");
-  $("privacyLocal").textContent = t("privacy_local");
+  $("privacyBody").textContent = [
+    t("privacy_permission"), withoutLeadingSentences(t("privacy_body"), 1),
+  ].filter(Boolean).join(" ");
+  $("privacyLocal").textContent = [
+    t("privacy_source"), withoutLeadingSentences(t("privacy_local"), 2),
+  ].filter(Boolean).join(" ");
   $("privacyGovernment").textContent = t("privacy_government");
   $("privacyLink").textContent = t("privacy_link");
   $("sourcesLink").textContent = t("sources_link");
@@ -793,13 +1338,16 @@ function applyLang() {
   $("reviewBtn").textContent = t("review_btn");
   $("exportBtn").textContent = t("export_btn");
   $("lblPothole").textContent = t("lbl_pothole");
-  $("lblPatch").textContent = t("lbl_patch");
-  $("lblSurface").textContent = t("lbl_surface");
-  $("lblRut").textContent = t("lbl_rut");
   $("lblNo").textContent = t("lbl_no");
   $("lblSkip").textContent = t("lbl_skip");
   $("reviewBack").textContent = t("lbl_done");
   $("driveStop").innerHTML = t("stop");
+  if (nativeDrivePlugin()) {
+    $("keepFramesSetting").classList.add("hidden");
+    $("keepFramesNote").classList.add("hidden");
+    $("debugLabel").textContent = "Debug mode: keep repeat detections as separate reports";
+    $("debugNote").textContent = "Normally, nearby sightings of the same pothole are grouped into one report.";
+  }
 }
 
 async function api(path, opts) {
@@ -840,6 +1388,17 @@ function photoSrc(r) {
 }
 
 const thumbUrls = new Map();
+const repairUrls = new Map();
+function repairPhotoSrc(r) {
+  if (!r || !r.repair_photo_url) return "";
+  if (repairUrls.has(r.id)) return repairUrls.get(r.id);
+  if (r.repair_photo_url instanceof Blob) {
+    const url = URL.createObjectURL(r.repair_photo_url);
+    repairUrls.set(r.id, url);
+    return url;
+  }
+  return r.repair_photo_url;
+}
 async function ensureThumbs(items) {
   await Promise.all(items.map(async (r) => {
     if (thumbUrls.has(r.id) || !r.photo_url) return;
@@ -860,16 +1419,108 @@ function releaseThumbs(keepIds) {
   }
 }
 
-const groupsRef = [];
+const NATIVE_DRIVE_HISTORY_CACHE_MS = 5000;
+let nativeDriveHistoryCache = null;
+let nativeDriveHistoryCachedAt = 0;
+let nativeDriveHistoryPromise = null;
+let loadReportsPromise = null;
+let loadReportsRequestedGeneration = 0;
+let loadReportsCompletedGeneration = 0;
+
+function invalidateNativeDriveHistory() {
+  nativeDriveHistoryCache = null;
+  nativeDriveHistoryCachedAt = 0;
+}
+
+async function getNativeDriveHistory(options = {}) {
+  const plugin = nativeDrivePlugin();
+  if (!plugin) return { drives: [] };
+  const fresh = nativeDriveHistoryCache &&
+    Date.now() - nativeDriveHistoryCachedAt < NATIVE_DRIVE_HISTORY_CACHE_MS;
+  if (!options.force && fresh) return nativeDriveHistoryCache;
+  if (nativeDriveHistoryPromise) return nativeDriveHistoryPromise;
+  const request = plugin.getDrives().then((result) => {
+    nativeDriveHistoryCache = result || { drives: [] };
+    nativeDriveHistoryCachedAt = Date.now();
+    return nativeDriveHistoryCache;
+  });
+  nativeDriveHistoryPromise = request;
+  request.finally(() => {
+    if (nativeDriveHistoryPromise === request) nativeDriveHistoryPromise = null;
+  }).catch(() => {});
+  return request;
+}
+
+async function openReportDetail(r, items) {
+  if (!r) return;
+  let current = r;
+  if (physicalCondition(r) !== "fixed" && isOfficialHandoffReport(r)) {
+    try { current = await api(`/api/reports/${r.id}/handoff`); }
+    catch (_) { /* keep evidence accessible; every launch path revalidates again */ }
+  }
+  const replace = (list) => {
+    if (!Array.isArray(list)) return;
+    const index = list.findIndex((item) => item && item.id === current.id);
+    if (index >= 0) list[index] = current;
+  };
+  replace(items);
+  replace(loadReports.latest);
+  openDetail(current, items);
+}
+
 function wireCards(root, items) {
   for (const el of root.querySelectorAll("[data-id]")) {
     if (el.dataset.wired) continue;
     el.dataset.wired = "1";
-    el.onclick = () => openDetail(items.find((r) => r.id == el.dataset.id), items);
+    el.onclick = () => openReportDetail(items.find((r) => r.id == el.dataset.id), items);
   }
 }
 
-async function loadReports() {
+async function mergeNativeDriveHistory(drives, footage) {
+  const plugin = nativeDrivePlugin();
+  if (!plugin) return;
+  const result = await getNativeDriveHistory().catch(() => ({ drives: [] }));
+  for (const nativeDrive of (result.drives || [])) {
+    const id = String(nativeDrive.id);
+    if (!drives.some((item) => String(item.id) === id)) drives.push({ ...nativeDrive, native: true });
+    const segments = Number(nativeDrive.footage_segments) || 0;
+    const keyframes = Number(nativeDrive.keyframe_count) || 0;
+    if ((segments || keyframes) && !footage.some((item) => String(item.drive_id) === id)) {
+      footage.push({
+        drive_id: id,
+        bytes: (Number(nativeDrive.footage_bytes) || 0) + (Number(nativeDrive.keyframe_bytes) || 0),
+        segments,
+        keyframes,
+        pending_keyframes: Number(nativeDrive.pending_keyframes) || 0,
+        duration_ms: Number(nativeDrive.footage_duration_ms) || 0,
+        started_at: nativeDrive.started_at,
+        ended_at: nativeDrive.ended_at,
+        native: true,
+      });
+    }
+  }
+}
+
+function loadReports() {
+  loadReportsRequestedGeneration++;
+  if (!loadReportsPromise) {
+    const run = (async () => {
+      while (loadReportsCompletedGeneration < loadReportsRequestedGeneration) {
+        const generation = loadReportsRequestedGeneration;
+        await renderReports();
+        loadReportsCompletedGeneration = generation;
+      }
+      return loadReports.latest || [];
+    })();
+    loadReportsPromise = run;
+    run.finally(() => {
+      if (loadReportsPromise === run) loadReportsPromise = null;
+    }).catch(() => {});
+  }
+  return loadReportsPromise;
+}
+
+async function renderReports() {
   const [reports, drives, footage] = await Promise.all([
     api("/api/reports"), api("/api/drives").catch(() => []),
     api("/api/footage").catch(() => []),
@@ -940,8 +1591,7 @@ async function loadReports() {
   for (const f of footage) footageById[String(f.drive_id)] = f;
   // Build from the union of reports, drive summaries and footage. This also recovers
   // footage orphaned by older app versions that never wrote a drive summary.
-  const groups = groupsRef;
-  groups.length = 0;
+  const groups = [];
   const driveGroups = {};
   for (const r of allReports) {
     if (!r.drive_id) { groups.push({ driveId: null, items: [r] }); continue; }
@@ -980,9 +1630,11 @@ async function loadReports() {
   releaseThumbs(new Set(allReports.map((r) => r.id)));
   const footageRowHtml = (driveId, fo, open) => !fo ? "" :
     `<div class="card" data-footagerow="${driveId}" style="padding:10px 12px;${open ? "" : "display:none"}">
-      <div class="meta">${t("footage_line", { mb: (fo.bytes / 1048576).toFixed(0), segments: fo.segments })}</div>
+      <div class="meta">${t("footage_line", { mb: (fo.bytes / 1048576).toFixed(0), segments: fo.segments })}${fo.native && fo.keyframes ? ` · ${fo.keyframes} saved frame${fo.keyframes === 1 ? "" : "s"}` : ""}</div>
       <div class="btn-row" style="margin-top:8px">
-        <button class="ghost" data-analyse="${driveId}">${t("analyse_btn")}</button>
+        ${fo.native
+          ? `${fo.pending_keyframes && !(drive && drive.native && String(drive.sessionId) === String(driveId)) ? `<button class="ghost" data-analysenative="${driveId}">Analyse saved frames</button>` : ""}${fo.segments ? `<button class="ghost" data-sharenative="${driveId}">${t("share_evidence_btn")}</button>` : ""}`
+          : `<button class="ghost" data-analyse="${driveId}">${t("analyse_btn")}</button>`}
         <button class="ghost danger" data-delfootage="${driveId}">${t("delete_footage")}</button>
       </div>
     </div>`;
@@ -1057,11 +1709,32 @@ async function loadReports() {
   for (const el of list.querySelectorAll("[data-analyse]")) {
     el.onclick = (ev) => { ev.stopPropagation(); analyseFootage(el.dataset.analyse, driveById[el.dataset.analyse]); };
   }
+  for (const el of list.querySelectorAll("[data-analysenative]")) {
+    el.onclick = (ev) => {
+      ev.stopPropagation();
+      analyseNativeKeyframes(el.dataset.analysenative);
+    };
+  }
+  for (const el of list.querySelectorAll("[data-sharenative]")) {
+    el.onclick = async (ev) => {
+      ev.stopPropagation();
+      try { await nativeDrivePlugin().shareFootage({ sessionId: el.dataset.sharenative }); }
+      catch (e) { alert(e.message || e); }
+    };
+  }
   for (const el of list.querySelectorAll("[data-delfootage]")) {
     el.onclick = async (ev) => {
       ev.stopPropagation();
       if (!confirm(t("confirm_delete_footage"))) return;
-      try { await api(`/api/footage/${encodeURIComponent(el.dataset.delfootage)}`, { method: "DELETE" }); }
+      try {
+        const id = el.dataset.delfootage;
+        if (footageById[id] && footageById[id].native) {
+          await nativeDrivePlugin().deleteFootage({ sessionId: id });
+          invalidateNativeDriveHistory();
+        } else {
+          await api(`/api/footage/${encodeURIComponent(id)}`, { method: "DELETE" });
+        }
+      }
       catch (e) { alert(e.message); }
       loadReports();
     };
@@ -1189,6 +1862,16 @@ function photoBlock(r) {
     </div>`;
 }
 
+function captureProvenanceHtml(r) {
+  if (r.capture_source === "manual_camera") {
+    return `<div class="meta">&#128247; ${escapeHtml(t("capture_provenance_camera"))}</div>`;
+  }
+  if (r.capture_source === "manual_import") {
+    return `<div class="meta" style="color:#ffd9a8">&#128193; ${escapeHtml(t("capture_provenance_import"))}</div>`;
+  }
+  return "";
+}
+
 function wireDetailChrome(r) {
   const img = $("detail").querySelector("[data-zoom]");
   if (img) img.onclick = () => openViewer(r);
@@ -1200,7 +1883,7 @@ function wireDetailChrome(r) {
 function step(delta) {
   const i = detailIdx + delta;
   if (i < 0 || i >= detailList.length) return;
-  openDetail(detailList[i], detailList);
+  openReportDetail(detailList[i], detailList);
 }
 
 // Four distinct reasons a confirmed pothole cannot be addressed, each needing its own
@@ -1209,6 +1892,8 @@ function step(delta) {
 // city was "outside coverage", which was wrong and unhelpful.
 function unroutedTitle(r) {
   if (r.unrouted_reason === "no_location") return t("no_location");
+  if (r.unrouted_reason === "location_uncertain") return t("location_uncertain");
+  if (r.unrouted_reason === "jurisdiction_unavailable") return t("jurisdiction_unavailable");
   if (r.unrouted_reason === "road_class_unknown") return t("road_unknown");
   if (r.unrouted_reason === "national_highway") return t("nat_highway", { road: r.unrouted_body || "" });
   if (r.unrouted_reason === "state_highway") return t("state_highway", { road: r.unrouted_body || "" });
@@ -1218,7 +1903,18 @@ function unroutedTitle(r) {
   return t("outside_coverage");
 }
 function unroutedHelp(r) {
+  if (!isRoadReport(r)) {
+    if (r.unrouted_reason === "no_location") return t("civic_no_location_help");
+    if (r.unrouted_reason === "location_uncertain") return t("civic_location_uncertain_help");
+    if (r.unrouted_reason === "jurisdiction_unavailable") return t("civic_jurisdiction_unavailable_help");
+    if (r.unrouted_reason === "rural_road") return t("civic_rural_help");
+    if (r.unrouted_reason === "no_address_for_body") return t("civic_no_address_help");
+    if (r.unrouted_reason === "unsupported_issue_type") return t("civic_unsupported_help");
+    return t("civic_outside_coverage_help");
+  }
   if (r.unrouted_reason === "no_location") return t("no_location_help");
+  if (r.unrouted_reason === "location_uncertain") return t("location_uncertain_help");
+  if (r.unrouted_reason === "jurisdiction_unavailable") return t("jurisdiction_unavailable_help");
   if (r.unrouted_reason === "road_class_unknown") return t("road_unknown_help");
   if (r.unrouted_reason === "national_highway") return t("nat_highway_help");
   if (r.unrouted_reason === "state_highway") return t("state_highway_help");
@@ -1231,7 +1927,8 @@ function unroutedHelp(r) {
 function detectionVerdict(r) {
   if (r.status === "review") return t("verdict_review");
   if (r.status === "rejected") return t("verdict_rejected");
-  return t("verdict_detected", { type: tDamage(r), assessment: tAssessment(r) });
+  const binary = t("verdict_detected");
+  return r.size ? `${binary} · ${tSize(r.size)}` : binary;
 }
 
 function importedLocationHtml(r) {
@@ -1271,9 +1968,13 @@ function openDetail(r, list) {
         <div class="verdict" style="color:var(--accent)">
           ${escapeHtml(detectionVerdict(r))}
         </div>
+        <div>${chip(r.status, r)} ${conditionChip(r)}</div>
         ${r.address ? `<div class="meta">&#128205; ${escapeHtml(r.address)}</div>` : ""}
         <div class="meta" style="color:var(--bad)">&#9888; ${escapeHtml(unroutedTitle(r))}</div>
         <div class="meta">${escapeHtml(unroutedHelp(r))}</div>
+        ${repairEvidenceHtml(r)}
+        ${physicalCondition(r) !== "fixed" && canRetryRouting(r)
+          ? `<button class="send" id="retryRoutingBtn" style="width:100%;margin-top:12px">${t("retry_routing_btn")}</button>` : ""}
         <div class="btn-row">
           <button class="ghost" id="backBtn">${t("back")}</button>
           <button class="ghost danger" id="discardBtn">${t("del")}</button>
@@ -1285,8 +1986,10 @@ function openDetail(r, list) {
         ${photoBlock(r)}
         ${importedLocationHtml(r)}
         <div class="verdict" style="color:${r.status === "review" ? "var(--accent)" : "var(--bad)"}">${escapeHtml(detectionVerdict(r))}</div>
+        <div>${chip(r.status, r)} ${conditionChip(r)}</div>
         <div class="meta">${escapeHtml(r.description || "")}</div>
-        <div class="meta">${escapeHtml(tDamage(r))} · ${escapeHtml(tAssessment(r))}${r.image_quality ? ` · ${escapeHtml(r.image_quality)}` : ""}</div>
+        ${r.status === "review" ? `<div class="meta">${escapeHtml(tDamage(r))} · ${escapeHtml(tAssessment(r))}${r.image_quality ? ` · ${escapeHtml(r.image_quality)}` : ""}</div>` : ""}
+        ${repairEvidenceHtml(r)}
         <div class="btn-row">
           <button class="ghost" id="backBtn">${t("back")}</button>
           <button class="ghost danger" id="discardBtn">${t("del")}</button>
@@ -1330,6 +2033,7 @@ function openDetail(r, list) {
         <div class="verdict" style="color:var(--accent)">
           ${escapeHtml(verdictText)}
         </div>
+        <div>${chip(r.status, r)} ${conditionChip(r)}</div>
         ${r.address ? `<div class="meta">&#128205; ${escapeHtml(r.address)}</div>` : ""}
         ${showCivicAttribution && r.officer_name ? `<div class="meta">&#128231; ${escapeHtml(t("routes_to"))} ${escapeHtml(r.officer_name)}</div>` : ""}
         ${showCivicAttribution && r.tender_note ? `<div class="meta">&#128209; ${escapeHtml(r.tender_note)}</div>` : ""}
@@ -1343,7 +2047,23 @@ function openDetail(r, list) {
       </div>`;
     if (browserSendable) $("sendBtn").onclick = () => sendReport(r);
   }
+  wireConditionActions(r);
   wireDetailChrome(r);
+  const retryRouting = $("retryRoutingBtn");
+  if (retryRouting) retryRouting.onclick = async () => {
+    retryRouting.disabled = true;
+    retryRouting.textContent = t("working");
+    try {
+      const updated = await api(`/api/reports/${r.id}/retry-routing`, { method: "POST" });
+      await loadReports();
+      if (updated.status === "unrouted") alert(t("retry_routing_unchanged"));
+      openDetail(updated, loadReports.latest || [updated]);
+    } catch (e) {
+      alert(e.message);
+      retryRouting.disabled = false;
+      retryRouting.textContent = t("retry_routing_btn");
+    }
+  };
   $("backBtn").onclick = () => { show("home"); loadReports(); };
   const discard = $("discardBtn");
   if (discard) discard.onclick = async () => {
@@ -1357,6 +2077,9 @@ function openDetail(r, list) {
       }
     } catch (e) { alert(e.message); return; }
     await loadReports(); show("home");
+    if (cleanupError) {
+      alert(`The report was deleted, but its native repair cache will be retried later: ${cleanupError.message || cleanupError}`);
+    }
   };
   show("detail");
 }
@@ -1520,8 +2243,134 @@ async function sendReport(r) {
       return;
     }
     alert(e.message);
-    btn.disabled = false; btn.textContent = sendLabel() + " ✉";
+    btn.disabled = false; btn.textContent = sendLabel(r);
   }
+}
+
+async function markSubmitted(r) {
+  if (physicalCondition(r) === "fixed") { alert(t("fixed_action_blocked")); return; }
+  if (!confirm(t("confirm_mark_submitted"))) return;
+  const input = $("grievanceId");
+  const reference = input ? input.value.trim() : "";
+  const btn = $("markSubmittedBtn");
+  btn.disabled = true; btn.textContent = t("working");
+  try {
+    const updated = await api(`/api/reports/${r.id}/submitted`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ official_grievance_id: reference }),
+    });
+    await loadReports(); openDetail(updated);
+  } catch (e) {
+    alert(e.message); btn.disabled = false; btn.textContent = t("mark_submitted_btn");
+  }
+}
+
+async function openExternalUrl(url, packageName = null) {
+  const launcher = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.AppLauncher;
+  if (launcher) {
+    if (packageName) {
+      try {
+        const available = await launcher.canOpenUrl({ url: packageName });
+        if (available && available.value) {
+          const opened = await launcher.openUrl({ url: packageName });
+          if (!opened || opened.completed !== false) return true;
+        }
+      } catch (_) {}
+    }
+    try {
+      const opened = await launcher.openUrl({ url });
+      if (!opened || opened.completed !== false) return true;
+    } catch (_) {}
+  }
+  const opened = window.open(url, "_blank");
+  if (opened) {
+    try { opened.opener = null; } catch (_) {}
+    return true;
+  }
+  return false;
+}
+
+async function openOfficialWhatsApp(r) {
+  if (physicalCondition(r) === "fixed") { alert(t("fixed_action_blocked")); return; }
+  let verified;
+  try { verified = await api(`/api/reports/${r.id}/handoff`); }
+  catch (e) { alert(e.message); return; }
+  const base = verified.whatsapp_url;
+  if (!base || !String(base).startsWith("https://wa.me/")) {
+    alert("This saved report has no verified official WhatsApp route.");
+    return;
+  }
+  if (!confirm(t("confirm_whatsapp_share", {
+    authority: displayAuthorityName(verified || r),
+  }))) return;
+  const output = roadComplaintOutputs(verified);
+  const text = (output && output.whatsapp_text
+    ? output.whatsapp_text
+    : `${verified.email_subject || `${tIssue(verified)} report`}\n\n${verified.email_body || ""}`).slice(0, 4000);
+  const opened = await openExternalUrl(`${base}${base.includes("?") ? "&" : "?"}text=${encodeURIComponent(text)}`);
+  if (!opened) alert("Could not open the official WhatsApp route. Try Share evidence or another official channel.");
+}
+
+async function openOfficialCall(r) {
+  if (physicalCondition(r) === "fixed") { alert(t("fixed_action_blocked")); return; }
+  let verified;
+  try { verified = await api(`/api/reports/${r.id}/handoff`); }
+  catch (e) { alert(e.message); return; }
+  const number = String(verified.helpline || "").replace(/[^0-9+]/g, "");
+  if (!number) { alert("This saved report has no verified official helpline."); return; }
+  location.href = `tel:${number}`;
+}
+
+async function openAlternateHandoff(r) {
+  if (physicalCondition(r) === "fixed") { alert(t("fixed_action_blocked")); return; }
+  let verified;
+  try { verified = await api(`/api/reports/${r.id}/handoff`); }
+  catch (e) { alert(e.message); return; }
+  const url = String(verified.alternate_handoff_url || "");
+  if (!url.startsWith("https://")) {
+    alert("This saved report has no verified alternate handoff.");
+    return;
+  }
+  const opened = await openExternalUrl(url);
+  if (!opened) {
+    alert(`Could not open ${verified.alternate_handoff_name || "the official fallback"}.`);
+    return;
+  }
+  if (r.status === "draft" || r.status === "queued") {
+    try {
+      const updated = await api(`/api/reports/${r.id}/handoff-opened`, { method: "POST" });
+      await loadReports(); openDetail(updated);
+    } catch (e) { alert(e.message); }
+  }
+}
+
+async function shareEvidence(r) {
+  if (physicalCondition(r) === "fixed") { alert(t("fixed_action_blocked")); return; }
+  const btn = $("shareEvidenceBtn");
+  btn.disabled = true; btn.textContent = t("working");
+  try {
+    const evidence = await api(`/api/reports/${r.id}/evidence`);
+    const P = window.Capacitor && Capacitor.Plugins;
+    if (P && P.Filesystem && P.Share) {
+      try { await P.Filesystem.mkdir({ path: SHARE_CACHE_DIR, directory: "CACHE", recursive: true }); } catch (_) {}
+      const wide = await P.Filesystem.writeFile({ path: `${SHARE_CACHE_DIR}/${evidence.name}`, data: evidence.base64, directory: "CACHE" });
+      const files = [wide.uri];
+      await P.Share.share({ title: evidence.name, text: evidence.text, files,
+                            dialogTitle: t("share_evidence_btn") });
+    } else {
+      const bin = atob(evidence.base64), arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const file = new File([arr], evidence.name, { type: "image/jpeg" });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ title: evidence.name, text: evidence.text, files: [file] });
+      } else {
+        const url = URL.createObjectURL(file), a = document.createElement("a");
+        a.href = url; a.download = evidence.name; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }
+    }
+  } catch (e) { alert(e.message); }
+  btn.disabled = false; btn.textContent = t("share_evidence_btn");
 }
 
 // ---------- Drive Mode ----------
@@ -1546,7 +2395,13 @@ const MAX_CAPTURE_QUEUE = 24;
 let SEGMENT_MS = 15000;            // footage is written in 15s pieces so memory stays flat
 let RECORD_BITRATE = 2_500_000;    // ~18 MB/min at 1080p
 let RECORDER_STOP_TIMEOUT_MS = 10000; // a broken WebView must not lock Drive shutdown forever
-let VOD_STEP_S = 1.0;              // frame spacing when re-analysing footage
+let VOD_STEP_S = 0.5;              // overlap windows so short defects cannot fall between samples
+const VOD_BURST_HALF_SPAN_S = 0.40; // three-source post-drive window around the candidate
+const DRIVE_LIMIT_OPTIONS = [15, 30, 60, 90];
+function driveLimitMinutes() {
+  const selected = Number(localStorage.getItem("drive_limit_minutes"));
+  return DRIVE_LIMIT_OPTIONS.includes(selected) ? selected : 30;
+}
 // Recording is what removes the guesswork: capture is continuous, and choosing how
 // densely to analyse becomes a separate, repeatable decision made afterwards.
 const RECORD_MIMES = ["video/mp4;codecs=avc1.42E01E", "video/mp4",
@@ -1557,6 +2412,954 @@ let driveFinalizing = null;
 let nativeDriveListener = null;
 const DATA_NOTICE_VERSION = "2026-09-05-v3";
 let consentWaiter = null;
+let nativeDriveListenersReady = false;
+const handledNativeEnds = new Set();
+const provisionalNativeEnds = new Set();
+let nativeStopPromise = null;
+let nativeFinishPromise = null;
+let nativeFinishLocked = false;
+let nativeWipeLocked = false;
+let nativeCaptureFinalizingSessionId = null;
+let nativeStopStatusPollTimer = null;
+let nativeStartStatusPollTimer = null;
+let nativeSyncPromise = null;
+let nativeTrailingForcePromise = null;
+let nativeRepairSyncPromise = null;
+let nativeDataSyncEpoch = 0;
+let nativeRepairSyncEpoch = 0;
+let nativeWipeInProgress = false;
+let nativeDriveControlEpoch = 0;
+let lastNativeSyncAt = 0;
+let lastNativeSyncResult = { reports: 0, repairs: 0, drives: 0 };
+const NATIVE_FINISH_HYDRATE_TIMEOUT_MS = 8000;
+const NATIVE_SYNC_ABORT_WAIT_MS = 2500;
+
+function newNativeStartRequestId() {
+  if (window.crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (window.crypto && typeof crypto.getRandomValues === "function") {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index++) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-` +
+    `${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function nativeStatusOwnsPendingStart(status, candidate = drive) {
+  if (!(driveStarting || (candidate && candidate.starting)) ||
+      !candidate || !candidate.native || candidate.sessionId) return true;
+  const expected = String(candidate.startRequestId || "");
+  const incoming = String(status && status.startRequestId || "");
+  return Boolean(expected && incoming && expected === incoming);
+}
+
+function claimCameraAdmission(owner) {
+  if (cameraAdmissionOwner) return false;
+  cameraAdmissionOwner = owner;
+  return true;
+}
+
+function releaseCameraAdmission(owner) {
+  if (cameraAdmissionOwner === owner) cameraAdmissionOwner = null;
+}
+
+function invalidateNativeBackgroundSyncs() {
+  nativeDataSyncEpoch++;
+  nativeRepairSyncEpoch++;
+}
+
+function bumpNativeDriveControlEpoch() {
+  nativeDriveControlEpoch++;
+  return nativeDriveControlEpoch;
+}
+
+function requireNativeDataSyncCurrent(epoch) {
+  if (nativeWipeInProgress || nativeCaptureFinalizingSessionId ||
+      epoch !== nativeDataSyncEpoch) {
+    throw new Error("Native data sync was cancelled.");
+  }
+}
+
+function requireNativeRepairSyncCurrent(epoch) {
+  if (nativeWipeInProgress || nativeCaptureFinalizingSessionId ||
+      epoch !== nativeRepairSyncEpoch) {
+    throw new Error("Native repair sync was cancelled.");
+  }
+}
+
+function beginNativeCaptureFinalization(sessionId) {
+  const requested = String(sessionId || "").trim();
+  const current = String(nativeCaptureFinalizingSessionId || "");
+  if (current && current !== "__pending__" && requested && current !== requested) {
+    return false;
+  }
+  nativeCaptureFinalizingSessionId = requested || (current || "__pending__");
+  invalidateNativeBackgroundSyncs();
+  // A repair-cache transaction may otherwise continue decoding bridge images while
+  // CameraX is closing. Abort it without delaying the camera control plane.
+  abortNativeRepairStaging(nativeDrivePlugin()).catch(() => {});
+  return true;
+}
+
+function releaseNativeCaptureFinalization(sessionId) {
+  const requested = String(sessionId || "").trim();
+  const current = String(nativeCaptureFinalizingSessionId || "");
+  if (!current) return true;
+  if (current !== "__pending__" && requested && current !== requested) return false;
+  nativeCaptureFinalizingSessionId = null;
+  return true;
+}
+
+async function abortNativeRepairStaging(plugin) {
+  if (!plugin || typeof plugin.abortRepairTargetSync !== "function") return;
+  let timer = null;
+  try {
+    await Promise.race([
+      plugin.abortRepairTargetSync({ token: "" }).catch(() => {}),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, NATIVE_SYNC_ABORT_WAIT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function cancelNativeBackgroundSyncsForDriveStart(plugin) {
+  invalidateNativeBackgroundSyncs();
+  // At most one already-decoding two-image batch may finish. Waiting for the native
+  // abort prevents a multi-page repair-cache rebuild from competing with CameraX.
+  await abortNativeRepairStaging(plugin);
+}
+
+async function hydrateNativeDriveEndWithinDeadline() {
+  let timer = null;
+  const hydration = (async () => {
+    await syncNativeData({ force: true });
+    await loadReports().catch(() => {});
+  })();
+  try {
+    await Promise.race([
+      hydration,
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Native history hydration timed out.")),
+          NATIVE_FINISH_HYDRATE_TIMEOUT_MS
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function nativeDrivePlugin() {
+  if (!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform())) return null;
+  try {
+    return Capacitor.registerPlugin ? Capacitor.registerPlugin("DriveMode")
+      : (Capacitor.Plugins && Capacitor.Plugins.DriveMode);
+  } catch (e) { return null; }
+}
+
+function nativeStatusCaptureSource(status = null) {
+  return normaliseDriveCaptureSource(
+    status && status.captureSource || drive && drive.native && drive.captureSource ||
+    savedDriveCaptureSource()
+  );
+}
+
+const nativeSourceStartingStatus = (captureSource) =>
+  captureSource === DASHCAM_CAPTURE_SOURCE
+    ? "Connecting to dashcam and GPS" : "Starting camera and GPS";
+const nativeSourceVerifyingStatus = (captureSource) =>
+  captureSource === DASHCAM_CAPTURE_SOURCE
+    ? "Verifying the dashcam stream" : "Verifying the foreground camera";
+
+function publicNativeSourceText(value, captureSource) {
+  const text = String(value || "").trim();
+  if (captureSource !== DASHCAM_CAPTURE_SOURCE) return text;
+  // Bridge errors and status are user-visible. Even a buggy vendor decoder must not
+  // echo an RTSP credential into the HUD, notification-facing copy, or screenshots.
+  return text.replace(/rtsp:\/\/\S+/gi, "saved RTSP address");
+}
+
+function updateNativeSourcePresentation(captureSource, status = null) {
+  const dashcam = captureSource === DASHCAM_CAPTURE_SOURCE;
+  const slot = $("nativePreviewSlot");
+  if (slot.dataset.captureSource !== captureSource) {
+    slot.dataset.captureSource = captureSource;
+    slot.setAttribute("aria-label",
+      dashcam ? "Live dashcam preview" : "Live phone camera preview");
+    $("driveTip").textContent = dashcam
+      ? "The dashcam stream is shown here. Keep this phone connected to the dashcam's Wi-Fi; GPS still comes from the phone. Maps and calls may cover the preview."
+      : "The live phone-camera view is visible here. Maps and calls may cover it; the notification always shows camera and recording status.";
+    $("nativeBackgroundNotice").textContent = dashcam
+      ? "Dashcam scanning continues only while the persistent Android “Drive Mode” notification is visible—even when Maps or a call is on screen. Keep the phone connected to the dashcam's Wi-Fi."
+      : "Camera scanning continues only while the persistent Android “Drive Mode” notification is visible—even when Maps or a call is on screen. It stops automatically at the selected battery limit.";
+  }
+  // A dashcam supplies live analysis frames but is not duplicated into the phone's
+  // optional local-video store. Keep that implementation detail out of the primary
+  // status and remove a control which cannot apply to this source.
+  $("nativeRecordBtn").classList.toggle("hidden", dashcam);
+  const message = $("nativeSourceMessage");
+  let text = dashcam ? "Connecting to dashcam…" : "Starting phone camera…";
+  if (status) {
+    const sourceState = String(status.sourceState || "").toLowerCase();
+    const sourceIssue = publicNativeSourceText(status.sourceIssue, captureSource);
+    const sourceActive = typeof status.sourceActive === "boolean"
+      ? status.sourceActive : status.cameraActive === true;
+    if (status.isPaused || sourceState === "paused") {
+      text = dashcam ? "Dashcam paused." : "Phone camera paused.";
+    } else if (sourceIssue) {
+      text = sourceIssue;
+    } else if (sourceState === "reconnecting") {
+      text = dashcam ? "Dashcam stream interrupted. Reconnecting…"
+        : "Phone camera interrupted. Retrying…";
+    } else if (sourceState === "error") {
+      text = dashcam ? "Dashcam stream unavailable." : "Phone camera unavailable.";
+    } else if (sourceActive && !status.captureBlocked) {
+      text = "";
+    } else if (status.captureBlocked && status.captureIssue) {
+      text = publicNativeSourceText(status.captureIssue, captureSource);
+    } else if (sourceState === "stopped") {
+      text = dashcam ? "Dashcam stopped." : "Phone camera stopped.";
+    } else if (dashcam && sourceState === "connecting") {
+      text = "Connecting to dashcam…";
+    } else if (!sourceActive) {
+      text = dashcam ? "Waiting for dashcam video…" : "Starting phone camera…";
+    }
+  }
+  message.textContent = text;
+  message.classList.toggle("hidden", !text);
+}
+
+function setDrivePanels(native, captureSource = savedDriveCaptureSource()) {
+  $("webDrivePanel").classList.toggle("hidden", native);
+  $("nativeDrivePanel").classList.toggle("hidden", !native);
+  if (native) {
+    const source = normaliseDriveCaptureSource(captureSource);
+    if ($("nativePreviewSlot").dataset.captureSource !== source) {
+      updateNativeSourcePresentation(source);
+    }
+  } else {
+    delete $("nativePreviewSlot").dataset.captureSource;
+    $("driveTip").textContent = t("drive_tip");
+  }
+}
+
+function setDriveActiveButton(active) {
+  $("driveBtn").innerHTML = t("drive_btn") + (active ? " &nbsp;&#9679;" : "");
+  $("driveBtn").setAttribute("aria-label", active ? "Drive active — view" : "Drive");
+}
+
+function applyNativeMutationLocks() {
+  const disabled = nativeFinishLocked || nativeWipeLocked;
+  $("driveBtn").disabled = disabled;
+  $("captureBtn").disabled = disabled;
+  $("gearBtn").disabled = disabled;
+  $("wipeBtn").disabled = disabled;
+  $("setSave").disabled = disabled;
+  $("setBack").disabled = disabled;
+}
+
+function setNativeFinishLocked(locked) {
+  nativeFinishLocked = locked;
+  applyNativeMutationLocks();
+}
+
+function setNativeWipeLocked(locked) {
+  nativeWipeLocked = locked;
+  applyNativeMutationLocks();
+}
+
+function setNativeSavingBanner(active) {
+  const banner = $("banner");
+  if (active) {
+    banner.dataset.nativeStopSaving = "1";
+    banner.textContent = nativeStatusCaptureSource() === DASHCAM_CAPTURE_SOURCE
+      ? "Dashcam disconnected · saving drive data…" : "Camera off · saving drive data…";
+    banner.style.display = "block";
+  } else if (banner.dataset.nativeStopSaving === "1") {
+    delete banner.dataset.nativeStopSaving;
+    banner.textContent = "";
+    banner.style.display = "none";
+  }
+}
+
+function scheduleNativeStopStatusPoll() {
+  if (nativeStopStatusPollTimer || !nativeCaptureFinalizingSessionId) return;
+  nativeStopStatusPollTimer = setTimeout(() => {
+    nativeStopStatusPollTimer = null;
+    if (nativeCaptureFinalizingSessionId && !nativeFinishPromise) {
+      restoreNativeDrive({ syncWhenIdle: false }).catch(() => {
+        scheduleNativeStopStatusPoll();
+      });
+    }
+  }, 750);
+}
+
+function cancelNativeStopStatusPoll() {
+  if (nativeStopStatusPollTimer) clearTimeout(nativeStopStatusPollTimer);
+  nativeStopStatusPollTimer = null;
+}
+
+function scheduleNativeStartStatusPoll() {
+  if (nativeStartStatusPollTimer) return;
+  nativeStartStatusPollTimer = setTimeout(() => {
+    nativeStartStatusPollTimer = null;
+    if ((driveStarting || (drive && drive.native && drive.starting)) &&
+        !nativeWipeInProgress && !nativeFinishPromise) {
+      restoreNativeDrive({ syncWhenIdle: false }).catch(() => {
+        scheduleNativeStartStatusPoll();
+      });
+    }
+  }, 250);
+}
+
+function cancelNativeStartStatusPoll() {
+  if (nativeStartStatusPollTimer) clearTimeout(nativeStartStatusPollTimer);
+  nativeStartStatusPollTimer = null;
+}
+
+function stopNativePreview(preserveGraph = false) {
+  nativePreviewGeneration++;
+  nativePreviewAttached = false;
+  nativePreviewAttachPending = false;
+  nativePreviewPendingGeneration = 0;
+  nativePreviewFailureCount = 0;
+  if (nativePreviewRetryTimer) clearTimeout(nativePreviewRetryTimer);
+  nativePreviewRetryTimer = null;
+  if (nativePreviewScrollFrame) cancelAnimationFrame(nativePreviewScrollFrame);
+  nativePreviewScrollFrame = null;
+  document.documentElement.classList.remove("native-preview-active");
+  const plugin = nativeDrivePlugin();
+  if (plugin) plugin.detachPreview({ preserveGraph: !!preserveGraph }).catch(() => {});
+}
+
+function startNativePreview() {
+  if (nativePreviewAttachPending || nativePreviewRetryTimer) return;
+  const generation = ++nativePreviewGeneration;
+  if (!nativeHostAppActive || !drive || !drive.native || document.visibilityState !== "visible" ||
+      $("drive").classList.contains("hidden")) return;
+  document.documentElement.classList.add("native-preview-active");
+  requestAnimationFrame(() => requestAnimationFrame(async () => {
+    if (generation !== nativePreviewGeneration || !drive || !drive.native) return;
+    const slot = $("nativePreviewSlot");
+    const rect = slot.getBoundingClientRect();
+    const plugin = nativeDrivePlugin();
+    if (plugin) {
+      nativePreviewAttachPending = true;
+      nativePreviewPendingGeneration = generation;
+      let attachTimeout = null;
+      let failed = false;
+      try {
+        const request = plugin.attachPreview({
+          left: rect.left, top: rect.top, width: rect.width, height: rect.height,
+          viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+        });
+        await Promise.race([
+          request,
+          new Promise((_, reject) => {
+            attachTimeout = setTimeout(() => reject(new Error("Preview attachment timed out")), 4000);
+          }),
+        ]);
+        if (generation !== nativePreviewGeneration || !drive || !drive.native ||
+            document.visibilityState !== "visible" || $("drive").classList.contains("hidden")) {
+          nativePreviewAttached = false;
+          return;
+        }
+        nativePreviewAttached = true;
+        nativePreviewFailureCount = 0;
+      } catch (_) {
+        failed = true;
+        nativePreviewAttached = false;
+        if (generation === nativePreviewGeneration) {
+          nativePreviewFailureCount++;
+          document.documentElement.classList.remove("native-preview-active");
+        }
+      } finally {
+        if (attachTimeout) clearTimeout(attachTimeout);
+        if (nativePreviewPendingGeneration === generation) {
+          nativePreviewAttachPending = false;
+          nativePreviewPendingGeneration = 0;
+        }
+        if (failed && generation === nativePreviewGeneration && nativeHostAppActive &&
+            drive && drive.native && document.visibilityState === "visible" &&
+            !$("drive").classList.contains("hidden")) {
+          const retryMs = Math.min(8000, 500 * (2 ** Math.min(4, nativePreviewFailureCount - 1)));
+          nativePreviewRetryTimer = setTimeout(() => {
+            nativePreviewRetryTimer = null;
+            if (generation === nativePreviewGeneration) startNativePreview();
+          }, retryMs);
+        }
+      }
+    }
+  }));
+}
+
+function updateNativeDriveHud(status) {
+  if (!status) return;
+  const captureSource = nativeStatusCaptureSource(status);
+  if (drive && drive.native) drive.captureSource = captureSource;
+  updateNativeSourcePresentation(captureSource, status);
+  const found = Number(status.found) || 0;
+  const already = Number(status.already) || 0;
+  const repaired = Number(status.repaired) || 0;
+  $("nativeDriveCount").textContent = eventCountText(found)
+    + (already ? ` · ${alreadyCountText(already)}` : "")
+    + (repaired ? ` · ${repaired} fixed` : "");
+  const queued = Number(status.queued) || 0;
+  const dropped = Number(status.dropped) || 0;
+  const segments = Number(status.segmentCount) || 0;
+  const keyframes = Number(status.keyframeCount) || 0;
+  const savedMb = (Number(status.recordedBytes) || 0) / 1048576;
+  const remainingMs = Number(status.remainingMs) || 0;
+  const minutesLeft = remainingMs > 0 ? Math.max(1, Math.ceil(remainingMs / 60000)) : 0;
+  const captureIssue = publicNativeSourceText(status.captureIssue, captureSource);
+  const sourceIssue = publicNativeSourceText(status.sourceIssue, captureSource);
+  const statusMessage = sourceIssue || (status.captureBlocked && captureIssue
+    ? captureIssue : publicNativeSourceText(status.status || "Scanning live", captureSource));
+  $("nativeDriveStatus").textContent = statusMessage
+    + (queued ? ` · ${queued} queued` : "")
+    + (dropped ? ` · ${dropped} saved for later` : "")
+    + (keyframes ? ` · ${keyframes} saved frame${keyframes === 1 ? "" : "s"}` : "")
+    + (segments ? ` · ${segments} video clip${segments === 1 ? "" : "s"} (${savedMb.toFixed(0)} MB)` : "")
+    + (minutesLeft && !status.isStopping ? ` · ${minutesLeft} min left` : "");
+  $("nativePauseBtn").textContent = status.isPaused ? "Resume" : "Pause";
+  const badge = $("nativeCameraBadge");
+  if (captureSource === DASHCAM_CAPTURE_SOURCE) {
+    const sourceState = String(status.sourceState || "").toLowerCase();
+    const sourceActive = typeof status.sourceActive === "boolean"
+      ? status.sourceActive : status.cameraActive === true;
+    if (status.isStopping) {
+      badge.innerHTML = "FINALIZING · DASHCAM DISCONNECTING";
+      badge.style.background = "rgba(60,60,60,.88)";
+    } else if (status.isPausing) {
+      badge.innerHTML = "PAUSING · DASHCAM DISCONNECTING";
+      badge.style.background = "rgba(60,60,60,.88)";
+    } else if (status.isPaused) {
+      badge.innerHTML = "&#10074;&#10074; PAUSED · DASHCAM OFF";
+      badge.style.background = "rgba(60,60,60,.88)";
+    } else if (status.captureBlocked) {
+      badge.innerHTML = sourceActive
+        ? "DASHCAM ACTIVE · DETECTION WAITING FOR GPS"
+        : "CAPTURE PAUSED · DASHCAM/GPS UNAVAILABLE";
+      badge.style.background = sourceActive ? "rgba(130,70,0,.88)" : "rgba(150,0,0,.88)";
+    } else if (sourceState === "connecting") {
+      badge.innerHTML = "DASHCAM CONNECTING";
+      badge.style.background = "rgba(130,70,0,.88)";
+    } else if (sourceState === "reconnecting") {
+      badge.innerHTML = "DASHCAM INTERRUPTED · RETRYING";
+      badge.style.background = "rgba(150,0,0,.88)";
+    } else if (sourceState === "error" || sourceIssue) {
+      badge.innerHTML = "DASHCAM UNAVAILABLE";
+      badge.style.background = "rgba(150,0,0,.88)";
+    } else if (!sourceActive) {
+      badge.innerHTML = "DASHCAM WAITING FOR VIDEO";
+      badge.style.background = "rgba(130,70,0,.88)";
+    } else if (status.recordingEnabled && status.isRecording) {
+      badge.innerHTML = "&#9679; RECORDING VIDEO · DASHCAM ACTIVE";
+      badge.style.background = "rgba(150,0,0,.88)";
+    } else if (status.recordingEnabled && status.recordingIssue) {
+      badge.innerHTML = "DASHCAM ACTIVE · VIDEO NOT RECORDING";
+      badge.style.background = "rgba(150,0,0,.88)";
+    } else {
+      badge.innerHTML = "&#9679; DASHCAM ACTIVE · SAVING FRAMES";
+      badge.style.background = "rgba(130,70,0,.88)";
+    }
+  } else {
+    if (status.isStopping) {
+      badge.innerHTML = "FINALIZING · CAMERA STOPPING";
+      badge.style.background = "rgba(60,60,60,.88)";
+    } else if (status.isPausing) {
+      badge.innerHTML = "PAUSING · CAMERA STOPPING";
+      badge.style.background = "rgba(60,60,60,.88)";
+    } else if (status.isPaused) {
+      badge.innerHTML = "&#10074;&#10074; PAUSED · CAMERA OFF";
+      badge.style.background = "rgba(60,60,60,.88)";
+    } else if (status.captureBlocked) {
+      badge.innerHTML = status.cameraActive === true
+        ? (status.recordingEnabled && status.isRecording
+            ? "&#9679; RECORDING VIDEO · DETECTION WAITING FOR GPS"
+            : "CAMERA ACTIVE · DETECTION WAITING FOR GPS")
+        : "CAPTURE PAUSED · CAMERA/GPS UNAVAILABLE";
+      badge.style.background = status.cameraActive === true
+        ? "rgba(130,70,0,.88)" : "rgba(150,0,0,.88)";
+    } else if (status.cameraActive !== true) {
+      const starting = /starting|waiting/i.test(String(status.status || ""));
+      badge.innerHTML = starting ? "CAMERA STARTING" : "CAMERA INTERRUPTED · RETRYING";
+      badge.style.background = "rgba(130,70,0,.88)";
+    } else if (status.recordingEnabled && status.isRecording) {
+      badge.innerHTML = "&#9679; RECORDING VIDEO";
+      badge.style.background = "rgba(150,0,0,.88)";
+    } else if (status.recordingEnabled && status.recordingIssue) {
+      badge.innerHTML = "CAMERA ACTIVE · VIDEO NOT RECORDING";
+      badge.style.background = "rgba(150,0,0,.88)";
+    } else if (status.recordingEnabled && status.videoSupported !== false) {
+      badge.innerHTML = "&#9679; CAMERA ACTIVE · VIDEO STARTING";
+      badge.style.background = "rgba(130,70,0,.88)";
+    } else if (status.videoSupported === false) {
+      badge.innerHTML = "&#9679; CAMERA ACTIVE · VIDEO UNAVAILABLE";
+      badge.style.background = "rgba(130,70,0,.88)";
+    } else {
+      badge.innerHTML = "&#9679; CAMERA ACTIVE · SAVING FRAMES";
+      badge.style.background = "rgba(130,70,0,.88)";
+    }
+  }
+  $("nativeRecordBtn").textContent = status.recordingEnabled ? "Video: On" : "Video: Off";
+  $("nativeRecordBtn").disabled = nativeVideoControlPending ||
+    Boolean(status.isStopping || status.isPausing) ||
+    (status.videoSupported === false && !status.recordingEnabled);
+  $("nativePauseBtn").disabled = nativePauseControlPending ||
+    Boolean(status.isStopping || status.isPausing);
+  $("nativeDriveStop").disabled = Boolean(status.isStopping);
+}
+
+function beginNativeDataSync(force) {
+  if (nativeWipeInProgress || nativeCaptureFinalizingSessionId) {
+    return Promise.reject(new Error(nativeWipeInProgress
+      ? "App data deletion is in progress." : "Drive data is still being finalized."));
+  }
+  const syncEpoch = nativeDataSyncEpoch;
+  const repairEpoch = nativeRepairSyncEpoch;
+  const run = performNativeDataSync({
+    forceNativeHistory: force, syncEpoch, repairEpoch,
+  }).then((result) => {
+    requireNativeDataSyncCurrent(syncEpoch);
+    lastNativeSyncAt = Date.now();
+    lastNativeSyncResult = result;
+    return result;
+  });
+  nativeSyncPromise = run;
+  run.finally(() => {
+    if (nativeSyncPromise === run) nativeSyncPromise = null;
+  }).catch(() => {});
+  return run;
+}
+
+function syncNativeData(options = {}) {
+  if (nativeWipeInProgress || nativeCaptureFinalizingSessionId) {
+    return Promise.reject(new Error(nativeWipeInProgress
+      ? "App data deletion is in progress." : "Drive data is still being finalized."));
+  }
+  const force = options.force === true;
+  if (nativeTrailingForcePromise) return nativeTrailingForcePromise;
+  if (nativeSyncPromise) {
+    if (!force) return nativeSyncPromise;
+    // A forced finish sync must observe rows committed after an older foreground sync
+    // began. Queue exactly one trailing pass instead of quietly returning stale work.
+    const active = nativeSyncPromise;
+    const requestedEpoch = nativeDataSyncEpoch;
+    nativeTrailingForcePromise = active.catch(() => null)
+      .then(() => {
+        requireNativeDataSyncCurrent(requestedEpoch);
+        return beginNativeDataSync(true);
+      })
+      .finally(() => { nativeTrailingForcePromise = null; });
+    return nativeTrailingForcePromise;
+  }
+  if (!force && Date.now() - lastNativeSyncAt < 30000) {
+    return Promise.resolve(lastNativeSyncResult);
+  }
+  return beginNativeDataSync(force);
+}
+
+const NATIVE_IMAGE_BATCH_SIZE = 2;
+
+async function performNativeDataSync(options = {}) {
+  const syncEpoch = options.syncEpoch;
+  const repairEpoch = options.repairEpoch;
+  requireNativeDataSyncCurrent(syncEpoch);
+  const plugin = nativeDrivePlugin();
+  if (!plugin) return { reports: 0, drives: 0 };
+  let reportCount = 0;
+  // Native evidence is Base64 across this bridge. Two-at-a-time keeps peak memory flat
+  // while each page is acknowledged durably before the next one is requested.
+  for (let page = 0; page < 100; page++) {
+    requireNativeDataSyncCurrent(syncEpoch);
+    const pending = await plugin.syncReports({ limit: NATIVE_IMAGE_BATCH_SIZE })
+      .catch(() => ({ reports: [] }));
+    requireNativeDataSyncCurrent(syncEpoch);
+    const reports = pending.reports || [];
+    if (!reports.length) break;
+    const remainingBeforeAck = Number(pending.remaining);
+    const acknowledged = [];
+    for (const report of reports) {
+      try {
+        await api("/api/native-report", { method: "POST", body: JSON.stringify(report) });
+        acknowledged.push(Number(report.id));
+      } catch (e) { /* leave it unsynced; next resume retries safely */ }
+    }
+    if (acknowledged.length) {
+      let confirmed = 0;
+      try {
+        const result = await plugin.acknowledgeReports({ ids: acknowledged });
+        const value = Number(result && result.acknowledged);
+        if (Number.isFinite(value)) confirmed = Math.max(0, Math.min(acknowledged.length, Math.floor(value)));
+      } catch (_) { break; }
+      reportCount += confirmed;
+      // Without a durable Room acknowledgement the same page is returned again. Stop
+      // here instead of importing it up to another 99 times.
+      if (confirmed !== acknowledged.length) break;
+    }
+    if (acknowledged.length !== reports.length) break;
+    if (Number.isFinite(remainingBeforeAck)) {
+      if (remainingBeforeAck <= acknowledged.length) break;
+    } else if (reports.length < NATIVE_IMAGE_BATCH_SIZE) break;
+  }
+  requireNativeDataSyncCurrent(syncEpoch);
+  const repairs = await refreshNativeRepairData(plugin, repairEpoch);
+  requireNativeDataSyncCurrent(syncEpoch);
+  const sessions = await getNativeDriveHistory({ force: options.forceNativeHistory })
+    .catch(() => ({ drives: [] }));
+  requireNativeDataSyncCurrent(syncEpoch);
+  let driveCount = 0;
+  for (const session of (sessions.drives || []).filter((x) =>
+    x.status === "stopped" || x.status === "interrupted")) {
+    requireNativeDataSyncCurrent(syncEpoch);
+    try {
+      await api("/api/drives", { method: "POST", body: JSON.stringify(session) });
+      driveCount++;
+    } catch (e) {}
+  }
+  return { reports: reportCount, repairs: repairs.observations, drives: driveCount };
+}
+
+function refreshNativeRepairData(
+  plugin = nativeDrivePlugin(),
+  expectedEpoch = nativeRepairSyncEpoch
+) {
+  if (nativeWipeInProgress || nativeCaptureFinalizingSessionId) {
+    return Promise.reject(new Error(nativeWipeInProgress
+      ? "App data deletion is in progress." : "Drive data is still being finalized."));
+  }
+  if (nativeRepairSyncPromise) return nativeRepairSyncPromise;
+  requireNativeRepairSyncCurrent(expectedEpoch);
+  const run = syncNativeRepairData(plugin, expectedEpoch);
+  nativeRepairSyncPromise = run;
+  run.finally(() => {
+    if (nativeRepairSyncPromise === run) nativeRepairSyncPromise = null;
+  }).catch(() => {});
+  return run;
+}
+
+async function syncNativeRepairData(
+  plugin = nativeDrivePlugin(),
+  expectedEpoch = nativeRepairSyncEpoch
+) {
+  requireNativeRepairSyncCurrent(expectedEpoch);
+  if (!plugin) return { observations: 0, targets: 0 };
+  let observationCount = 0;
+  if (typeof plugin.syncRepairObservations === "function") {
+    for (let page = 0; page < 100; page++) {
+      requireNativeRepairSyncCurrent(expectedEpoch);
+      const pending = await plugin.syncRepairObservations({ limit: NATIVE_IMAGE_BATCH_SIZE })
+        .catch(() => ({ observations: [] }));
+      requireNativeRepairSyncCurrent(expectedEpoch);
+      const observations = pending.observations || [];
+      if (!observations.length) break;
+      const remainingBeforeAck = Number(pending.remaining);
+      const acknowledged = [];
+      for (const observation of observations) {
+        try {
+          await api("/api/native-repair", { method: "POST", body: JSON.stringify(observation) });
+          acknowledged.push(Number(observation.id));
+        } catch (_) { /* leave it in Room so the next foreground sync retries */ }
+      }
+      let confirmed = 0;
+      if (acknowledged.length && typeof plugin.acknowledgeRepairObservations === "function") {
+        try {
+          const result = await plugin.acknowledgeRepairObservations({ ids: acknowledged });
+          const value = Number(result && result.acknowledged);
+          if (Number.isFinite(value)) confirmed = Math.max(0, Math.min(acknowledged.length, Math.floor(value)));
+        } catch (_) { break; }
+      }
+      observationCount += confirmed;
+      if (confirmed !== acknowledged.length || acknowledged.length !== observations.length) break;
+      if (Number.isFinite(remainingBeforeAck)) {
+        if (remainingBeforeAck <= confirmed) break;
+      } else if (observations.length < NATIVE_IMAGE_BATCH_SIZE) break;
+    }
+  }
+  requireNativeRepairSyncCurrent(expectedEpoch);
+  const targetCount = await refreshNativeRepairTargetCache(plugin, expectedEpoch);
+  return { observations: observationCount, targets: targetCount };
+}
+
+async function refreshNativeRepairTargetCache(
+  plugin = nativeDrivePlugin(),
+  expectedEpoch = nativeRepairSyncEpoch
+) {
+  requireNativeRepairSyncCurrent(expectedEpoch);
+  if (!plugin) return 0;
+  const required = ["beginRepairTargetSync", "appendRepairTargetBatch",
+    "commitRepairTargetSync", "abortRepairTargetSync"];
+  if (required.some((name) => typeof plugin[name] !== "function")) {
+    throw new Error("This Android build cannot refresh its repair history safely.");
+  }
+  const manifest = await api("/api/repair-targets");
+  requireNativeRepairSyncCurrent(expectedEpoch);
+  const ids = manifest && manifest.target_ids;
+  if (!Array.isArray(ids) || ids.length > 2000
+      || ids.some((id) => !Number.isSafeInteger(id) || id <= 0)
+      || new Set(ids).size !== ids.length) {
+    throw new Error("The repair history manifest is invalid.");
+  }
+  const started = await plugin.beginRepairTargetSync({ ids });
+  requireNativeRepairSyncCurrent(expectedEpoch);
+  const token = String(started && started.token || "");
+  if (!token) throw new Error("Android did not start repair history staging.");
+  try {
+    for (let offset = 0; offset < ids.length; offset += NATIVE_IMAGE_BATCH_SIZE) {
+      requireNativeRepairSyncCurrent(expectedEpoch);
+      const batchIds = ids.slice(offset, offset + NATIVE_IMAGE_BATCH_SIZE);
+      const payload = await api("/api/repair-targets", {
+        method: "POST", body: JSON.stringify({ ids: batchIds }),
+      });
+      requireNativeRepairSyncCurrent(expectedEpoch);
+      const targets = payload && payload.targets;
+      if (!Array.isArray(targets) || targets.length !== batchIds.length
+          || targets.some((target, index) => Number(target && target.id) !== batchIds[index])) {
+        throw new Error("Repair history changed while its native cache was being refreshed.");
+      }
+      await plugin.appendRepairTargetBatch({ token, offset, targets });
+      requireNativeRepairSyncCurrent(expectedEpoch);
+    }
+    requireNativeRepairSyncCurrent(expectedEpoch);
+    const committed = await plugin.commitRepairTargetSync({ token });
+    const replaced = Number(committed && committed.replaced);
+    if (!Number.isInteger(replaced) || replaced !== ids.length) {
+      throw new Error("Android did not verify its complete repair history.");
+    }
+    return replaced;
+  } catch (error) {
+    try { await plugin.abortRepairTargetSync({ token }); } catch (_) {}
+    throw error;
+  }
+}
+
+async function finishNativeDrive(summary, options = {}) {
+  const provisional = options.provisional === true;
+  const sessionId = summary && summary.sessionId ? String(summary.sessionId) : null;
+  const summaryCaptureSource = normaliseDriveCaptureSource(
+    summary && summary.captureSource || drive && drive.native && drive.captureSource ||
+    savedDriveCaptureSource()
+  );
+  const endReason = publicNativeSourceText(
+    summary && (summary.reason || summary.stopReason), summaryCaptureSource
+  );
+  const endError = publicNativeSourceText(summary && summary.error, summaryCaptureSource);
+  const liveSessionId = drive && drive.native ? String(drive.sessionId || "") : "";
+  const liveStartRequestId = drive && drive.native ? String(drive.startRequestId || "") : "";
+  const endedStartRequestId = String(summary && summary.startRequestId || "");
+  // A terminal event from session A can cross a WebView/plugin recreation and arrive
+  // while session B owns a blank pre-start context. Never attach A to B merely because
+  // B's final timestamp-based session ID has not been published yet.
+  if ((driveStarting || (drive && drive.starting)) &&
+      drive && drive.native && !liveSessionId && sessionId &&
+      liveStartRequestId && endedStartRequestId !== liveStartRequestId) {
+    handledNativeEnds.add(sessionId);
+    const previousNotice = endError ||
+      (endReason && !/^stopped$/i.test(endReason) ? endReason : "");
+    if (previousNotice) {
+      const banner = $("banner");
+      banner.textContent = `Previous drive: ${previousNotice}`;
+      banner.style.display = "block";
+    }
+    const plugin = nativeDrivePlugin();
+    if (plugin && typeof plugin.acknowledgeDriveEndSummary === "function") {
+      await plugin.acknowledgeDriveEndSummary({ sessionId }).catch(() => {});
+    }
+    return Promise.resolve();
+  }
+  if (liveSessionId && sessionId && liveSessionId !== sessionId) return Promise.resolve();
+  if (sessionId && handledNativeEnds.has(sessionId)) {
+    return nativeFinishPromise || Promise.resolve();
+  }
+  if (nativeFinishPromise) {
+    return nativeFinishPromise.then(() => finishNativeDrive(summary, options));
+  }
+  const wasProvisional = Boolean(!provisional && sessionId && provisionalNativeEnds.delete(sessionId));
+  if (provisional && sessionId) {
+    provisionalNativeEnds.add(sessionId);
+    while (provisionalNativeEnds.size > 32) {
+      provisionalNativeEnds.delete(provisionalNativeEnds.values().next().value);
+    }
+  } else if (sessionId) handledNativeEnds.add(sessionId);
+  bumpNativeDriveControlEpoch();
+  const current = drive;
+  const belongsToCurrent = current && current.native &&
+    (!sessionId || String(current.sessionId || "") === sessionId ||
+      (!current.sessionId && liveStartRequestId &&
+       endedStartRequestId === liveStartRequestId));
+  const showTerminalNotice = () => {
+    const terminalNotice = endError ||
+      (endReason && !/^stopped$/i.test(endReason) ? endReason : "");
+    if (!terminalNotice) return;
+    const banner = $("banner");
+    banner.textContent = terminalNotice;
+    banner.style.display = "block";
+  };
+  // driveEnded is the durable boundary. Only now may the controlled history hydration
+  // use the native bridge; Home remains mutation-locked until that hydration settles.
+  releaseNativeCaptureFinalization(sessionId);
+  cancelNativeStopStatusPoll();
+  cancelNativeStartStatusPoll();
+  nativeFinishPromise = (async () => {
+    if (belongsToCurrent) {
+      setNativeFinishLocked(true);
+      stopNativePreview();
+      drive = null;
+      setDriveActiveButton(false);
+      setNativeSavingBanner(false);
+      // Camera/GPS are already off. Return control immediately while durable Room rows
+      // hydrate the history in the background portion of this completion barrier.
+      show("home");
+      // Explicit Stop is expected. Every other terminal reason must remain visible:
+      // otherwise an invalid key, exhausted credit, storage failure, or camera failure
+      // looks like the app silently quit after the generic native teardown message.
+      showTerminalNotice();
+    } else if (wasProvisional) {
+      // A compatibility fallback may have returned Home before an older native build
+      // delivered its terminal event. Preserve the real later error/reason visibly.
+      showTerminalNotice();
+    }
+    // A wipe stops the foreground service before deleting its Room rows and files.
+    // Do not race that deletion by syncing the just-ended session back into web data.
+    if (!(summary && summary.discarded)) {
+      invalidateNativeDriveHistory();
+      try {
+        await hydrateNativeDriveEndWithinDeadline();
+      } catch (_) {
+        // Room rows and evidence remain durable. Release the UI now and abort any
+        // repair-cache staging; visibility/online replay can safely retry later.
+        invalidateNativeBackgroundSyncs();
+        abortNativeRepairStaging(nativeDrivePlugin()).catch(() => {});
+      } finally {
+        // Live overflow and interrupted requests remain durable Room keyframes. A
+        // routing/repair-cache sync failure must not strand them until another app
+        // visibility event; replay has its own guarded retry lifecycle.
+        scheduleNativeKeyframeReplay(sessionId);
+      }
+    }
+    // Persisted terminal summaries are removed only after their exact result has been
+    // presented and the completion hand-off has finished. If this call fails, the
+    // summary deliberately remains available after the next WebView/process restart.
+    const plugin = nativeDrivePlugin();
+    if (!provisional && sessionId && plugin &&
+        typeof plugin.acknowledgeDriveEndSummary === "function") {
+      await plugin.acknowledgeDriveEndSummary({ sessionId }).catch(() => {});
+    }
+  })().finally(() => {
+    releaseNativeCaptureFinalization(sessionId);
+    setNativeSavingBanner(false);
+    setNativeFinishLocked(false);
+    nativeStopPromise = null;
+    nativeFinishPromise = null;
+  });
+  return nativeFinishPromise;
+}
+
+function presentNativeStoppingStatus(status) {
+  if (!status || !status.isStopping) return false;
+  const incomingSession = String(status.sessionId || "");
+  if (nativeFinishPromise || (incomingSession && handledNativeEnds.has(incomingSession))) {
+    return false;
+  }
+  const currentSession = drive && drive.native ? String(drive.sessionId || "") : "";
+  if (!nativeStatusOwnsPendingStart(status)) return false;
+  if (currentSession && incomingSession && currentSession !== incomingSession) return false;
+  bumpNativeDriveControlEpoch();
+  if (!beginNativeCaptureFinalization(incomingSession || currentSession)) return false;
+  if (!drive || !drive.native) {
+    drive = { native: true, sessionId: status.sessionId,
+      startRequestId: status.startRequestId || null,
+      stopping: true, captureStopped: false };
+  } else if (!currentSession && incomingSession) {
+    drive.sessionId = incomingSession;
+  }
+  drive.stopping = true;
+  // Monotonic per session: a delayed pre-close status can never move the UI back from
+  // verified Camera-off to a stopping preview.
+  drive.captureStopped = Boolean(drive.captureStopped || status.captureStopped);
+  setDrivePanels(true);
+  setNativeFinishLocked(true);
+  updateNativeDriveHud({ ...status, captureStopped: drive.captureStopped });
+  if (drive.captureStopped) {
+    stopNativePreview();
+    setDriveActiveButton(false);
+    setNativeSavingBanner(true);
+    show("home");
+  } else {
+    setDriveActiveButton(true);
+    show("drive");
+  }
+  scheduleNativeStopStatusPoll();
+  return true;
+}
+
+async function ensureNativeDriveListeners() {
+  const plugin = nativeDrivePlugin();
+  if (!plugin || nativeDriveListenersReady) return;
+  nativeDriveListenersReady = true;
+  await plugin.addListener("driveStatusChange", (status) => {
+    if (status && status.isRunning) {
+      const incomingSession = String(status.sessionId || "");
+      if (nativeFinishPromise || (incomingSession && handledNativeEnds.has(incomingSession))) return;
+      const currentSession = drive && drive.native ? String(drive.sessionId || "") : "";
+      const adoptingRunningDrive = !drive || !drive.native;
+      const resolvingBlankStart = !adoptingRunningDrive && !currentSession &&
+        Boolean(drive.starting || driveStarting);
+      // A late callback from a torn-down service must never mark a newer drive active or
+      // stopping. Blank current IDs are allowed only while Start is still resolving.
+      if (!nativeStatusOwnsPendingStart(status) ||
+          (currentSession && incomingSession && currentSession !== incomingSession)) return;
+      bumpNativeDriveControlEpoch();
+      if (!drive || !drive.native) drive = { native: true, sessionId: status.sessionId,
+        startRequestId: status.startRequestId || null };
+      else {
+        if (!currentSession && incomingSession) drive.sessionId = incomingSession;
+        drive.starting = false;
+        if (!drive.startRequestId && status.startRequestId) {
+          drive.startRequestId = status.startRequestId;
+        }
+      }
+      setDriveActiveButton(true);
+      updateNativeDriveHud(status);
+      // Listener registration deliberately precedes the awaited initial getStatus call.
+      // If this event wins that race, the epoch guard makes the stale restore return;
+      // the listener must therefore adopt the visible control plane as well as the data.
+      if (adoptingRunningDrive || resolvingBlankStart) {
+        cancelNativeStartStatusPoll();
+        setDrivePanels(true);
+        show("drive");
+        startNativePreview();
+      } else if (!nativePreviewAttached && !$("drive").classList.contains("hidden")) {
+        startNativePreview();
+      }
+    } else if (status && status.isStopping) presentNativeStoppingStatus(status);
+  });
+  await plugin.addListener("driveEnded", (summary) => {
+    const sessionId = String(summary && summary.sessionId || "");
+    // Listener registration intentionally precedes getStatus during restoration. If
+    // teardown wins in that interval there is no JS drive object yet; reconstruct the
+    // exact terminal owner before finishing so its error is shown and only then acked.
+    if (!drive && !nativeFinishPromise && sessionId &&
+        !handledNativeEnds.has(sessionId)) {
+      drive = { native: true, sessionId,
+        startRequestId: summary && summary.startRequestId || null,
+        stopping: true, captureStopped: true };
+      setDrivePanels(true);
+    }
+    finishNativeDrive(summary);
+  });
+}
 
 function finishDataConsent(accepted) {
   if (accepted) localStorage.setItem("data_notice_version", DATA_NOTICE_VERSION);
@@ -1602,6 +3405,18 @@ async function requestNativeLocationPermission() {
 async function requestNativeCapturePermissions() {
   await requestNativeCameraPermission();
   await requestNativeLocationPermission();
+}
+
+async function requestNativeDrivePermissions(captureSource = PHONE_CAPTURE_SOURCE) {
+  const drivePlugin = nativeDrivePlugin();
+  if (drivePlugin && drivePlugin.requestDrivePermissions) {
+    try { return await drivePlugin.requestDrivePermissions({
+      captureSource: normaliseDriveCaptureSource(captureSource),
+    }); }
+    catch (e) { return { granted: false, notificationsGranted: false }; }
+  }
+  await requestNativeCapturePermissions();
+  return { granted: true };
 }
 
 $("privacyAccept").onclick = () => finishDataConsent(true);
@@ -1659,6 +3474,23 @@ async function removeNativeDriveListener() {
 }
 
 async function startDrive() {
+  if (!claimCameraAdmission("drive")) return;
+  try {
+    return await startDriveAdmitted();
+  } finally {
+    releaseCameraAdmission("drive");
+  }
+}
+
+async function startDriveAdmitted() {
+  if (nativeWipeInProgress) return;
+  // Do not admit a second camera while the first native status/terminal hand-off is
+  // still being reconstructed after page load. The await is short and shared by taps.
+  if (nativeInitialRestorePending) {
+    await nativeInitialRestorePromise.catch(() => {});
+    if (nativeWipeInProgress) return;
+  }
+  if (photoCaptureStarting) return;
   // Synchronous reentry guard: a second tap during the camera permission prompt
   // must not start a parallel drive session and leak the first camera stream.
   if (drive || driveStarting || driveFinalizing || window._nativeDriveActive || importedVideoJob) return;
@@ -1730,6 +3562,7 @@ async function startDrive() {
   await cameraPermission;
   if (drive || driveFinalizing) { driveStarting = false; return; }
   StandaloneAPI.prewarm();
+  setDrivePanels(false);
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -1746,7 +3579,7 @@ async function startDrive() {
   video.srcObject = stream;
   const ctx = {
     stream, pos: null, lastCapPos: null,
-    tally: { checked: 0, found: 0, already: 0, captured: 0, dropped: 0 },
+    tally: { checked: 0, found: 0, already: 0, repaired: 0, captured: 0, dropped: 0 },
     duplicateIds: new Set(),
     queue: [], pending: new Set(), inFlight: 0, errors: 0, wakeLock: null,
     sessionId: String(Date.now()), startedAt: Date.now(), captureSeq: 0, stillBusy: false,
@@ -1810,7 +3643,8 @@ async function startDrive() {
 function updateHud(status, ctx = drive) {
   if (!ctx || drive !== ctx) return;
   $("driveCount").textContent = eventCountText(ctx.tally.found)
-    + (ctx.tally.already ? ` · ${alreadyCountText(ctx.tally.already)}` : "");
+    + (ctx.tally.already ? ` · ${alreadyCountText(ctx.tally.already)}` : "")
+    + (ctx.tally.repaired ? ` · ${ctx.tally.repaired} fixed` : "");
   $("driveStatus").textContent = status ||
     t("scanning", { mode: "live", checked: ctx.tally.checked,
       analyzing: (ctx.inFlight || ctx.queue.length) ? t("analyzing_suffix", { n: ctx.inFlight + ctx.queue.length }) : "" })
@@ -1869,6 +3703,7 @@ function drainDriveQueue(ctx) {
         ctx.tally.checked++;
         ctx.errors = 0;
         if (res && res.found) ctx.tally.found++;
+        else if (res && res.repaired) ctx.tally.repaired++;
         else if (res && res.duplicate && res.duplicate_of != null) {
           ctx.duplicateIds.add(String(res.duplicate_of));
           ctx.tally.already = ctx.duplicateIds.size;
@@ -2011,6 +3846,33 @@ function stopDrive() {
   }
   // ---------- End native stop ----------
   if (!drive) return driveFinalizing || Promise.resolve();
+  if (drive.native) {
+    if (nativeStopPromise) return nativeStopPromise;
+    const ctx = drive;
+    bumpNativeDriveControlEpoch();
+    ctx.stopping = true;
+    ctx.captureStopped = false;
+    const plugin = nativeDrivePlugin();
+    $("nativeDriveStatus").textContent = t("working");
+    $("nativeDriveStop").disabled = true;
+    setNativeFinishLocked(true);
+    beginNativeCaptureFinalization(ctx.sessionId);
+    show("drive");
+    nativeStopPromise = plugin.stopDrive()
+      .then((summary) => finishNativeDrive(summary))
+      .catch(async (e) => {
+        const status = await plugin.getStatus().catch(() => null);
+        nativeStopPromise = null;
+        if (status && status.isStopping && presentNativeStoppingStatus(status)) return;
+        releaseNativeCaptureFinalization(ctx.sessionId);
+        ctx.stopping = false;
+        ctx.captureStopped = false;
+        setNativeFinishLocked(false);
+        $("nativeDriveStop").disabled = false;
+        $("nativeDriveStatus").textContent = e.message || String(e);
+      });
+    return nativeStopPromise;
+  }
   const ctx = drive;
   ctx.stopping = true;
   // Captured frames already queued are still checked. The summary waits for the queue,
@@ -2024,6 +3886,7 @@ function stopDrive() {
   const hadActivity = tally.captured > 0 || tally.checked > 0 || tally.found > 0
     || (tally.failed || 0) > 0 || ctx.inFlight > 0 || ctx.queue.length > 0;
   clearInterval(ctx.timer);
+  clearTimeout(ctx.limitTimer);
   navigator.geolocation.clearWatch(ctx.watchId);
   if (ctx.wakeLock) ctx.wakeLock.release().catch(() => {});
   ctx.stream.getTracks().forEach((t) => t.stop());
@@ -2079,6 +3942,46 @@ function stopDrive() {
 
 $("driveBtn").onclick = startDrive;
 $("driveStop").onclick = stopDrive;
+$("nativeDriveStop").onclick = stopDrive;
+$("nativePauseBtn").onclick = async () => {
+  const plugin = nativeDrivePlugin();
+  if (!plugin || !drive || !drive.native || drive.stopping || nativePauseControlPending) return;
+  nativePauseControlPending = true;
+  $("nativePauseBtn").disabled = true;
+  let next = null;
+  try {
+    const current = await plugin.getStatus();
+    next = current.isPaused ? await plugin.resumeDrive() : await plugin.pauseDrive();
+  } catch (error) {
+    $("nativeDriveStatus").textContent = error.message || String(error);
+  } finally {
+    if (!next) next = await plugin.getStatus().catch(() => null);
+    nativePauseControlPending = false;
+    if (next && drive && drive.native) updateNativeDriveHud(next);
+  }
+};
+$("nativeRecordBtn").onclick = async () => {
+  const plugin = nativeDrivePlugin();
+  if (!plugin || !drive || !drive.native || drive.stopping || nativeVideoControlPending) return;
+  nativeVideoControlPending = true;
+  $("nativeRecordBtn").disabled = true;
+  let next = null;
+  try {
+    const current = await plugin.getStatus();
+    next = await plugin.setVideoRecording({ enabled: !current.recordingEnabled });
+    localStorage.setItem("record_video", next.recordingEnabled ? "1" : "0");
+  } catch (error) {
+    $("nativeDriveStatus").textContent = error.message || String(error);
+  } finally {
+    if (!next) next = await plugin.getStatus().catch(() => null);
+    nativeVideoControlPending = false;
+    if (next && drive && drive.native) updateNativeDriveHud(next);
+  }
+};
+$("openMapsBtn").onclick = async () => {
+  const plugin = nativeDrivePlugin();
+  if (plugin) await plugin.openMaps().catch((e) => alert(e.message || e));
+};
 
 // Camera and precise location are foreground-only for the *web* path. The native
 // foreground service continues running when the Activity is hidden — that is its
@@ -2088,8 +3991,160 @@ document.addEventListener("visibilitychange", () => {
   if (drive && document.visibilityState === "hidden") stopDrive();
 });
 
+// WebView visibility events are not reliable on every Android/OEM transition. Capacitor's
+// native Activity signal is authoritative. Detach the Activity-owned Preview surface
+// before Maps/calls destroy its window. The foreground service keeps CameraX analysis,
+// GPS, detection, and optional recording alive and binds a fresh visible surface on return.
+window.handleNativeAppStateChange = async (isActive) => {
+  nativeHostAppActive = !!isActive;
+  const epoch = ++nativeHostAppStateEpoch;
+  if (!nativeHostAppActive) {
+    stopNativePreview(true);
+    return;
+  }
+  await restoreNativeDrive({ syncWhenIdle: false });
+  if (epoch !== nativeHostAppStateEpoch || !nativeHostAppActive) return;
+  if (drive && drive.native) startNativePreview();
+  else scheduleNativeKeyframeReplay();
+};
+window.addEventListener("online", () => { scheduleNativeKeyframeReplay(); });
+window.addEventListener("resize", () => { if (drive && drive.native) startNativePreview(); });
+window.addEventListener("scroll", () => {
+  if (!drive || !drive.native || $("drive").classList.contains("hidden")) return;
+  if (nativePreviewScrollFrame) cancelAnimationFrame(nativePreviewScrollFrame);
+  nativePreviewScrollFrame = requestAnimationFrame(() => {
+    nativePreviewScrollFrame = null;
+    startNativePreview();
+  });
+}, { passive: true });
+if (window.visualViewport) visualViewport.addEventListener("resize", () => {
+  if (drive && drive.native) startNativePreview();
+});
+
+async function restoreNativeDrive(options = {}) {
+  const plugin = nativeDrivePlugin();
+  if (!plugin) return;
+  await ensureNativeDriveListeners();
+  const requestEpoch = nativeDriveControlEpoch;
+  const observedDrive = drive && drive.native ? drive : null;
+  const observedSession = observedDrive ? String(observedDrive.sessionId || "") : "";
+  const observedStopping = Boolean(observedDrive && observedDrive.stopping);
+  const status = await plugin.getStatus().catch(() => null);
+  const currentDrive = drive && drive.native ? drive : null;
+  if (requestEpoch !== nativeDriveControlEpoch || currentDrive !== observedDrive ||
+      (currentDrive && String(currentDrive.sessionId || "") !== observedSession) ||
+      Boolean(currentDrive && currentDrive.stopping) !== observedStopping) return;
+  if (!status) {
+    if (drive && drive.native && drive.stopping) scheduleNativeStopStatusPoll();
+    return;
+  }
+  if (status && status.isStarting) {
+    if (currentDrive && currentDrive.stopping) return;
+    if (!currentDrive) drive = { native: true, sessionId: null, starting: true,
+      startRequestId: status.startRequestId || null };
+    else {
+      currentDrive.starting = true;
+      if (!currentDrive.startRequestId && status.startRequestId) {
+        currentDrive.startRequestId = status.startRequestId;
+      }
+    }
+    setDriveActiveButton(true);
+    setDrivePanels(true);
+    updateNativeDriveHud({ ...status, status: status.status || "Starting camera and GPS" });
+    show("drive");
+    scheduleNativeStartStatusPoll();
+    return;
+  }
+  cancelNativeStartStatusPoll();
+  if (status && status.isRunning) {
+    const incomingSession = String(status.sessionId || "");
+    if (nativeFinishPromise || nativeCaptureFinalizingSessionId ||
+        (incomingSession && handledNativeEnds.has(incomingSession))) return;
+    if (!nativeStatusOwnsPendingStart(status, currentDrive)) return;
+    if (currentDrive && (currentDrive.stopping ||
+        (observedSession && incomingSession && observedSession !== incomingSession))) return;
+    if (!currentDrive) drive = { native: true, sessionId: status.sessionId,
+      startRequestId: status.startRequestId || null };
+    else {
+      currentDrive.starting = false;
+      if (!observedSession && incomingSession) currentDrive.sessionId = incomingSession;
+      if (!currentDrive.startRequestId && status.startRequestId) {
+        currentDrive.startRequestId = status.startRequestId;
+      }
+    }
+    setDriveActiveButton(true);
+    setDrivePanels(true);
+    updateNativeDriveHud(status);
+    show("drive");
+    startNativePreview();
+  } else if (status && status.isStopping) {
+    presentNativeStoppingStatus(status);
+  } else {
+    // Same-page foreground/visibility restoration can race an accepted native Start.
+    // Older bridges/mocks may still report Idle in that tiny window; a blank session
+    // owned by startDrive must remain visible until its promise settles.
+    if (driveStarting && currentDrive && !currentDrive.stopping && !observedSession) {
+      currentDrive.starting = true;
+      scheduleNativeStartStatusPoll();
+      return;
+    }
+    // A service may finish while the WebView is being recreated, before listeners are
+    // attached and with no JS drive object to identify it. Consume the latest exact,
+    // unacknowledged native result so a camera/storage failure cannot vanish as Idle.
+    if (!currentDrive && typeof plugin.getDriveEndSummary === "function") {
+      const terminalEpoch = nativeDriveControlEpoch;
+      const result = await plugin.getDriveEndSummary({}).catch(() => null);
+      if (terminalEpoch !== nativeDriveControlEpoch || drive) return;
+      const endedSessionId = String(result && result.sessionId || "");
+      if (result && result.available === true && endedSessionId &&
+          !handledNativeEnds.has(endedSessionId)) {
+        drive = { native: true, sessionId: endedSessionId, stopping: true,
+                  startRequestId: result.startRequestId || null,
+                  captureStopped: true };
+        setDrivePanels(true);
+        await finishNativeDrive(result);
+        return;
+      }
+    }
+    if (drive && drive.native) {
+      if (drive.stopping) {
+        const endedSessionId = String(drive.sessionId || "");
+        let terminal = null;
+        if (endedSessionId && typeof plugin.getDriveEndSummary === "function") {
+          const terminalEpoch = nativeDriveControlEpoch;
+          const terminalDrive = drive;
+          const result = await plugin.getDriveEndSummary({ sessionId: endedSessionId })
+            .catch(() => null);
+          if (terminalEpoch !== nativeDriveControlEpoch || drive !== terminalDrive ||
+              !drive || !drive.native || !drive.stopping ||
+              String(drive.sessionId || "") !== endedSessionId) return;
+          if (result && result.available === true) terminal = result;
+        }
+        // Older native builds do not expose the durable terminal hand-off. Their idle
+        // fallback is provisional: it must not suppress a delayed real error/discard event.
+        await finishNativeDrive(
+          terminal || { sessionId: endedSessionId, reason: "Stopped" },
+          { provisional: !terminal }
+        );
+        return;
+      }
+      bumpNativeDriveControlEpoch();
+      stopNativePreview();
+      drive = null;
+      setDriveActiveButton(false);
+      show("home");
+    }
+    if (options.syncWhenIdle !== false) {
+      await syncNativeData();
+      await loadReports().catch(() => {});
+    }
+    scheduleNativeKeyframeReplay();
+  }
+}
+
 // Opening the camera is the cue that a call is coming: warm the connection now
 // so the photo does not also pay for a TLS handshake.
+let photoCaptureStarting = false;
 $("captureBtn").onclick = async () => {
   if (manualAnalysisActive || importedVideoJob) {
     alert(t("manual_analysis_active"));
@@ -2108,7 +4163,7 @@ $("captureBtn").onclick = async () => {
   // Returning from capture normally has a ready fix instead of starting an 8 s wait.
   primedManualPosition = prefetchManualPosition();
   $("fileInput").click();
-};
+}
 
 // ---------- labelling ----------
 // A human label is the only thing that can measure the detector. The model's own
@@ -2130,6 +4185,7 @@ const keepFrames = () => localStorage.getItem("keep_frames") === "1";
 // frames registered with Android's MediaStore, which the Filesystem plugin does not
 // do, and a drive's worth of frames in the camera roll would bury real photos.
 const FRAME_DIR = "pothole-frames";
+const SHARE_CACHE_DIR = "pothole-reporter-shares";
 
 // Storage is requested once, before an analysis begins, so the dialog appears at a moment
 // the user can connect to something they just tapped. It used to fire from the first
@@ -2302,8 +4358,9 @@ const expandedDrives = new Set();
 
 async function startReview() {
   const all = await api("/api/reports");
-  reviewQueue = all.filter((r) => !r.human_label && r.photo_url);
-  reviewDone = all.length - reviewQueue.length;
+  const roadReports = all.filter(isRoadReport);
+  reviewQueue = roadReports.filter((r) => !r.human_label && r.photo_url);
+  reviewDone = roadReports.length - reviewQueue.length;
   if (!reviewQueue.length) { alert(t("review_empty")); return; }
   show("review");
   nextReviewFrame();
@@ -2314,9 +4371,7 @@ function nextReviewFrame() {
   const r = reviewQueue[0];
   $("reviewPhoto").src = photoSrc(r);
   $("reviewMeta").innerHTML = t("review_progress", { n: reviewQueue.length, done: reviewDone });
-  $("reviewSaid").textContent = t("model_said", {
-    verdict: tDamage(r), assessment: tAssessment(r),
-  });
+  $("reviewSaid").textContent = t("model_said", { verdict: detectionVerdict(r) });
 }
 
 async function labelCurrent(label) {
@@ -2337,13 +4392,48 @@ async function labelCurrent(label) {
 // without going back to the list.
 let vState = { scale: 1, x: 0, y: 0, rec: null }, vPointers = new Map(), vStart = null, vLastTap = 0;
 
+function vClamp() {
+  const v = $("viewer"), img = $("viewerImg");
+  if (vState.scale <= 1) { vState.scale = 1; vState.x = 0; vState.y = 0; return; }
+  const maxX = Math.max(0, (img.clientWidth * vState.scale - v.clientWidth) / 2);
+  const maxY = Math.max(0, (img.clientHeight * vState.scale - v.clientHeight) / 2);
+  vState.x = Math.max(-maxX, Math.min(maxX, vState.x));
+  vState.y = Math.max(-maxY, Math.min(maxY, vState.y));
+}
+
 function vApply() {
+  vClamp();
   $("viewerImg").style.transform =
     `translate(${vState.x}px, ${vState.y}px) scale(${vState.scale})`;
 }
 function vReset() { vState.scale = 1; vState.x = 0; vState.y = 0; vApply(); }
 
+function vPanStart(pointer, tapEligible = false) {
+  return {
+    mode: "pan", pointerId: pointer.id,
+    clientX: pointer.x, clientY: pointer.y,
+    stateX: vState.x, stateY: vState.y,
+    downAt: Date.now(), moved: false, tapEligible,
+  };
+}
+
+function vPinchStart() {
+  const [a, b] = [...vPointers.values()];
+  const v = $("viewer"), rect = v.getBoundingClientRect();
+  const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+  return {
+    mode: "pinch",
+    dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+    scale: vState.scale,
+    anchorX: (midX - (rect.left + rect.width / 2) - vState.x) / vState.scale,
+    anchorY: (midY - (rect.top + rect.height / 2) - vState.y) / vState.scale,
+  };
+}
+
+function vClearGesture() { vPointers.clear(); vStart = null; vLastTap = 0; }
+
 function openViewer(r) {
+  vClearGesture();
   vState.rec = r;
   $("viewerImg").src = photoSrc(r);
   const size = r && r.size ? ` · ${tSize(r.size)}` : "";
@@ -2355,7 +4445,11 @@ function openViewer(r) {
   vReset();
   $("viewer").classList.remove("hidden");
 }
-function closeViewer() { $("viewer").classList.add("hidden"); vState.rec = null; }
+function closeViewer() {
+  vClearGesture();
+  $("viewer").classList.add("hidden");
+  vState.rec = null;
+}
 
 function viewerStep(delta) {
   if (detailList.length < 2) return;
@@ -2368,54 +4462,454 @@ function viewerStep(delta) {
 }
 
 (function wireViewer() {
-  const v = $("viewer"), img = $("viewerImg");
+  const v = $("viewer");
   $("viewerClose").onclick = closeViewer;
   v.addEventListener("click", (e) => { if (e.target === v) closeViewer(); });
   v.addEventListener("pointerdown", (e) => {
-    vPointers.set(e.pointerId, e);
+    if (e.target === $("viewerClose")) return;
+    e.preventDefault();
+    try { v.setPointerCapture(e.pointerId); } catch (_) { /* synthetic/old WebView */ }
+    vPointers.set(e.pointerId, { id: e.pointerId, x: e.clientX, y: e.clientY });
     if (vPointers.size === 1) {
-      const now = Date.now();
-      if (now - vLastTap < 300) { vState.scale > 1 ? vReset() : (vState.scale = 2.5, vApply()); }
-      vLastTap = now;
-      vStart = { x: e.clientX - vState.x, y: e.clientY - vState.y };
+      vStart = vPanStart(vPointers.get(e.pointerId), true);
     } else if (vPointers.size === 2) {
-      const [a, b] = [...vPointers.values()];
-      vStart = { dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), scale: vState.scale };
+      // A pinch is not the first half of a double tap.
+      vLastTap = 0;
+      vStart = vPinchStart();
     }
   });
   v.addEventListener("pointermove", (e) => {
     if (!vPointers.has(e.pointerId)) return;
-    vPointers.set(e.pointerId, e);
-    if (vPointers.size === 2 && vStart && vStart.dist) {
+    e.preventDefault();
+    vPointers.set(e.pointerId, { id: e.pointerId, x: e.clientX, y: e.clientY });
+    if (vPointers.size === 2 && vStart && vStart.mode === "pinch") {
       const [a, b] = [...vPointers.values()];
-      const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const rect = v.getBoundingClientRect();
+      const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
       vState.scale = Math.min(8, Math.max(1, vStart.scale * (d / vStart.dist)));
-      if (vState.scale === 1) { vState.x = 0; vState.y = 0; }
+      vState.x = midX - (rect.left + rect.width / 2) - vStart.anchorX * vState.scale;
+      vState.y = midY - (rect.top + rect.height / 2) - vStart.anchorY * vState.scale;
       vApply();
-    } else if (vPointers.size === 1 && vStart && vState.scale > 1) {
-      vState.x = e.clientX - vStart.x;
-      vState.y = e.clientY - vStart.y;
+    } else if (vPointers.size === 1 && vStart && vStart.mode === "pan"
+        && vStart.pointerId === e.pointerId && vState.scale > 1) {
+      const dx = e.clientX - vStart.clientX, dy = e.clientY - vStart.clientY;
+      if (Math.hypot(dx, dy) > 6) vStart.moved = true;
+      vState.x = vStart.stateX + dx;
+      vState.y = vStart.stateY + dy;
       vApply();
     }
   });
-  const end = (e) => {
+  const end = (e, cancelled = false) => {
     const was = vPointers.get(e.pointerId);
+    const start = vStart;
     vPointers.delete(e.pointerId);
     // A flick while not zoomed moves to the next record rather than panning nothing.
-    if (was && vState.scale === 1 && vStart && !vStart.dist && vPointers.size === 0) {
-      const dx = e.clientX - (vStart.x + vState.x);
+    if (!cancelled && was && vState.scale === 1 && start && start.mode === "pan"
+        && start.pointerId === e.pointerId && vPointers.size === 0) {
+      const dx = e.clientX - start.clientX;
       if (Math.abs(dx) > 60) viewerStep(dx < 0 ? 1 : -1);
     }
-    if (!vPointers.size) vStart = null;
+    // Only a completed, stationary, single-pointer gesture counts as a tap. This keeps
+    // pinch-then-drag from immediately resetting as a false double tap.
+    if (!cancelled && was && start && start.mode === "pan" && start.tapEligible
+        && !start.moved && vPointers.size === 0
+        && Date.now() - start.downAt < 300) {
+      const now = Date.now();
+      if (now - vLastTap < 300) {
+        vState.scale > 1 ? vReset() : (vState.scale = 2.5, vApply());
+        vLastTap = 0;
+      } else {
+        vLastTap = now;
+      }
+    }
+    // When either finger leaves a pinch, the remaining finger must immediately become
+    // a valid pan origin. Retaining the pinch object made x/y undefined and killed pan.
+    if (vPointers.size === 1 && vState.scale > 1) {
+      vStart = vPanStart([...vPointers.values()][0], false);
+    } else if (!vPointers.size) {
+      vStart = null;
+    }
+    try { v.releasePointerCapture(e.pointerId); } catch (_) { /* not captured */ }
   };
-  v.addEventListener("pointerup", end);
-  v.addEventListener("pointercancel", end);
-  img.addEventListener("click", (e) => e.stopPropagation());
+  v.addEventListener("pointerup", (e) => end(e));
+  v.addEventListener("pointercancel", (e) => end(e, true));
 })();
 
 // ---------- re-analysing recorded footage ----------
 // The point of recording: capture never had to guess an interval, so how densely to
 // analyse is decided here, afterwards, and can be redone whenever detection improves.
+function localDataUrlBlob(value) {
+  const match = String(value || "").match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match) throw new Error("A saved frame is invalid.");
+  const binary = atob(match[2]);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: match[1].toLowerCase() });
+}
+
+const NATIVE_KEYFRAME_BATCH_SIZE = 25;
+const NATIVE_AUTO_KEYFRAME_ATTEMPTS_PER_RUN = 100;
+const NATIVE_AUTO_KEYFRAME_SESSION_PAGE_SIZE = 25;
+const NATIVE_REPLAY_IDLE_RETRY_LIMIT = 4;
+const NATIVE_REPLAY_IDLE_RETRY_MS = 200;
+const NATIVE_REPLAY_FAILURE_BACKOFF_MS = 60_000;
+let nativeKeyframeReplay = null;
+let nativeKeyframeAutoPromise = null;
+let nativeKeyframeAutoPreferredSession = null;
+const nativeKeyframeAutoDeferredUntil = new Map();
+let nativeKeyframeAutoBackoffTimer = null;
+
+function nativeAutomaticReplayAllowed() {
+  return Boolean(nativeDrivePlugin()) && nativeHostAppActive &&
+    document.visibilityState === "visible" && !nativeWipeInProgress &&
+    !nativeCaptureFinalizingSessionId && !drive && !driveStarting &&
+    navigator.onLine !== false &&
+    Boolean((localStorage.getItem("openai_key") || "").trim());
+}
+
+function nativeReplayNeedsIdleRetry(error) {
+  return /stop drive before analysing saved frames/i.test(
+    String(error && (error.message || error) || "")
+  );
+}
+
+async function withNativeReplayIdleRetry(operation, automatic) {
+  let retries = 0;
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!automatic || !nativeReplayNeedsIdleRetry(error) ||
+          retries >= NATIVE_REPLAY_IDLE_RETRY_LIMIT || !nativeAutomaticReplayAllowed()) {
+        throw error;
+      }
+      retries++;
+      // driveEnded is emitted just before the native service reaches onDestroy. Give
+      // that small teardown window bounded time to close instead of losing the only
+      // automatic replay trigger. Retrying the bridge operation (especially mark) also
+      // avoids repeating an already-completed, billable model request.
+      await new Promise((resolve) => setTimeout(
+        resolve, NATIVE_REPLAY_IDLE_RETRY_MS * retries
+      ));
+    }
+  }
+}
+
+function nativeReplaySessionDeferred(sessionId, now = Date.now()) {
+  const id = String(sessionId || "");
+  const until = Number(nativeKeyframeAutoDeferredUntil.get(id)) || 0;
+  if (!id || until <= now) {
+    if (id) nativeKeyframeAutoDeferredUntil.delete(id);
+    return false;
+  }
+  return true;
+}
+
+function refreshNativeReplayBackoffTimer() {
+  if (nativeKeyframeAutoBackoffTimer !== null) {
+    clearTimeout(nativeKeyframeAutoBackoffTimer);
+    nativeKeyframeAutoBackoffTimer = null;
+  }
+  const deadlines = [...nativeKeyframeAutoDeferredUntil.values()]
+    .map(Number).filter(Number.isFinite);
+  if (!deadlines.length) return;
+  const delay = Math.max(0, Math.min(...deadlines) - Date.now());
+  const timer = setTimeout(() => {
+    if (nativeKeyframeAutoBackoffTimer === timer) nativeKeyframeAutoBackoffTimer = null;
+    const now = Date.now();
+    for (const [sessionId, until] of nativeKeyframeAutoDeferredUntil) {
+      if (Number(until) <= now) nativeKeyframeAutoDeferredUntil.delete(sessionId);
+    }
+    scheduleNativeKeyframeReplay();
+    refreshNativeReplayBackoffTimer();
+  }, delay);
+  // Node's behavioral harness must be free to exit; browsers simply lack unref().
+  if (timer && typeof timer.unref === "function") timer.unref();
+  nativeKeyframeAutoBackoffTimer = timer;
+}
+
+function deferNativeReplaySession(sessionId) {
+  const id = String(sessionId || "");
+  if (id) nativeKeyframeAutoDeferredUntil.set(
+    id, Date.now() + NATIVE_REPLAY_FAILURE_BACKOFF_MS
+  );
+  refreshNativeReplayBackoffTimer();
+}
+
+function clearNativeReplaySessionDeferral(sessionId) {
+  const id = String(sessionId || "");
+  if (id) nativeKeyframeAutoDeferredUntil.delete(id);
+  refreshNativeReplayBackoffTimer();
+}
+
+async function replayNativeKeyframeBatch(driveId, interactive) {
+  if (nativeKeyframeReplay) return { busy: true };
+  const plugin = nativeDrivePlugin();
+  if (!plugin || typeof plugin.listKeyframes !== "function") {
+    throw new Error("This build cannot analyse saved Drive frames.");
+  }
+  const state = { driveId: String(driveId), cancelled: false, interactive: !!interactive };
+  let resolveReplayDone;
+  state.done = new Promise((resolve) => { resolveReplayDone = resolve; });
+  nativeKeyframeReplay = state;
+  const buttons = state.interactive
+    ? [...document.querySelectorAll("[data-analysenative]")]
+      .filter((button) => String(button.dataset.analysenative) === state.driveId)
+    : [];
+  buttons.forEach((button) => { button.disabled = true; });
+  const cancel = $("progressCancel");
+  if (state.interactive) {
+    cancel.classList.remove("hidden");
+    cancel.disabled = false;
+    cancel.onclick = () => {
+      state.cancelled = true;
+      cancel.disabled = true;
+      $("progressText").textContent = "Stopping after the current saved frame...";
+    };
+  }
+  let showingProgress = false;
+  try {
+    const listed = await withNativeReplayIdleRetry(() => plugin.listKeyframes({
+      sessionId: state.driveId,
+      pendingOnly: true,
+      limit: NATIVE_KEYFRAME_BATCH_SIZE,
+    }), !state.interactive);
+    const pending = Array.isArray(listed.keyframes) ? listed.keyframes : [];
+    const totalPending = Math.max(pending.length, Number(listed.pending) || 0);
+    if (!pending.length) return { empty: true, checked: 0, found: 0,
+      duplicates: 0, failed: 0, attempted: 0, remaining: 0 };
+    const frames = pending.slice(0, NATIVE_KEYFRAME_BATCH_SIZE);
+    if (state.interactive) {
+      show("progress");
+      showingProgress = true;
+      $("progressPhoto").src = "";
+    }
+    let done = 0, checked = 0, found = 0, duplicates = 0, failed = 0, consecutiveFailures = 0;
+    const paint = () => {
+      if (!state.interactive) return;
+      $("progressText").textContent = `Checking saved frame ${done} of ${frames.length} · ${found} found`
+        + (duplicates ? ` · ${duplicates} already known` : "")
+        + (failed ? ` · ${failed} failed` : "");
+    };
+    paint();
+
+    for (const frame of frames) {
+      if (state.cancelled) break;
+      if (!state.interactive && !nativeAutomaticReplayAllowed()) {
+        state.cancelled = true;
+        break;
+      }
+      try {
+        const saved = await withNativeReplayIdleRetry(
+          () => plugin.readKeyframe({ id: Number(frame.id) }), !state.interactive
+        );
+        const photos = Array.isArray(saved.photos) ? saved.photos.slice(0, 3) : [];
+        if (!photos.length) throw new Error("Saved frame is unavailable.");
+        const requestedPrimary = Number(saved.primaryIndex);
+        const primaryIndex = Number.isInteger(requestedPrimary) && requestedPrimary >= 0 &&
+          requestedPrimary < photos.length ? requestedPrimary : 0;
+        if (state.interactive) $("progressPhoto").src = photos[primaryIndex];
+        const fd = new FormData();
+        photos.forEach((photo, index) => fd.append("photo", localDataUrlBlob(photo),
+          index === primaryIndex ? "evidence-frame.jpg" : `video-context-${index}.jpg`));
+        fd.append("primary_index", String(primaryIndex));
+        const finiteSaved = (value) => value !== null && value !== "" && Number.isFinite(Number(value));
+        if (finiteSaved(saved.lat)) fd.append("lat", String(saved.lat));
+        if (finiteSaved(saved.lng)) fd.append("lng", String(saved.lng));
+        fd.append("drive_id", state.driveId);
+        // This is deferred inference of a frame captured by the live native Drive,
+        // not arbitrary uploaded/recorded footage. Preserve live provenance so the
+        // strict same-location repair verifier can still evaluate a genuine revisit.
+        fd.append("capture_source", "drive_live");
+        // Replay is the same capture, not a new sighting. Sharing the live key makes a
+        // retry idempotent even if its Room checkpoint failed after web storage committed.
+        fd.append("source_event_key", `live:${state.driveId}:${saved.captureSeq}`);
+        fd.append("source_offset_ms", String(Number(saved.sourceOffsetMs) || 0));
+        fd.append("captured_at_ms", String(Number(saved.capturedAtMs) || Date.now()));
+        if (finiteSaved(saved.gpsAccuracy)) fd.append("gps_accuracy", String(saved.gpsAccuracy));
+        if (finiteSaved(saved.speedMps)) fd.append("speed", String(saved.speedMps));
+        if (finiteSaved(saved.heading)) fd.append("heading", String(saved.heading));
+        // Start has priority. If a new Drive began while this bridge read was pending,
+        // yield before starting a billable model call. A call already in flight may
+        // finish and checkpoint its old session without delaying the new camera.
+        if (!state.interactive && !nativeAutomaticReplayAllowed()) {
+          state.cancelled = true;
+          break;
+        }
+        const result = await api("/api/frame", { method: "POST", body: fd });
+        if (!result || result.analyzed !== true) {
+          throw new Error("The detector did not return a complete saved-frame verdict.");
+        }
+        // Delete-all is the destructive barrier: it waits for this batch and removes
+        // any Web report the just-finished request created before deleting native files.
+        // Ordinary Cancel means "after the current frame", so a completed result is
+        // still checkpointed and is not billed/replayed again.
+        if (nativeWipeInProgress) {
+          throw new Error("Saved-frame analysis was interrupted before checkpointing.");
+        }
+        await withNativeReplayIdleRetry(
+          () => plugin.markKeyframeAnalyzed({ id: Number(frame.id) }), !state.interactive
+        );
+        checked++;
+        if (result && result.found) found++;
+        else if (result && result.duplicate) duplicates++;
+        consecutiveFailures = 0;
+      } catch (error) {
+        failed++;
+        consecutiveFailures++;
+        if (consecutiveFailures >= 5) state.cancelled = true;
+      } finally {
+        done++;
+        paint();
+      }
+    }
+    if (checked) invalidateNativeDriveHistory();
+    return {
+      checked, found, duplicates, failed, attempted: done,
+      cancelled: state.cancelled,
+      remaining: Math.max(0, totalPending - checked),
+    };
+  } finally {
+    if (showingProgress) show("home");
+    if (nativeKeyframeReplay === state) nativeKeyframeReplay = null;
+    resolveReplayDone();
+    if (state.interactive) {
+      cancel.onclick = null;
+      cancel.disabled = false;
+      cancel.classList.add("hidden");
+    }
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+async function analyseNativeKeyframes(driveId) {
+  if (nativeKeyframeReplay) {
+    alert("Saved-frame analysis is already running.");
+    return;
+  }
+  try {
+    const result = await replayNativeKeyframeBatch(driveId, true);
+    if (result.empty) {
+      alert("Every saved frame from this drive has already been checked.");
+      return;
+    }
+    await loadReports().catch(() => {});
+    const tail = result.remaining
+      ? ` ${result.remaining} saved frame${result.remaining === 1 ? " remains" : "s remain"}; analysis resumes automatically while the app is open.`
+      : "";
+    alert(`Saved-frame analysis ${result.cancelled ? "stopped" : "complete"}: ${result.checked} checked, ${result.found} new, ${result.duplicates} already known${result.failed ? `, ${result.failed} failed` : ""}.${tail}`);
+  } catch (error) {
+    show("home");
+    alert(error.message || String(error));
+  }
+}
+
+function scheduleNativeKeyframeReplay(preferredSessionId) {
+  if (preferredSessionId) nativeKeyframeAutoPreferredSession = String(preferredSessionId);
+  if (nativeKeyframeAutoPromise || !nativeAutomaticReplayAllowed()) {
+    return nativeKeyframeAutoPromise || Promise.resolve();
+  }
+  const plugin = nativeDrivePlugin();
+  let continueAfterYield = false;
+  const run = (async () => {
+    let attempts = 0;
+    let changed = false;
+    const visitedSessionIds = new Set();
+    let sessionCursor = "";
+    let sessionPage = [];
+    // Finish one session without re-hydrating the entire drive/footage/GPS history
+    // between 25-frame pages. A stopped session handed to us by finishNativeDrive gets
+    // first priority unless it is cooling down after a failed batch.
+    let activeSessionId = nativeKeyframeAutoPreferredSession;
+    if (nativeReplaySessionDeferred(activeSessionId)) activeSessionId = null;
+
+    const nextPendingSessionId = async () => {
+      while (nativeAutomaticReplayAllowed()) {
+        while (sessionPage.length) {
+          const id = String(sessionPage.shift().sessionId || "");
+          if (id && !visitedSessionIds.has(id) && !nativeReplaySessionDeferred(id)) {
+            return id;
+          }
+        }
+        const listed = await plugin.listPendingKeyframeSessions({
+          afterSessionId: sessionCursor,
+          limit: NATIVE_AUTO_KEYFRAME_SESSION_PAGE_SIZE,
+        });
+        const pending = Array.isArray(listed.sessions) ? listed.sessions : [];
+        if (!pending.length) return null;
+        const nextCursor = String(listed.nextAfterSessionId ||
+          (pending[pending.length - 1] && pending[pending.length - 1].sessionId) || "");
+        if (!nextCursor || nextCursor === sessionCursor) {
+          throw new Error("Saved-frame session paging did not advance.");
+        }
+        sessionCursor = nextCursor;
+        sessionPage = pending.slice(0, NATIVE_AUTO_KEYFRAME_SESSION_PAGE_SIZE);
+      }
+      return null;
+    };
+
+    while (attempts < NATIVE_AUTO_KEYFRAME_ATTEMPTS_PER_RUN && nativeAutomaticReplayAllowed()) {
+      if (!activeSessionId) {
+        activeSessionId = await nextPendingSessionId();
+        if (!activeSessionId) break;
+      }
+      const result = await replayNativeKeyframeBatch(activeSessionId, false);
+      if (result.busy || result.empty) {
+        if (result.empty && activeSessionId === nativeKeyframeAutoPreferredSession) {
+          nativeKeyframeAutoPreferredSession = null;
+        }
+        if (result.empty) visitedSessionIds.add(activeSessionId);
+        activeSessionId = null;
+        if (result.busy) break;
+        continue;
+      }
+      attempts += Math.max(1, Number(result.attempted) || 0);
+      changed = changed || result.checked > 0;
+      if (result.failed) {
+        // Preserve the failed frame, but rotate beyond this session so one corrupt image
+        // or transient per-frame error cannot starve every later drive. A future external
+        // trigger may retry it after the cooldown; this run never hammers it in a loop.
+        deferNativeReplaySession(activeSessionId);
+        visitedSessionIds.add(activeSessionId);
+        activeSessionId = null;
+        if (!nativeAutomaticReplayAllowed()) break;
+        if (attempts >= NATIVE_AUTO_KEYFRAME_ATTEMPTS_PER_RUN) {
+          continueAfterYield = true;
+          break;
+        }
+        continue;
+      }
+      if (result.cancelled || result.checked === 0) break;
+      if (!result.remaining) {
+        if (activeSessionId === nativeKeyframeAutoPreferredSession) {
+          nativeKeyframeAutoPreferredSession = null;
+        }
+        clearNativeReplaySessionDeferral(activeSessionId);
+        visitedSessionIds.add(activeSessionId);
+        activeSessionId = null;
+      }
+      if (attempts >= NATIVE_AUTO_KEYFRAME_ATTEMPTS_PER_RUN) {
+        continueAfterYield = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (changed) {
+      invalidateNativeDriveHistory();
+      await loadReports().catch(() => {});
+    }
+  })().catch(() => {});
+  nativeKeyframeAutoPromise = run;
+  run.finally(() => {
+    if (nativeKeyframeAutoPromise === run) nativeKeyframeAutoPromise = null;
+    if (continueAfterYield && nativeAutomaticReplayAllowed()) {
+      setTimeout(() => { scheduleNativeKeyframeReplay(); }, 250);
+    }
+  }).catch(() => {});
+  return run;
+}
+
 function gpsAt(track, seconds) {
   if (!track || !track.length) return null;
   let best = track[0];
@@ -3585,7 +6079,7 @@ async function analyseFootage(driveId, driveRec) {
     // Infinity until something forces it to scan. Skipping those clips meant that on any
     // device whose WebView cannot record MP4, and the Android emulator is one, every
     // recording was stored and then declared missing. Seeking past the end resolves it.
-    let dur = meta.dur;
+    let dur = v.duration;
     if (!isFinite(dur) || dur <= 0) dur = await resolveDuration(v);
     releaseVodVideo(v);
     if (!isFinite(dur) || dur <= 0) {
@@ -3635,11 +6129,13 @@ async function analyseFootage(driveId, driveRec) {
         res(b);
       };
       v.onseeked = () => {
-        const scale = Math.min(1, 2000 / Math.max(v.videoWidth, v.videoHeight));
-        canvas.width = Math.round(v.videoWidth * scale);
-        canvas.height = Math.round(v.videoHeight * scale);
-        canvas.getContext("2d").drawImage(v, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob(finish, "image/jpeg", 0.85);
+        try {
+          const scale = Math.min(1, 2000 / Math.max(v.videoWidth, v.videoHeight));
+          canvas.width = Math.round(v.videoWidth * scale);
+          canvas.height = Math.round(v.videoHeight * scale);
+          canvas.getContext("2d").drawImage(v, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(finish, "image/jpeg", 0.85);
+        } catch (e) { finish(null); }
       };
       v.onerror = () => finish(null);
       // A seek that never lands must not hang the whole run.
@@ -3741,7 +6237,9 @@ async function analyseFootage(driveId, driveRec) {
         const atAbs = Number.isFinite(clip.sourceOffsetS) ? clip.sourceOffsetS + at : elapsed + at;
         const pos = gpsAt(track, atAbs);
         const fd = new FormData();
-        fd.append("photo", blob, "vod.jpg");
+        burst.frames.forEach((frame, index) =>
+          fd.append("photo", frame.blob, `vod-burst-${index + 1}.jpg`));
+        fd.append("primary_index", String(burst.primaryIndex));
         if (pos) { fd.append("lat", String(pos.lat)); fd.append("lng", String(pos.lng)); }
         fd.append("drive_id", String(driveId));
         fd.append("capture_source", "drive_vod");
@@ -3807,7 +6305,11 @@ async function analyseFootage(driveId, driveRec) {
     try { await writeManifest(driveId, manifest); } catch (e) { writeFailed = true; }
   }
   let freed = 0;
-  if (!isDebug() && !failed) {
+  const analysis = StandaloneAPI.__pure.summarizeFootageAnalysis({
+    planned: total, extracted, checked, failed, unreadableClips, aborted,
+  });
+  const complete = analysis.complete;
+  if (!isDebug() && complete) {
     try {
       const before = (await api("/api/footage").catch(() => []))
         .filter((f) => String(f.drive_id) === String(driveId))
@@ -3816,24 +6318,23 @@ async function analyseFootage(driveId, driveRec) {
       freed = before / 1048576;
     } catch (e) {}
   }
-  await api(`/api/drives/${encodeURIComponent(driveId)}/analysis`, {
-    method: "POST",
-    body: JSON.stringify({ started_at: Number.isFinite(sourceStartS) ? sourceStartS : null,
-      checked: Math.max(0, done - failed), found, already: duplicateIds.size,
-      already_ids: [...duplicateIds] }),
-  }).catch(() => {});
+  await persistFootageAnalysis(analysis);
   await loadReports();
   show("home");
   const diskNote = !saveToDisk ? ""
     : (written ? " " + t("frames_saved", { n: written, dir: `${FRAME_DIR}/${driveId}` })
                : " " + t("frames_failed"));
-  const headline = failed
-    ? t("analyse_incomplete", { failed, n: total, err: lastErr })
+  const headline = !complete
+    ? t("analyse_incomplete", {
+        failed: analysis.incompleteItems,
+        n: total,
+        err: lastErr || (unreadableClips ? "One or more clips could not be decoded." : "Analysis stopped early."),
+      })
     : t("analyse_done", { found, n: total })
       + (duplicateIds.size ? " " + t("analyse_dup", { n: duplicateIds.size }) : "");
   alert(headline
         + (freed ? " " + t("footage_freed", { mb: freed.toFixed(0) })
-                 : (isDebug() || failed ? " " + t("footage_kept") : ""))
+                 : (isDebug() || !complete ? " " + t("footage_kept") : ""))
         + diskNote);
   } finally {
     for (const video of [...vodVideos]) releaseVodVideo(video);
@@ -3848,6 +6349,8 @@ async function analyseFootage(driveId, driveRec) {
 // network and ships nothing it does not carry itself. Tiles do need a connection, so
 // when they cannot load the points are still plotted on a plain scatter.
 let mapObj = null;
+let mapFallbackTimer = null;
+let mapDrawGeneration = 0;
 
 const PUBLIC_MAP_DAMAGE_TYPES = new Set([
   "pothole_cavity", "failed_patch", "surface_breakup", "rut_or_depression",
@@ -3980,8 +6483,9 @@ async function openDash() {
   };
   const byType = {}, bySize = {}, byArea = {};
   for (const r of holes) {
-    byType[tDamage(r)] = (byType[tDamage(r)] || 0) + 1;
-    if (r.size) bySize[tSize(r.size)] = (bySize[tSize(r.size)] || 0) + 1;
+    const reportType = isRoadReport(r) ? tDamage(r) : tIssue(r);
+    byType[reportType] = (byType[reportType] || 0) + 1;
+    if (isRoadReport(r) && r.size) bySize[tSize(r.size)] = (bySize[tSize(r.size)] || 0) + 1;
     const area = (r.officer_name || "").replace(/^Commissioner,\s*/, "") || "—";
     byArea[area] = (byArea[area] || 0) + 1;
   }
@@ -4018,9 +6522,26 @@ function drawMap(pins, shared = false, unavailable = false) {
   }
   if (typeof L === "undefined") return scatter(host, pins, shared);
   try {
-    mapObj = L.map(host, { attributionControl: true });
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-      { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" }).addTo(mapObj);
+    const currentMap = L.map(host, { attributionControl: true });
+    mapObj = currentMap;
+    let loadedTiles = 0;
+    const useOfflinePlot = () => {
+      if (generation !== mapDrawGeneration || mapObj !== currentMap || loadedTiles) return;
+      if (mapFallbackTimer) { clearTimeout(mapFallbackTimer); mapFallbackTimer = null; }
+      currentMap.remove();
+      mapObj = null;
+      scatter(host, pins);
+    };
+    const tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" });
+    tiles.on("tileload", () => {
+      loadedTiles += 1;
+      if (mapFallbackTimer) { clearTimeout(mapFallbackTimer); mapFallbackTimer = null; }
+    });
+    // Leaflet tile failures are asynchronous, so a surrounding try/catch cannot see
+    // them. Its load event fires after the initial success/error batch settles.
+    tiles.on("load", () => { if (!loadedTiles) useOfflinePlot(); });
+    tiles.addTo(currentMap);
     const group = L.featureGroup(pins.map((r) => {
       const color = mapColor(r);
       const markerRadius = r._shared
@@ -4112,10 +6633,14 @@ async function shareZip(zip) {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     return;
   }
-  const w = await P.Filesystem.writeFile({ path: zip.name, data: zip.base64, directory: "CACHE" });
+  try { await P.Filesystem.mkdir({ path: SHARE_CACHE_DIR, directory: "CACHE", recursive: true }); } catch (_) {}
+  const w = await P.Filesystem.writeFile({ path: `${SHARE_CACHE_DIR}/${zip.name}`, data: zip.base64, directory: "CACHE" });
   await P.Share.share({ title: zip.name, files: [w.uri] });
 }
-$("fileInput").onchange = (e) => { handleFile(e.target.files[0]); e.target.value = ""; };
+$("fileInput").onchange = (e) => {
+  handleFile(e.target.files[0], { captureSource: "manual_import" });
+  e.target.value = "";
+};
 
 function renderImportedGpxStatus() {
   const status = $("gpxImportStatus"), clear = $("gpxClearBtn");
@@ -4204,12 +6729,12 @@ window.addEventListener("pipeline-progress", (e) => {
 window.addEventListener("pipeline-verdict", (e) => {
   if ($("progress").classList.contains("hidden")) return;
   $("progressText").textContent = e.detail.accepted
-    ? t("early_yes", { type: tDamage(e.detail.damage_type) })
+    ? t("early_yes")
     : e.detail.review ? t("early_review") : t("early_no");
 });
 
-// Native Android back button: navigate inside the app instead of exiting.
-// Drive mode stops; any other screen returns home; home lets the app exit.
+// Native Android back button: leaving the Drive screen does not stop its foreground
+// service. The explicit Stop control is the only in-app action that ends a native drive.
 window.handleAppBack = () => {
   if (drive || window._nativeDriveActive) { stopDrive(); return true; }
   // Stop has already torn down the live camera, but its final MediaRecorder data and
@@ -4262,6 +6787,18 @@ window.openSettings = (firstRun) => {
   $("settingsHint").textContent = firstRun ? t("welcome_hint") : "";
   updateProviderSettings();
   show("settings");
+  return true;
+};
+$("gearBtn").onclick = () => {
+  if (nativeFinishPromise || (drive && drive.native && drive.stopping)) return;
+  openSettings(initialSettingsRequired, initialSettingsRequired);
+};
+$("setBack").onclick = () => { if (!initialSettingsActive) show("home"); };
+$("setCaptureSource").onchange = updateCaptureSourceSettings;
+$("setDashcamRtspUrl").oninput = () => {
+  if ($("setDashcamRtspUrl").getAttribute("aria-invalid") === "true") {
+    setDashcamRtspFeedback();
+  }
 };
 $("gearBtn").onclick = () => openSettings(false);
 $("setProvider").onchange = updateProviderSettings;
@@ -4282,12 +6819,124 @@ $("setSave").onclick = async () => {
   localStorage.setItem("record_video", $("setRecord").checked ? "1" : "0");
   localStorage.setItem("native_background_drive", $("setBackgroundDrive").checked ? "1" : "0");
   const newLang = $("setLang").value;
-  localStorage.setItem("app_lang", newLang);
-  if (newLang !== LANG) { location.reload(); return; }
-  await loadHealth();
-  await loadReports();
-  show("home");
+  try {
+    const plugin = nativeDrivePlugin();
+    if (plugin && drive && drive.native && !drive.stopping) {
+      const current = await plugin.getStatus();
+      if (Boolean(current.recordingEnabled) !== recordVideo) {
+        const updated = await plugin.setVideoRecording({ enabled: recordVideo });
+        updateNativeDriveHud(updated);
+      }
+    }
+    localStorage.setItem("openai_key", trimmedKey);
+    localStorage.setItem("sender_name", $("setName").value.trim());
+    localStorage.setItem("detection_model", selectedModel);
+    localStorage.setItem("image_detail", selectedDetail);
+    localStorage.setItem(CAPTURE_SOURCE_KEY, selectedCaptureSource);
+    if (selectedCaptureSource === DASHCAM_CAPTURE_SOURCE) {
+      localStorage.setItem(DASHCAM_RTSP_URL_KEY, dashcamRtspUrl);
+    }
+    localStorage.setItem("debug_mode", $("setDebug").checked ? "1" : "0");
+    localStorage.setItem("keep_frames", $("setKeepFrames").checked ? "1" : "0");
+    localStorage.setItem("record_video", recordVideo ? "1" : "0");
+    localStorage.setItem("drive_limit_minutes", String(driveLimit));
+    localStorage.setItem("app_lang", newLang);
+    localStorage.setItem(INITIAL_SETUP_KEY, "1");
+    initialSettingsRequired = false;
+    initialSettingsActive = false;
+    if (newLang !== LANG) { location.reload(); return; }
+    await loadHealth();
+    await loadReports();
+    show("home");
+    // A missing key is the only reason durable Drive frames may have remained queued.
+    // Saving settings is therefore a replay trigger just like resume/online/drive stop.
+    scheduleNativeKeyframeReplay();
+  } catch (error) {
+    alert(error.message || "The settings could not be applied.");
+  } finally {
+    saveButton.disabled = nativeFinishLocked || nativeWipeLocked;
+  }
 };
+function missingFilesystemEntry(error) {
+  return /(?:not found|does not exist|no such file|enoent)/i.test(
+    String(error && (error.message || error))
+  );
+}
+
+async function removeManagedDirectory(filesystem, path, directory) {
+  if (!filesystem || typeof filesystem.rmdir !== "function") return;
+  try {
+    await filesystem.rmdir({ path, directory, recursive: true });
+  } catch (error) {
+    if (!missingFilesystemEntry(error)) throw error;
+  }
+  if (typeof filesystem.readdir !== "function") return;
+  try {
+    await filesystem.readdir({ path, directory });
+    throw new Error(`${path} still exists after deletion.`);
+  } catch (error) {
+    if (!missingFilesystemEntry(error)) throw error;
+  }
+}
+
+async function clearManagedBrowserCaches() {
+  if (!(window.caches && typeof window.caches.keys === "function")) return;
+  const names = await window.caches.keys();
+  const removed = await Promise.all(names.map((name) => window.caches.delete(name)));
+  if (removed.some((ok) => !ok) || (await window.caches.keys()).length) {
+    throw new Error("Some browser cache data could not be deleted.");
+  }
+}
+
+async function deleteAllAppData() {
+  if (nativeWipeInProgress) throw new Error("App data deletion is already in progress.");
+  // Close the import gate before observing the promises. Anything already running is
+  // allowed to settle, then the transactional wipe runs last; anything newly triggered
+  // by a drive-end/resume event is rejected until the successful reload.
+  nativeWipeInProgress = true;
+  bumpNativeDriveControlEpoch();
+  try {
+    const replayState = nativeKeyframeReplay;
+    if (replayState) replayState.cancelled = true;
+    const activeSyncs = [...new Set([
+      nativeTrailingForcePromise, nativeSyncPromise, nativeRepairSyncPromise,
+      nativeKeyframeAutoPromise, replayState && replayState.done,
+    ].filter(Boolean))];
+    if (activeSyncs.length) await Promise.allSettled(activeSyncs);
+
+    const plugins = window.Capacitor && Capacitor.Plugins;
+    const nativePlugin = nativeDrivePlugin();
+    const filesystem = plugins && plugins.Filesystem;
+    if (nativePlugin) {
+      const result = await nativePlugin.clearNativeData();
+      if (!result || result.cleared !== true) {
+        throw new Error("Android could not verify that its private app data was deleted.");
+      }
+      if (!filesystem || typeof filesystem.rmdir !== "function" ||
+          typeof filesystem.readdir !== "function") {
+        throw new Error("Android file cleanup is unavailable; exported debug frames were not verified.");
+      }
+    }
+    await removeManagedDirectory(filesystem, FRAME_DIR, "DOCUMENTS");
+    await removeManagedDirectory(filesystem, SHARE_CACHE_DIR, "CACHE");
+    await clearManagedBrowserCaches();
+    const cleared = await api("/api/reports", { method: "DELETE" });
+    if (!cleared || cleared.ok !== true) {
+      throw new Error("Saved reports and media could not be verified as deleted.");
+    }
+    sessionStorage.clear();
+    localStorage.clear();
+    if (sessionStorage.length || localStorage.length) {
+      throw new Error("Some settings remain on this device.");
+    }
+    return { cleared: true };
+  } catch (error) {
+    // A failed wipe is explicitly incomplete and the page remains usable for retry.
+    nativeWipeInProgress = false;
+    throw error;
+  }
+}
+
 $("wipeBtn").onclick = async () => {
   if (!confirm(t("confirm_wipe"))) return;
   const plugins = window.Capacitor && Capacitor.Plugins;
@@ -4303,18 +6952,26 @@ $("wipeBtn").onclick = async () => {
     await api("/api/reports", { method: "DELETE" });
   } catch (e) { $("wipeBtn").disabled = false; alert(e.message); return; }
   try {
-    if (plugins && plugins.Filesystem && plugins.Filesystem.rmdir) {
-      await plugins.Filesystem.rmdir({ path: FRAME_DIR, directory: "DOCUMENTS", recursive: true });
-    }
-  } catch (e) {}
-  localStorage.clear();
-  location.reload();
+    await deleteAllAppData();
+    location.reload();
+  } catch (e) {
+    setNativeWipeLocked(false);
+    alert(`Delete incomplete: ${e.message || e}`);
+  }
 };
 
 applyLang();
 void initNativeVideoImports();
 
 // #report-<id> deep link opens that report's detail screen directly.
+nativeInitialRestorePromise = (async () => {
+  try {
+    // Reconstruct the process-owned camera before allowing a new Drive/Photo action.
+    await restoreNativeDrive({ syncWhenIdle: false });
+  } finally {
+    nativeInitialRestorePending = false;
+  }
+})();
 (async () => {
   // Service health is remote in shared mode; it must not hold local history hostage.
   await Promise.all([loadHealth(), loadReports()]);
@@ -4325,9 +6982,12 @@ void initNativeVideoImports();
     return;
   }
   const m = location.hash.match(/^#report-(\d+)$/);
+  if (!drive || m) await loadReports();
+  else loadReports().catch(() => {});
+  if (!drive) syncNativeData().then(() => loadReports()).catch(() => {});
   if (m) {
     const r = (loadReports.latest || []).find((x) => x.id == m[1]);
-    if (r) openDetail(r);
+    if (r) openReportDetail(r);
   }
 })();
 </script>

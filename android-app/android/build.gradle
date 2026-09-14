@@ -1,4 +1,4 @@
-// Top-level build file where you can add configuration options common to all sub-projects/modules.
+apply from: "variables.gradle"
 
 buildscript {
     
@@ -23,6 +23,19 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+    }
+
+    // Cordova/AndroidX still request split Kotlin 1.6/1.8 stdlib artifacts in some
+    // transitive graphs. Keep every module, including otherwise-empty instrumentation
+    // modules, on the app's single Kotlin runtime so duplicate classes cannot enter an APK.
+    configurations.configureEach {
+        resolutionStrategy.eachDependency { details ->
+            if (details.requested.group == 'org.jetbrains.kotlin' &&
+                details.requested.name.startsWith('kotlin-stdlib')) {
+                details.useVersion(rootProject.ext.kotlinVersion)
+                details.because('all Android modules must use one Kotlin stdlib runtime')
+            }
+        }
     }
 }
 

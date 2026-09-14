@@ -70,7 +70,7 @@
 <body>
 <main>
   <header>
-    <p class="meta">Pothole Reporter · Android package <code>com.gauravsen.potholereporter</code></p>
+    <p class="meta">Pothole Reporter · Android package <code>dev.aiengg.potholereporter</code></p>
     <h1>Privacy Policy</h1>
     <p class="meta">Effective and last updated: 11 September 2026</p>
     <nav aria-label="Related pages">
@@ -143,6 +143,11 @@
             <td>Run the app, preserve history, allow review, and prepare complaint drafts.</td>
           </tr>
           <tr>
+            <td>Official handoff text and evidence</td>
+            <td>The offered app or portal opens only after you choose it. A Google Play fallback receives no report attachment. A WhatsApp action places complaint text in a link but does not press Send. Share creates compressed image copies and report text in app cache and invokes Android's share sheet. Call opens the dialler. Email hands an editable draft and attachment to your email app.</td>
+            <td>Let you review and complete a complaint yourself in an external official channel. Opening any channel is not treated as a submission.</td>
+          </tr>
+          <tr>
             <td>Email draft and attachment</td>
             <td>When you choose Email, the recipient, subject, complaint body, and road photo are handed to your email app. A probable tender number is added only when a match was found. Email is the app's only complaint-filing option; neither the app nor project service submits a complaint to a government API. The email provider may sync a draft under its own terms. Pothole Reporter does not press Send.</td>
             <td>Let you review, edit, and choose whether to send a complaint.</td>
@@ -192,32 +197,33 @@
       <li>Deleting local app data does not delete previously accepted pothole observations, aggregate request metrics, request IDs, or deduplication records from the project service or remove a coordinate already included in the general map.</li>
       <li>The project service does not persist the selected images relayed for shared vision. The configured detector and other external recipients apply their own security, abuse-monitoring, legal, and operational retention rules; the project must review this policy before enabling a backend with materially different handling.</li>
       <li>Files already exported, shared, attached, copied elsewhere, or sent are outside the app's control and must be deleted from their destination separately.</li>
-      <li>Data already processed by OpenAI, OpenStreetMap services, Karnataka GIS, an email provider, or a complaint recipient is subject to that recipient's retention and deletion process.</li>
+      <li>Data already processed by OpenAI, OpenStreetMap services, Karnataka GIS, Telangana GIS, GitHub Pages, Google Play, WhatsApp, an email or sharing provider, or an official complaint service is subject to that recipient's retention and deletion process.</li>
     </ul>
     <p>The app creates no Pothole Reporter account, so there is no profile to delete. Because the service identity is pseudonymous, the project may not be able to identify a particular installation after local data is erased. Android backup is disabled for the app.</p>
   </section>
 
   <section>
     <h2>Security and your choices</h2>
-    <p>Network calls in the current app use HTTPS. Local app data is protected by Android's device and application storage controls, but the app does not add separate at-rest encryption to the OpenAI key stored in WebView storage. Protect your device, use a revocable key with appropriate spending limits, and revoke it through OpenAI if the device or key may be compromised.</p>
+    <p>Internet calls in the current app use HTTPS. A dashcam's local <code>rtsp://</code> stream is commonly unencrypted, so use the dashcam's own trusted Wi-Fi and a camera password where supported; the app never places that address or password in Drive status or logs. Each downloaded pack has a version, expected byte length, and SHA-256 checksum pinned in a local manifest. The complete download is verified before parsing or caching. If required routing data is unavailable, malformed, or different from the pinned checksum, authority routing stops; failure of optional project/procurement data only omits candidate context. Highway matching also refuses weak GPS, ambiguous parallel references, and conflicting driving direction. State/UT and exact municipal polygon routes never fall back to a place name; enclave territories retain their own pinned boundaries. The specific My Cure route requires a successful official Telangana GIS check and excludes an accuracy envelope intersecting Secunderabad Cantonment. Detection, geocoding, Karnataka GIS, and exact CURE checks still require their own network services.</p>
+    <p>Local app data is protected by Android's device and application storage controls, but the app does not add separate at-rest encryption to the OpenAI key or dashcam RTSP address and credentials stored in WebView storage. Local RTSP is also normally unencrypted in transit, so use only a trusted dashcam Wi-Fi. Protect your device, use revocable credentials with appropriate limits, and revoke them if the device or a credential may be compromised.</p>
     <ul>
       <li>You can deny camera or location permission, but the corresponding capture or routing feature will not work.</li>
       <li>You can choose shared vision or personal OpenAI-key vision. Central tender resolution and accepted-pothole deduplication, map, and impact records operate in both modes after consent.</li>
       <li>You can choose whether to enable drive recording, Debug retention, or saved analysis frames in Settings.</li>
-      <li>You decide whether to edit, share, export, or send any draft or dataset.</li>
+      <li>You decide whether to edit, share, export, open an official channel, or send any draft or dataset. No complaint is submitted automatically.</li>
       <li>Review every AI verdict, recipient, and probable contract match before acting on it.</li>
     </ul>
   </section>
 
   <section>
     <h2>Children, changes, and contact</h2>
-    <p>Pothole Reporter is a road-reporting tool and is not designed for children. It does not create user profiles or knowingly operate a child-directed service.</p>
+    <p>Pothole Reporter is a civic-reporting tool and is not designed for children. It does not create user profiles or knowingly operate a child-directed service.</p>
     <p>If this policy or the app's data flows change, this page will be updated and its effective date will change. Material new collection should be disclosed in the app before it begins.</p>
-    <p>For a privacy question or request, open a <a href="https://github.com/coding-parrot/pothole-reporter/issues/new">GitHub issue</a>. GitHub issues are public: do not post an API key, precise location, unredacted road photo, or other sensitive information. You can describe the issue without attaching private data.</p>
+    <p>For a private privacy question or request, email <a href="mailto:contact@aiengg.dev">contact@aiengg.dev</a>. For a non-sensitive public bug, you may instead open a <a href="https://github.com/coding-parrot/pothole-reporter/issues/new">GitHub issue</a>. Do not put an API key, precise location, unredacted report photo, or other sensitive information in a public issue.</p>
   </section>
 
   <footer>
-    <p>Pothole Reporter is not affiliated with or endorsed by OpenAI, OpenStreetMap, KSRSAC, or any government body.</p>
+    <p>Pothole Reporter is independent and is not affiliated with or endorsed by any listed government, civic body, grievance service, data provider, OpenAI, OpenStreetMap, KSRSAC, or TGRAC.</p>
   </footer>
 </main>
 </body>

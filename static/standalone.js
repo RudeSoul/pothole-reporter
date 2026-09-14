@@ -55,6 +55,12 @@
     kn: { compress: "ಫೋಟೋ ಸಂಕುಚಿಸಲಾಗುತ್ತಿದೆ...", capture: "ಫ್ರೇಮ್ ಸೆರೆಹಿಡಿಯಲಾಗುತ್ತಿದೆ...",
           detect: "AI ರಸ್ತೆ ಹಾನಿ ಪರಿಶೀಲಿಸುತ್ತಿದೆ...", finalize: "ವಿಳಾಸ ಮತ್ತು ಗುತ್ತಿಗೆ ಖಚಿತಪಡಿಸಲಾಗುತ್ತಿದೆ...",
           write: "ದೂರು ಬರೆಯಲಾಗುತ್ತಿದೆ...", email: "ನಿಮ್ಮ ಇಮೇಲ್ ಆ್ಯಪ್ ತೆರೆಯಲಾಗುತ್ತಿದೆ..." },
+    mr: { compress: "फोटो तयार करत आहे...", capture: "रस्त्याची दृश्ये तयार करत आहे...",
+          detect: "AI खड्डा: होय किंवा नाही हे तपासत आहे...", finalize: "पत्ता आणि मार्ग निश्चित करत आहे...",
+          write: "तक्रारीचा मसुदा तयार करत आहे...", email: "ईमेल अॅप उघडत आहे..." },
+    bn: { compress: "ছবি প্রস্তুত করা হচ্ছে...", capture: "রাস্তার দৃশ্য প্রস্তুত করা হচ্ছে...",
+          detect: "AI রাস্তার গর্ত: হ্যাঁ অথবা না পরীক্ষা করছে...", finalize: "ঠিকানা ও অভিযোগের পথ চূড়ান্ত করা হচ্ছে...",
+          write: "অভিযোগের খসড়া তৈরি হচ্ছে...", email: "ইমেল অ্যাপ খোলা হচ্ছে..." },
   };
   const pmsg = (k) => (PROGRESS[LANG()] && PROGRESS[LANG()][k]) || PROGRESS.en[k];
 
@@ -91,6 +97,51 @@
       ? MODEL_CONFIG.defaultImageDetail : picked;
   }
 
+  /** Pure accounting for saved-video analysis; no skipped work can look successful. */
+  function summarizeFootageAnalysis({
+    planned, extracted, checked, failed, unreadableClips, aborted
+  }) {
+    const count = (value) => Math.max(0, Number(value) | 0);
+    const totals = {
+      planned: count(planned),
+      extracted: count(extracted),
+      checked: count(checked),
+      failed: count(failed),
+      unreadableClips: count(unreadableClips),
+      aborted: !!aborted,
+    };
+    totals.skipped = Math.max(0, totals.planned - totals.checked - totals.failed);
+    totals.complete = !totals.aborted && totals.failed === 0 &&
+      totals.unreadableClips === 0 && totals.checked === totals.planned &&
+      totals.extracted >= totals.checked;
+    totals.incompleteItems = totals.failed + totals.skipped + totals.unreadableClips;
+    return totals;
+  }
+
+  function vodSampleTimes(durationSeconds, stepSeconds) {
+    const duration = Number(durationSeconds);
+    const step = Number(stepSeconds);
+    if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(step) || step <= 0) {
+      return [];
+    }
+    const times = [];
+    for (let at = Math.min(0.4, duration / 2); at < duration; at += step) times.push(at);
+    return times;
+  }
+
+  function vodBurstTimes(atSeconds, durationSeconds, halfSpanSeconds = 0.4) {
+    const at = Number(atSeconds);
+    const duration = Number(durationSeconds);
+    const halfSpan = Number(halfSpanSeconds);
+    if (![at, duration, halfSpan].every(Number.isFinite) || duration <= 0 || halfSpan < 0) {
+      return [];
+    }
+    const last = Math.max(0.001, duration - 0.001);
+    return [Math.max(0.001, at - halfSpan), Math.min(last, Math.max(0.001, at)),
+      Math.min(last, at + halfSpan)].filter((value, index, all) =>
+      all.findIndex((other) => Math.abs(other - value) < 0.04) === index);
+  }
+
   const OFFICERS = {
     "bengaluru central city corporation": ["Commissioner, Bengaluru Central City Corporation (BCCC)", "commissionerbccc@gmail.com"],
     "bengaluru east city corporation": ["Commissioner, Bengaluru East City Corporation (BECC)", "commissioner.becc@gmail.com"],
@@ -98,6 +149,254 @@
     "bengaluru south city corporation": ["Commissioner, Bengaluru South City Corporation (BSCC)", "comm.south.gba@gmail.com"],
     "bengaluru west city corporation": ["Commissioner, Bengaluru West City Corporation (BWCC)", "commissioner.bwcc@gmail.com"],
   };
+
+  // State-specific contacts and polygons live in immutable data packs. The APK keeps
+  // only the parsers, strict validators and the package IDs Android permits it to query.
+  // A downloaded pack can therefore add data, never executable behaviour.
+  const AUTHORITY_REGISTRY_VERSION = 18;
+  const LAUNCHABLE_PACKAGES = new Set([
+    "com.bmc.potholequickfix", "com.sis.pwdsewaapp", "com.kmc.app",
+    "com.newnmmc.app", "com.nyatitechnologies.pmcroadmitra",
+    "com.ceedeev.grivenancev2", "org.tnega.cmhelpline.citizen",
+    "cgg.gov.ghmc", "com.amplvb.ccrs",
+    "com.nhai.rajmargyatra", "com.nammabengaluruNew.org",
+    "com.esri.ugms_bmc", "in.gov.pmc.pmccare", "com.nic.dl.delhijanmitra",
+    "in.nic.up.jansunwai.upjansunwai", "com.rajsampark.versiontwo",
+    "com.magnum.helpline", "com.bpsms.jansamadhan",
+    "in.gov.dpg.cmhelpline", "com.sociomatic.janasunani",
+  ]);
+  const OFFICIAL_HANDOFF_CHANNELS = new Set(["official_handoff", "bmc_quickfix"]);
+  const ISSUE_TYPES = Object.freeze(["road_damage", "garbage", "open_manhole"]);
+  const ISSUE_TYPE_SET = new Set(ISSUE_TYPES);
+  const normaliseIssueType = (value) => ISSUE_TYPE_SET.has(value) ? value : "road_damage";
+
+  // Several cities publish a pothole-only app and a separate general civic system.
+  // Keep the geographic authority binding unchanged, but choose the channel that can
+  // actually accept the selected issue. These URLs are intentionally code-pinned: an
+  // old saved report is refreshed through this table before any external page opens.
+  const CIVIC_HANDOFF_OVERRIDES = Object.freeze({
+    "mh-bmc": Object.freeze({
+      handoff_name: "BMC MARG Complaint Portal",
+      handoff_url: "https://marg.mcgm.gov.in/MARG/welcomePage.html",
+      handoff_package: "com.esri.ugms_bmc",
+      alternate_handoff_name: null,
+      alternate_handoff_url: null,
+      whatsapp_url: null,
+      helpline: "1916",
+    }),
+    "mh-pmc": Object.freeze({
+      handoff_name: "PMC CARE",
+      handoff_url: "https://www.pmccare.in/",
+      handoff_package: "in.gov.pmc.pmccare",
+      alternate_handoff_name: null,
+      alternate_handoff_url: null,
+      whatsapp_url: "https://wa.me/919689900002",
+      helpline: "18001030222",
+    }),
+    "mh-umc": Object.freeze({
+      handoff_name: "Aaple Sarkar",
+      handoff_url: "https://grievances.maharashtra.gov.in/en",
+      handoff_package: null,
+      alternate_handoff_name: null,
+      alternate_handoff_url: null,
+      whatsapp_url: null,
+      helpline: null,
+    }),
+    "mh-mmr-unverified": Object.freeze({
+      authority_name: "MMR civic authority (verify in Aaple Sarkar)",
+      handoff_name: "Aaple Sarkar",
+      handoff_url: "https://grievances.maharashtra.gov.in/en",
+      handoff_package: null,
+      alternate_handoff_name: null,
+      alternate_handoff_url: null,
+      whatsapp_url: null,
+      helpline: null,
+    }),
+    "mh-statewide-unverified": Object.freeze({
+      authority_name: "Maharashtra authority (select in Aaple Sarkar)",
+      handoff_name: "Aaple Sarkar",
+      handoff_url: "https://grievances.maharashtra.gov.in/en",
+      handoff_package: null,
+      alternate_handoff_name: "MahaULB (urban areas)",
+      alternate_handoff_url: "https://mahaulb.in/MahaULB/index",
+      whatsapp_url: null,
+      helpline: null,
+    }),
+    "dl-pwd-sewa": Object.freeze({
+      authority_name: "Delhi civic grievance coordination",
+      handoff_name: "Delhi CM JanSunwai",
+      handoff_url: "https://cmjansunwai.delhi.gov.in/",
+      handoff_package: "com.nic.dl.delhijanmitra",
+      alternate_handoff_name: "Delhi PGMS",
+      alternate_handoff_url: "https://pgms.delhi.gov.in/",
+      whatsapp_url: null,
+      helpline: "1902",
+    }),
+  });
+  const BENGALURU_AUTHORITY_NAMES = new Set([
+    "bengaluru central city corporation", "bengaluru east city corporation",
+    "bengaluru north city corporation", "bengaluru south city corporation",
+    "bengaluru west city corporation",
+  ]);
+  const BENGALURU_HANDOFF = Object.freeze({
+    handoff_name: "Namma Bengaluru (Sahaaya 2.0)",
+    handoff_url: "https://nammabengaluru.org.in/login",
+    handoff_package: "com.nammabengaluruNew.org",
+    alternate_handoff_name: "BBMP official app directory",
+    alternate_handoff_url: "https://site.bbmp.gov.in/departmentwebsites/BBMPIT/mobileapps.html",
+    whatsapp_url: null,
+    helpline: "1533",
+  });
+  // Complaint profiles shape the copy an authority receives; routing packs still decide
+  // only which geographic intake body contains the point. A municipal boundary is not
+  // evidence that the same body owns or maintains the road.
+  const AUTHORITY_COMPLAINT_PROFILES = Object.freeze({
+    "mh-bmc": Object.freeze({
+      profile_id: "mh-bmc", authority_name: "Brihanmumbai Municipal Corporation (BMC)",
+      portal_name: "BMC Pothole QuickFix / MARG", portal_url: "https://marg.mcgm.gov.in/MARG/welcomePage.html",
+      portal_category: "Pothole", request: "Please register this grievance, inspect and repair the defect, return the grievance number, and transfer it if another agency maintains the road.",
+      source_urls: ["https://play.google.com/store/apps/details?id=com.bmc.potholequickfix",
+        "https://marg.mcgm.gov.in/MARG/welcomePage.html"],
+    }),
+    "ka-lgd-305851": Object.freeze({ profile_id: "ka-bengaluru-central", authority_name: "Bengaluru Central City Corporation", boundary_body_code: "305851", portal_name: "Namma Bengaluru (Sahaaya 2.0)", portal_url: "https://nammabengaluru.org.in/login", portal_category: "Road Maintenance(Engg) / Pothole", recipient: "commissionerbccc@gmail.com" }),
+    "ka-lgd-305850": Object.freeze({ profile_id: "ka-bengaluru-east", authority_name: "Bengaluru East City Corporation", boundary_body_code: "305850", portal_name: "Namma Bengaluru (Sahaaya 2.0)", portal_url: "https://nammabengaluru.org.in/login", portal_category: "Road Maintenance(Engg) / Pothole", recipient: "commissioner.becc@gmail.com" }),
+    "ka-lgd-305853": Object.freeze({ profile_id: "ka-bengaluru-north", authority_name: "Bengaluru North City Corporation", boundary_body_code: "305853", portal_name: "Namma Bengaluru (Sahaaya 2.0)", portal_url: "https://nammabengaluru.org.in/login", portal_category: "Road Maintenance(Engg) / Pothole", recipient: "bengalurunorthcitycorporation@gmail.com" }),
+    "ka-lgd-305852": Object.freeze({ profile_id: "ka-bengaluru-south", authority_name: "Bengaluru South City Corporation", boundary_body_code: "305852", portal_name: "Namma Bengaluru (Sahaaya 2.0)", portal_url: "https://nammabengaluru.org.in/login", portal_category: "Road Maintenance(Engg) / Pothole", recipient: "comm.south.gba@gmail.com" }),
+    "ka-lgd-305854": Object.freeze({ profile_id: "ka-bengaluru-west", authority_name: "Bengaluru West City Corporation", boundary_body_code: "305854", portal_name: "Namma Bengaluru (Sahaaya 2.0)", portal_url: "https://nammabengaluru.org.in/login", portal_category: "Road Maintenance(Engg) / Pothole", recipient: "commissioner.bwcc@gmail.com" }),
+    "ka-bengaluru-bda": Object.freeze({
+      profile_id: "ka-bengaluru-bda", authority_name: "Bangalore Development Authority (BDA)",
+      portal_name: "Karnataka iPGRS", portal_url: "https://ipgrs.karnataka.gov.in/",
+      portal_category: "Road / Pothole", recipient: "com@bdabangalore.org",
+      ownership_evidence_required: true,
+    }),
+  });
+
+  function verifiedBdaResponsibility(route) {
+    const evidence = route && (route.bda_responsibility_evidence || route.road_owner_evidence);
+    return !!(route && (route.road_owner_id === "ka-bengaluru-bda"
+      || route.intake_authority_id === "ka-bengaluru-bda")
+      && evidence && evidence.verified === true
+      && String(evidence.segment_identity || "").trim()
+      && String(evidence.reference || evidence.document_id || "").trim()
+      && /^https:\/\//.test(String(evidence.source_url || "")));
+  }
+
+  function authorityComplaintProfile(route) {
+    if (verifiedBdaResponsibility(route)) return AUTHORITY_COMPLAINT_PROFILES["ka-bengaluru-bda"];
+    const id = route && (route.intake_authority_id || route.authority_id);
+    return AUTHORITY_COMPLAINT_PROFILES[id] || Object.freeze({
+      profile_id: id || "generic", authority_name: conciseRouteLabel(route && route.authority_name) || "Concerned road authority",
+      portal_name: route && route.handoff_name || null, portal_url: route && route.handoff_url || null,
+      portal_category: "Road / Pothole",
+    });
+  }
+
+  function separateRoadResponsibility(route) {
+    if (!route || !route.routed) return route;
+    const supplied = route.road_owner_evidence;
+    const evidenceVerified = !!(supplied && supplied.verified === true
+      && String(supplied.segment_identity || "").trim()
+      && String(supplied.reference || supplied.document_id || "").trim()
+      && /^https:\/\//.test(String(supplied.source_url || "")));
+    const bdaClaim = route.road_owner_id === "ka-bengaluru-bda";
+    const ownerVerified = evidenceVerified && (!bdaClaim || verifiedBdaResponsibility(route));
+    const useBdaIntake = ownerVerified && bdaClaim;
+    const bdaProfile = AUTHORITY_COMPLAINT_PROFILES["ka-bengaluru-bda"];
+    return {
+      ...route,
+      geographic_authority_id: route.geographic_authority_id || route.authority_id || null,
+      geographic_authority_name: route.geographic_authority_name || route.authority_name || null,
+      // When segment-level official evidence proves BDA maintenance, BDA becomes the
+      // intake route while the containing corporation remains geographic context.
+      authority_id: useBdaIntake ? bdaProfile.profile_id : route.authority_id,
+      authority_name: useBdaIntake ? bdaProfile.authority_name : route.authority_name,
+      officer_name: useBdaIntake ? `Commissioner, ${bdaProfile.authority_name}` : route.officer_name,
+      officer_email: useBdaIntake ? bdaProfile.recipient : route.officer_email,
+      delivery_channel: useBdaIntake ? "email" : route.delivery_channel,
+      handoff_name: useBdaIntake ? bdaProfile.portal_name : route.handoff_name,
+      handoff_url: useBdaIntake ? bdaProfile.portal_url : route.handoff_url,
+      intake_authority_id: useBdaIntake ? bdaProfile.profile_id
+        : (route.intake_authority_id || route.authority_id || null),
+      intake_authority_name: useBdaIntake ? bdaProfile.authority_name
+        : (route.intake_authority_name || route.authority_name || null),
+      road_owner_id: ownerVerified ? (route.road_owner_id || null) : null,
+      road_owner_name: ownerVerified ? (route.road_owner_name || null) : null,
+      road_owner_status: ownerVerified ? "verified" : "unverified",
+      road_owner_evidence: ownerVerified ? supplied : null,
+      ownership_unverified: !ownerVerified,
+    };
+  }
+  // Only these reviewed general-grievance channels are allowed to inherit their base
+  // route for garbage and manhole reports. Other municipal email/road routes fail
+  // closed instead of assuming that a recipient accepts an unrelated category.
+  const GENERAL_CIVIC_AUTHORITY_IDS = new Set([
+    "wb-kmc", "wb-statewide-unverified", "tn-gcc", "tn-statewide-unverified",
+    "tg-cure-shared", "tg-statewide-unverified", "gj-amc", "pb-statewide-unverified",
+    "ap-statewide-unverified", "ka-statewide-unverified", "kl-statewide-unverified",
+    "up-statewide-unverified", "cg-statewide-unverified", "rj-statewide-unverified",
+    "ga-statewide-unverified", "mp-statewide-unverified", "br-statewide-unverified",
+    "od-statewide-unverified",
+    "ar-statewide-unverified", "as-statewide-unverified", "gj-statewide-unverified",
+    "hr-statewide-unverified", "hp-statewide-unverified", "jh-statewide-unverified",
+    "mn-statewide-unverified", "ml-statewide-unverified", "mz-statewide-unverified",
+    "nl-statewide-unverified", "sk-statewide-unverified", "tr-statewide-unverified",
+    "uk-statewide-unverified", "an-statewide-unverified", "ch-statewide-unverified",
+    "dh-statewide-unverified", "jk-statewide-unverified", "la-statewide-unverified",
+    "ld-statewide-unverified", "py-statewide-unverified",
+    "in-gj-enagar", "in-rj-sampark", "in-up-jansunwai", "in-mp-cm-helpline",
+    "in-tn-cm-helpline", "in-kl-ksmart", "in-br-lok-shikayat", "in-ap-puramithra",
+    "in-hr-nagar-darshan", "in-jh-municipal-grievance", "in-jk-samadhan", "in-cg-nidaan",
+  ]);
+  const MUMBAI_STATES = new Set(["maharashtra", "महाराष्ट्र"]);
+  const WEST_BENGAL_STATES = new Set(["west bengal", "পশ্চিমবঙ্গ"]);
+  const KARNATAKA_STATES = new Set(["karnataka", "ಕರ್ನಾಟಕ"]);
+  const MUMBAI_DISTRICTS = new Set([
+    "mumbai city district", "mumbai city", "mumbai suburban district", "mumbai suburban",
+    "मुंबई शहर जिल्हा", "मुंबई शहर", "मुंबई उपनगर जिल्हा", "मुंबई उपनगर",
+  ]);
+  const MUMBAI_WARDS = new Set([
+    "A", "B", "C", "D", "E", "F/N", "F/S", "G/N", "G/S", "H/E", "H/W",
+    "K/E", "K/W", "L", "M/E", "M/W", "N", "P/N", "P/S", "R/C", "R/N",
+    "R/S", "S", "T",
+  ]);
+
+  // These stable containers are populated only after a routing pack passes its complete
+  // byte, envelope, contact and geometry validation. Keeping the references stable makes
+  // the existing pure helpers and old saved reports upgrade without a second registry.
+  const MMR_AUTHORITIES = [];
+  const PMC_AUTHORITY = {};
+  const MMR_FALLBACK_AUTHORITY = {};
+  const MAHARASHTRA_STATE_AUTHORITY = {};
+  const KMC_AUTHORITY = {};
+  const WEST_BENGAL_STATE_AUTHORITY = {};
+  const PUNJAB_STATE_AUTHORITY = {};
+  const TAMIL_NADU_STATE_AUTHORITY = {};
+  const ANDHRA_PRADESH_STATE_AUTHORITY = {};
+  const TELANGANA_STATE_AUTHORITY = {};
+  const KARNATAKA_STATE_AUTHORITY = {};
+  const KERALA_STATE_AUTHORITY = {};
+  const UTTAR_PRADESH_STATE_AUTHORITY = {};
+  const CHHATTISGARH_STATE_AUTHORITY = {};
+  const RAJASTHAN_STATE_AUTHORITY = {};
+  const GOA_STATE_AUTHORITY = {};
+  const MADHYA_PRADESH_STATE_AUTHORITY = {};
+  const BIHAR_STATE_AUTHORITY = {};
+  const ODISHA_STATE_AUTHORITY = {};
+  const REMAINING_STATE_AUTHORITIES = new Map();
+  const DELHI_PWD_AUTHORITY = {};
+  const NATIONAL_HIGHWAY_AUTHORITY = {};
+  const OFFICIAL_AUTHORITIES = [];
+  const OFFICIAL_AUTHORITY_INDEX = new Map();
+  const MMR_ALIAS_INDEX = new Map();
+  // Keyed by pack ID, rather than state code: one state can have both exact municipal
+  // and separate statewide fallback packs.
+  const PACK_AUTHORITIES_BY_STATE = new Map();
+  const PACK_ID_BY_AUTHORITY = new Map();
+  const MMR_DIRECT_AUTHORITY_IDS = new Set([
+    "mh-bmc", "mh-tmc", "mh-kdmc", "mh-nmmc", "mh-umc", "mh-bncmc",
+    "mh-vvcmc", "mh-mbmc", "mh-panvel", "mh-ambarnath", "mh-badlapur",
+  ]);
+  const MMR_FALLBACK_AUTHORITY_IDS = new Set();
 
   // Karnataka jurisdiction lookup.
   //
@@ -120,18 +419,17 @@
                            TP: "Chief Officer", NAC: "Chief Officer" };
 
   let _bodies = null;
-  // A failure is never cached. Caching one meant a single slow read of a file that ships
-  // inside the APK disabled routing for the rest of the session, and the app then refused
-  // every report as having no address for its body. Local reads were measured at over four
-  // seconds on a cold start, so this is not a remote possibility.
+  // A routing-pack failure is never converted to an empty registry: empty would wrongly
+  // claim the town has no published address. Null means the verified state data itself
+  // was unavailable, and the caller reports that distinct fail-closed outcome.
   async function bodies() {
     if (_bodies) return _bodies;
     try {
-      const res = await fetchWithTimeout("karnataka-bodies.json", {}, 15000);
-      const loaded = (await readJson(res)).bodies;
+      const pack = await loadStatePack("in-ka-routing");
+      const loaded = pack && pack.payload && pack.payload.bodies;
       if (loaded && Object.keys(loaded).length) { _bodies = loaded; return _bodies; }
     } catch (e) { /* fall through and retry on the next call */ }
-    return {};
+    return null;
   }
 
   // Bengaluru is still resolvable without the network: the five corporations are the
@@ -503,8 +801,9 @@
     const a = partialAssessment(partial);
     if (!a) return null;
     const decision = decisionFor(a);
-    return { accepted: decision === "accept", review: decision === "review",
-             damage_type: a.damage_type, assessment: a.assessment };
+    return { accepted: decision === "accept", review: false,
+             damage_type: decision === "accept" ? "pothole_cavity" : "none",
+             assessment: decision === "accept" ? "clear" : "absent" };
   };
 
   // True once the response has proved that Drive Mode will not create a complaint.
@@ -525,16 +824,21 @@
       state.buf = state.buf.slice(i + 1);
       if (!line.startsWith("data:")) continue;
       const payload = line.slice(5).trim();
-      if (!payload || payload === "[DONE]") continue;
+      if (!payload) continue;
+      if (payload === "[DONE]") {
+        state.transportCompleted = true;
+        continue;
+      }
       let ev;
       try { ev = JSON.parse(payload); } catch (e) { continue; }
+      if (ev.type === "response.completed") state.transportCompleted = true;
       if (ev.type === "response.output_text.delta" && typeof ev.delta === "string") {
         state.text += ev.delta;
         if (!state.early && onEarly) {
           const v = peekVerdict(state.text);
           if (v) { state.early = true; try { onEarly(v); } catch (e) {} }
         }
-        if (stopWhenRejected && !state.stop && peekReject(state.text)) state.stop = true;
+        if (stopWhenRejected && !state.stop && peekReject(state.text, true)) state.stop = true;
       }
     }
   }
@@ -549,7 +853,8 @@
     });
     if (!res.ok) throw await statusError(res);
 
-    const state = { buf: "", text: "", early: false, stop: false };
+    const state = { buf: "", text: "", early: false, stop: false,
+                    transportCompleted: false };
     if (res.body && typeof res.body.getReader === "function") {
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -569,9 +874,15 @@
       finally { if (res.__disarm) res.__disarm(); }
     }
     if (res.__disarm) res.__disarm();
-    if (state.stop) return rejectedVerdict(state.text);
+    // Flush an unterminated last SSE line before deciding whether the stream itself
+    // completed. A parseable JSON delta is not proof that the HTTP body was complete.
     drainSSE("\n", state, onEarly, stopWhenRejected);
     if (state.stop) return rejectedVerdict(state.text);
+    if (!state.transportCompleted) {
+      const incomplete = new Error("Detection stream ended before OpenAI confirmed completion.");
+      incomplete.incompleteStream = true;
+      throw incomplete;
+    }
     if (!state.text) throw new Error("Empty model response.");
     return JSON.parse(state.text);
   }
@@ -587,7 +898,7 @@
       damage_type: d && d[1] !== "null" ? d[1].slice(1, -1) : null,
       size: s && s[1] !== "null" ? s[1].slice(1, -1) : null,
       description: "",
-    };
+    });
   }
 
   const fmt = (name, schema) => ({
@@ -598,7 +909,8 @@
   const progress = (m) => { try { window.dispatchEvent(new CustomEvent("pipeline-progress", { detail: m })); } catch (e) {} };
   const emitVerdict = (v) => { try { window.dispatchEvent(new CustomEvent("pipeline-verdict", { detail: v })); } catch (e) {} };
 
-  function buildDetectionRequest(imageInputs, prompt, model = S.model, detail = S.detail) {
+  function buildDetectionRequest(imageInputs, prompt, model = S.model, detail = S.detail,
+                                 formatName = "pothole_binary_assessment", schema = ASSESS_SCHEMA) {
     const selectedModel = normaliseModel(model);
     const selectedDetail = normaliseDetail(detail, selectedModel);
     const supplied = (Array.isArray(imageInputs) ? imageInputs : [imageInputs])
@@ -711,6 +1023,7 @@
       // stalled. Retrying it unstreamed stalls again, so a single stalled frame cost two
       // full timeouts, and latching streamBroken made every later frame pay for streaming
       // it would no longer use. Surface it and leave streaming alone.
+      if (e && e.incompleteStream) throw e;
       if (e && (e.timeout || e.name === "AbortError")) {
         // The abort can surface from the body reader rather than from fetch, where it
         // arrives as a bare "Aborted". Nobody watching a demo should be shown that.
@@ -744,10 +1057,28 @@
   // from the parts that actually locate the pothole: street, locality, city, pincode.
   // display_name is kept only for the offline routing fallback, which needs the
   // corporation name that this trimming deliberately drops.
-  async function reverseGeocode(lat, lng) {
+  const NOMINATIM_REVERSE_ENDPOINT = "https://nominatim.openstreetmap.org/reverse";
+  const reverseGeocodeCache = new Map();
+  let nominatimSlot = Promise.resolve(), lastNominatimRequestAt = 0;
+
+  async function waitForNominatimSlot() {
+    const turn = nominatimSlot.then(async () => {
+      const remaining = 1100 - (Date.now() - lastNominatimRequestAt);
+      if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+      lastNominatimRequestAt = Date.now();
+    });
+    nominatimSlot = turn.catch(() => {});
+    await turn;
+  }
+
+  async function reverseGeocodeUncached(lat, lng) {
     try {
+      // Public Nominatim is deliberately serialized to below one request per second.
+      // Production-scale deployments should change the endpoint to a compliant managed
+      // or self-hosted instance; polygon routing itself does not depend on this response.
+      await waitForNominatimSlot();
       const res = await fetchWithTimeout(
-        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=jsonv2&zoom=17&addressdetails=1`,
+        `${NOMINATIM_REVERSE_ENDPOINT}?lat=${lat}&lon=${lng}&format=jsonv2&zoom=17&addressdetails=1&accept-language=en`,
         {}, 12000);
       if (!res.ok) return null;
       const d = await readJson(res);
@@ -759,8 +1090,4126 @@
         a.city || a.town || a.municipality,
         a.postcode,
       ].filter((x, i, all) => x && all.indexOf(x) === i);
-      return { short: parts.join(", ") || d.display_name || null, full: d.display_name || null };
+      return {
+        short: parts.join(", ") || d.display_name || null,
+        full: d.display_name || null,
+        // Keep jurisdiction-bearing fields separate. Collapsing these used to make it
+        // impossible to tell whether "Pune" came from a city, a municipality or merely
+        // the nearest town, which is unsafe when adjacent civic bodies share a district.
+        city: a.city || null,
+        town: a.town || null,
+        municipality: a.municipality || null,
+        city_district: a.city_district || null,
+        county: a.county || null,
+        village: a.village || null,
+        suburb: a.suburb || null,
+        neighbourhood: a.neighbourhood || null,
+        postcode: a.postcode || null,
+        state_district: a.state_district || null,
+        state: a.state || null,
+        country_code: a.country_code || null,
+      };
     } catch (e) { return null; }
+  }
+
+  function reverseGeocode(lat, lng) {
+    // About an 11 m grid at this latitude: adjacent captures reuse the same address and
+    // a burst of manual reports cannot hammer the shared public endpoint.
+    const key = `${Number(lat).toFixed(4)},${Number(lng).toFixed(4)}`;
+    if (reverseGeocodeCache.has(key)) return reverseGeocodeCache.get(key);
+    const request = reverseGeocodeUncached(lat, lng);
+    reverseGeocodeCache.set(key, request);
+    request.then((result) => { if (!result) reverseGeocodeCache.delete(key); },
+      () => reverseGeocodeCache.delete(key));
+    if (reverseGeocodeCache.size > 250) {
+      reverseGeocodeCache.delete(reverseGeocodeCache.keys().next().value);
+    }
+    return request;
+  }
+
+  function mumbaiWardFromName(value) {
+    const text = String(value || "").toUpperCase().replace(/\s+/g, " ");
+    const coded = text.match(/(?:^|,\s*)([A-Z](?:[\/-][A-Z])?)\s+WARD(?:,|$)/)
+      || text.match(/(?:^|,\s*)WARD\s+([A-Z](?:[\/-][A-Z])?)(?:,|$)/);
+    if (coded) {
+      const code = coded[1].replace("-", "/");
+      if (MUMBAI_WARDS.has(code)) return code;
+    }
+    const named = text.match(/(?:^|,\s*)([FGHKMPR])\s+(NORTH|SOUTH|EAST|WEST|CENTRAL)\s+WARD(?:,|$)/);
+    if (!named) return null;
+    const direction = { NORTH: "N", SOUTH: "S", EAST: "E", WEST: "W", CENTRAL: "C" }[named[2]];
+    const code = `${named[1]}/${direction}`;
+    return MUMBAI_WARDS.has(code) ? code : null;
+  }
+
+  // Mumbai City and Mumbai Suburban are the two districts that make up Greater Mumbai.
+  // This deliberately uses the OpenStreetMap response already obtained for the street
+  // address. It does not copy BMC ward polygons or call an undocumented complaint API.
+  // The ward label is only a suggestion parsed from OSM and is explicitly shown as such.
+  function mumbaiFromGeocode(geo) {
+    if (!geo || String(geo.country_code || "").toLowerCase() !== "in") return null;
+    if (!MUMBAI_STATES.has(String(geo.state || "").trim().toLowerCase())) return null;
+    const district = String(geo.state_district || "").trim().toLowerCase();
+    if (!MUMBAI_DISTRICTS.has(district)) return null;
+    const ward = mumbaiWardFromName(geo.full);
+    return { kind: "mumbai", ward, district: geo.state_district, source: "openstreetmap" };
+  }
+
+  const normaliseAuthorityValue = (value) => String(value || "")
+    .normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ");
+
+  function validateOfficialHandoffRegistry(authorities) {
+    const ids = new Set();
+    const isHttps = (value) => /^https:\/\/[^\s]+$/.test(String(value || ""));
+    const packageName = /^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+$/;
+    const email = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const allowedFields = new Set([
+      "id", "name", "aliases", "officer_email", "handoff_name", "handoff_url",
+      "handoff_package", "alternate_handoff_name", "alternate_handoff_url",
+      "whatsapp_url", "helpline",
+    ]);
+    for (const authority of authorities || []) {
+      if (!authority || !authority.id || ids.has(authority.id)) {
+        throw new Error("Duplicate or missing official authority ID.");
+      }
+      if (Object.keys(authority).some((field) => !allowedFields.has(field))) {
+        throw new Error(`Official authority ${authority.id} has an unsupported field.`);
+      }
+      ids.add(authority.id);
+      if (!/^[a-z]{2}-[a-z0-9-]{2,80}$/.test(authority.id)
+          || !authority.name || authority.name.length > 200) {
+        throw new Error(`Official authority ${authority.id} has an invalid identity.`);
+      }
+      if (authority.officer_email && !email.test(authority.officer_email)) {
+        throw new Error(`Official authority ${authority.id} has an invalid email.`);
+      }
+      if (!authority.officer_email && (!authority.handoff_name || !isHttps(authority.handoff_url))) {
+        throw new Error(`Official authority ${authority.id} has no valid handoff.`);
+      }
+      if (authority.handoff_url && !isHttps(authority.handoff_url)) {
+        throw new Error(`Official authority ${authority.id} has a non-HTTPS handoff.`);
+      }
+      if (!!authority.alternate_handoff_name !== !!authority.alternate_handoff_url
+          || (authority.alternate_handoff_url && !isHttps(authority.alternate_handoff_url))) {
+        throw new Error(`Official authority ${authority.id} has an invalid alternate handoff.`);
+      }
+      if (authority.handoff_package && (!packageName.test(authority.handoff_package)
+          || !LAUNCHABLE_PACKAGES.has(authority.handoff_package))) {
+        throw new Error(`Official authority ${authority.id} has an invalid Android package.`);
+      }
+      if (authority.whatsapp_url
+          && !/^https:\/\/wa\.me\/[1-9][0-9]{7,14}$/.test(authority.whatsapp_url)) {
+        throw new Error(`Official authority ${authority.id} has an invalid WhatsApp route.`);
+      }
+      if (authority.helpline && !/^[0-9]{3,15}$/.test(authority.helpline)) {
+        throw new Error(`Official authority ${authority.id} has an invalid helpline.`);
+      }
+      if (authority.aliases && (!Array.isArray(authority.aliases)
+          || authority.aliases.length > 30
+          || authority.aliases.some((alias) => typeof alias !== "string" || !alias || alias.length > 100))) {
+        throw new Error(`Official authority ${authority.id} has invalid aliases.`);
+      }
+    }
+    return true;
+  }
+
+  function validateAuthorityRegistry(authorities = MMR_AUTHORITIES) {
+    const ids = new Set(), aliases = new Map();
+    for (const authority of authorities) {
+      if (!authority.id || ids.has(authority.id)) throw new Error("Duplicate or missing authority ID.");
+      ids.add(authority.id);
+      if (!authority.name || !Array.isArray(authority.aliases) || !authority.aliases.length) {
+        throw new Error(`Authority ${authority.id} is incomplete.`);
+      }
+      if (authority.handoff_url && !String(authority.handoff_url).startsWith("https://")) {
+        throw new Error(`Authority ${authority.id} has a non-HTTPS handoff.`);
+      }
+      if (authority.handoff_package
+          && !/^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+$/.test(authority.handoff_package)) {
+        throw new Error(`Authority ${authority.id} has an invalid Android package.`);
+      }
+      for (const raw of authority.aliases) {
+        const alias = normaliseAuthorityValue(raw);
+        const prior = aliases.get(alias);
+        if (!alias || (prior && prior !== authority.id)) {
+          throw new Error(`Authority alias collision: ${raw}`);
+        }
+        aliases.set(alias, authority.id);
+      }
+    }
+    return true;
+  }
+
+  function replaceStableObject(target, source) {
+    for (const key of Object.keys(target)) delete target[key];
+    Object.assign(target, source);
+  }
+
+  function rebuildOfficialAuthorityIndex() {
+    OFFICIAL_AUTHORITIES.splice(0);
+    OFFICIAL_AUTHORITY_INDEX.clear();
+    for (const authorities of PACK_AUTHORITIES_BY_STATE.values()) {
+      for (const authority of authorities) {
+        if (OFFICIAL_AUTHORITY_INDEX.has(authority.id)) {
+          // A neutral statewide channel may be referenced by more than one independently
+          // pinned geographic pack. Only a byte-for-byte-equivalent authority object may
+          // share an ID; divergent URLs or labels still invalidate the registry.
+          const installed = OFFICIAL_AUTHORITY_INDEX.get(authority.id);
+          if (canonicalJson(installed) !== canonicalJson(authority)) {
+            throw new Error(`Official authority ${authority.id} differs across state packs.`);
+          }
+          continue;
+        }
+        OFFICIAL_AUTHORITIES.push(authority);
+        OFFICIAL_AUTHORITY_INDEX.set(authority.id, authority);
+      }
+    }
+  }
+
+  function installRoutingAuthorities(pack) {
+    const authorities = pack && pack.authorities;
+    if (!Array.isArray(authorities) || authorities.length > 1000) {
+      throw new Error("Routing pack has an invalid authority registry.");
+    }
+    validateOfficialHandoffRegistry(authorities);
+    const byId = new Map(authorities.map((authority) => [authority.id, authority]));
+    const remainingConfig = REMAINING_STATE_ROUTE_CONFIGS[pack.pack_id];
+    if (remainingConfig) {
+      if (pack.state_code !== remainingConfig.state_code || authorities.length !== 1
+          || !byId.has(remainingConfig.authority_id)) {
+        throw new Error("State/UT routing pack has an invalid authority registry.");
+      }
+      REMAINING_STATE_AUTHORITIES.set(pack.pack_id, byId.get(remainingConfig.authority_id));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id,
+        [REMAINING_STATE_AUTHORITIES.get(pack.pack_id)]);
+    } else if (pack.state_code === "MH") {
+      const mmr = authorities.filter((authority) => authority.id.startsWith("mh-")
+        && authority.id !== "mh-pmc" && authority.id !== "mh-mmr-unverified"
+        && authority.id !== "mh-statewide-unverified");
+      if (authorities.length !== 22 || mmr.length !== 19
+          || !byId.has("mh-pmc") || !byId.has("mh-mmr-unverified")
+          || !byId.has("mh-statewide-unverified")) {
+        throw new Error("Maharashtra routing pack has an incomplete authority registry.");
+      }
+      validateAuthorityRegistry(mmr);
+      MMR_AUTHORITIES.splice(0, MMR_AUTHORITIES.length, ...mmr);
+      replaceStableObject(PMC_AUTHORITY, byId.get("mh-pmc"));
+      replaceStableObject(MMR_FALLBACK_AUTHORITY, byId.get("mh-mmr-unverified"));
+      replaceStableObject(MAHARASHTRA_STATE_AUTHORITY,
+        byId.get("mh-statewide-unverified"));
+      MMR_ALIAS_INDEX.clear();
+      for (const authority of MMR_AUTHORITIES) {
+        for (const alias of authority.aliases) {
+          MMR_ALIAS_INDEX.set(normaliseAuthorityValue(alias), authority);
+        }
+      }
+      MMR_FALLBACK_AUTHORITY_IDS.clear();
+      for (const authority of MMR_AUTHORITIES) {
+        if (!MMR_DIRECT_AUTHORITY_IDS.has(authority.id)) {
+          MMR_FALLBACK_AUTHORITY_IDS.add(authority.id);
+        }
+      }
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [
+        ...MMR_AUTHORITIES, PMC_AUTHORITY, MMR_FALLBACK_AUTHORITY,
+        MAHARASHTRA_STATE_AUTHORITY,
+      ]);
+    } else if (pack.state_code === "WB") {
+      if (authorities.length !== 2 || !byId.has("wb-kmc")
+          || !byId.has("wb-statewide-unverified")) {
+        throw new Error("West Bengal routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(KMC_AUTHORITY, byId.get("wb-kmc"));
+      replaceStableObject(WEST_BENGAL_STATE_AUTHORITY,
+        byId.get("wb-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id,
+        [KMC_AUTHORITY, WEST_BENGAL_STATE_AUTHORITY]);
+    } else if (pack.state_code === "DL") {
+      if (authorities.length !== 1 || !byId.has("dl-pwd-sewa")) {
+        throw new Error("Delhi routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(DELHI_PWD_AUTHORITY, byId.get("dl-pwd-sewa"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [DELHI_PWD_AUTHORITY]);
+    } else if (pack.state_code === "PB") {
+      if (authorities.length !== 1 || !byId.has("pb-statewide-unverified")) {
+        throw new Error("Punjab routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(PUNJAB_STATE_AUTHORITY, byId.get("pb-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [PUNJAB_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-tn-state-routing") {
+      if (authorities.length !== 1 || !byId.has("tn-statewide-unverified")) {
+        throw new Error("Tamil Nadu statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(TAMIL_NADU_STATE_AUTHORITY, byId.get("tn-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [TAMIL_NADU_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-ap-routing") {
+      if (authorities.length !== 1 || !byId.has("ap-statewide-unverified")) {
+        throw new Error("Andhra Pradesh routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(ANDHRA_PRADESH_STATE_AUTHORITY,
+        byId.get("ap-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [ANDHRA_PRADESH_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-tg-state-routing") {
+      if (authorities.length !== 1 || !byId.has("tg-statewide-unverified")) {
+        throw new Error("Telangana statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(TELANGANA_STATE_AUTHORITY,
+        byId.get("tg-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [TELANGANA_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-ka-state-routing") {
+      if (authorities.length !== 1 || !byId.has("ka-statewide-unverified")) {
+        throw new Error("Karnataka statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(KARNATAKA_STATE_AUTHORITY,
+        byId.get("ka-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [KARNATAKA_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-kl-routing") {
+      if (authorities.length !== 1 || !byId.has("kl-statewide-unverified")) {
+        throw new Error("Kerala statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(KERALA_STATE_AUTHORITY,
+        byId.get("kl-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [KERALA_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-up-routing") {
+      if (authorities.length !== 1 || !byId.has("up-statewide-unverified")) {
+        throw new Error("Uttar Pradesh statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(UTTAR_PRADESH_STATE_AUTHORITY,
+        byId.get("up-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [UTTAR_PRADESH_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-cg-routing") {
+      if (authorities.length !== 1 || !byId.has("cg-statewide-unverified")) {
+        throw new Error("Chhattisgarh statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(CHHATTISGARH_STATE_AUTHORITY,
+        byId.get("cg-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [CHHATTISGARH_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-rj-routing") {
+      if (authorities.length !== 1 || !byId.has("rj-statewide-unverified")) {
+        throw new Error("Rajasthan statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(RAJASTHAN_STATE_AUTHORITY,
+        byId.get("rj-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [RAJASTHAN_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-ga-routing") {
+      if (authorities.length !== 1 || !byId.has("ga-statewide-unverified")) {
+        throw new Error("Goa statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(GOA_STATE_AUTHORITY, byId.get("ga-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [GOA_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-mp-routing") {
+      if (authorities.length !== 1 || !byId.has("mp-statewide-unverified")) {
+        throw new Error("Madhya Pradesh statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(MADHYA_PRADESH_STATE_AUTHORITY,
+        byId.get("mp-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [MADHYA_PRADESH_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-br-routing") {
+      if (authorities.length !== 1 || !byId.has("br-statewide-unverified")) {
+        throw new Error("Bihar statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(BIHAR_STATE_AUTHORITY, byId.get("br-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [BIHAR_STATE_AUTHORITY]);
+    } else if (pack.pack_id === "in-od-routing") {
+      if (authorities.length !== 1 || !byId.has("od-statewide-unverified")) {
+        throw new Error("Odisha statewide routing pack has an invalid authority registry.");
+      }
+      replaceStableObject(ODISHA_STATE_AUTHORITY, byId.get("od-statewide-unverified"));
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, [ODISHA_STATE_AUTHORITY]);
+    } else if (pack.state_code === "KA") {
+      if (authorities.length) throw new Error("Karnataka contacts must use the LGD registry.");
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, []);
+    } else if (pack.adapter === "municipal-city-v1"
+        || pack.adapter === "major-city-structured-v1") {
+      if (!authorities.length || authorities.length > 100) {
+        throw new Error("Municipal-city routing pack has an invalid authority registry.");
+      }
+      PACK_AUTHORITIES_BY_STATE.set(pack.pack_id, authorities);
+    } else {
+      throw new Error("Unsupported routing-pack state.");
+    }
+    for (const [authorityId, packIds] of PACK_ID_BY_AUTHORITY) {
+      packIds.delete(pack.pack_id);
+      if (!packIds.size) PACK_ID_BY_AUTHORITY.delete(authorityId);
+    }
+    for (const authority of authorities) {
+      if (!PACK_ID_BY_AUTHORITY.has(authority.id)) {
+        PACK_ID_BY_AUTHORITY.set(authority.id, new Set());
+      }
+      PACK_ID_BY_AUTHORITY.get(authority.id).add(pack.pack_id);
+    }
+    rebuildOfficialAuthorityIndex();
+    return true;
+  }
+
+  function pointOnSegment(x, y, ax, ay, bx, by) {
+    const cross = (x - ax) * (by - ay) - (y - ay) * (bx - ax);
+    if (Math.abs(cross) > 1e-10) return false;
+    return x >= Math.min(ax, bx) - 1e-10 && x <= Math.max(ax, bx) + 1e-10
+      && y >= Math.min(ay, by) - 1e-10 && y <= Math.max(ay, by) + 1e-10;
+  }
+
+  function pointInRing(lng, lat, ring) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if (pointOnSegment(lng, lat, xi, yi, xj, yj)) return true;
+      const crosses = ((yi > lat) !== (yj > lat))
+        && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+      if (crosses) inside = !inside;
+    }
+    return inside;
+  }
+
+  function pointInPolygon(lng, lat, rings) {
+    if (!Array.isArray(rings) || !rings.length || !pointInRing(lng, lat, rings[0])) return false;
+    for (let i = 1; i < rings.length; i++) if (pointInRing(lng, lat, rings[i])) return false;
+    return true;
+  }
+
+  function pointInGeometry(lng, lat, geometry) {
+    if (!geometry || !Number.isFinite(lng) || !Number.isFinite(lat)) return false;
+    if (geometry.type === "Polygon") return pointInPolygon(lng, lat, geometry.coordinates);
+    if (geometry.type === "MultiPolygon") {
+      return geometry.coordinates.some((polygon) => pointInPolygon(lng, lat, polygon));
+    }
+    if (geometry.type === "GeometryCollection") {
+      return Array.isArray(geometry.geometries)
+        && geometry.geometries.some((part) => pointInGeometry(lng, lat, part));
+    }
+    return false;
+  }
+
+  function hasCoverageGeometry(geometry) {
+    if (!geometry || !geometry.type) return false;
+    const validPosition = (position) => Array.isArray(position) && position.length >= 2
+      && Number.isFinite(position[0]) && Number.isFinite(position[1])
+      && position[0] >= -180 && position[0] <= 180
+      && position[1] >= -90 && position[1] <= 90;
+    const validRing = (ring) => Array.isArray(ring) && ring.length >= 4
+      && ring.every(validPosition)
+      && ring[0][0] === ring[ring.length - 1][0]
+      && ring[0][1] === ring[ring.length - 1][1];
+    const validPolygon = (coordinates) => Array.isArray(coordinates)
+      && coordinates.length > 0 && coordinates.every(validRing);
+    if (geometry.type === "Polygon") {
+      return validPolygon(geometry.coordinates);
+    }
+    if (geometry.type === "MultiPolygon") {
+      return Array.isArray(geometry.coordinates) && geometry.coordinates.length > 0
+        && geometry.coordinates.every(validPolygon);
+    }
+    return geometry.type === "GeometryCollection"
+      && Array.isArray(geometry.geometries) && geometry.geometries.length > 0
+      && geometry.geometries.every(hasCoverageGeometry);
+  }
+
+  function validMmrAuthorityBoundaries(mmr, fallbackAuthorityIds = MMR_FALLBACK_AUTHORITY_IDS) {
+    const boundaries = mmr && mmr.authority_boundaries;
+    if (!boundaries || typeof boundaries !== "object") return false;
+    const entries = Object.entries(boundaries);
+    const sameIds = (values, expected) => Array.isArray(values)
+      && values.length === expected.size
+      && values.every((id) => expected.has(id));
+    if (entries.length !== MMR_DIRECT_AUTHORITY_IDS.size
+        || !entries.every(([id]) => MMR_DIRECT_AUTHORITY_IDS.has(id))
+        || !sameIds(mmr.boundary_complete_authority_ids, MMR_DIRECT_AUTHORITY_IDS)
+        || !sameIds(mmr.boundary_missing_authority_ids, fallbackAuthorityIds)) {
+      return false;
+    }
+    return entries.every(([id, boundary]) => {
+      if (!boundary || !hasCoverageGeometry(boundary.geometry)) return false;
+      const wards = boundary.wards || [];
+      if (id !== "mh-bmc") return wards.length === 0;
+      return wards.length === MUMBAI_WARDS.size
+        && new Set(wards.map((ward) => ward && ward.code)).size === MUMBAI_WARDS.size
+        && wards.every((ward) => ward && MUMBAI_WARDS.has(ward.code)
+          && hasCoverageGeometry(ward.geometry));
+    });
+  }
+
+  // Approximate the shortest ground distance to a polygon edge. If the phone's GPS
+  // accuracy circle crosses a coverage or civic boundary, choosing from its centre point
+  // would be false precision.
+  function pointToSegmentMeters(lng, lat, a, b) {
+    const rad = Math.PI / 180;
+    const metresPerLng = 111320 * Math.cos(lat * rad);
+    const ax = (a[0] - lng) * metresPerLng, ay = (a[1] - lat) * 110540;
+    const bx = (b[0] - lng) * metresPerLng, by = (b[1] - lat) * 110540;
+    const dx = bx - ax, dy = by - ay;
+    const denom = dx * dx + dy * dy;
+    const t = denom ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / denom)) : 0;
+    return Math.hypot(ax + t * dx, ay + t * dy);
+  }
+
+  function geometryBoundaryDistanceMeters(lng, lat, geometry) {
+    let best = Infinity;
+    const ringDistance = (ring) => {
+      if (!Array.isArray(ring) || ring.length < 2) return;
+      for (let i = 1; i < ring.length; i++) {
+        best = Math.min(best, pointToSegmentMeters(lng, lat, ring[i - 1], ring[i]));
+      }
+      if (ring[0] !== ring[ring.length - 1]) {
+        best = Math.min(best, pointToSegmentMeters(lng, lat, ring[ring.length - 1], ring[0]));
+      }
+    };
+    const visit = (part) => {
+      if (!part) return;
+      if (part.type === "Polygon") part.coordinates.forEach(ringDistance);
+      else if (part.type === "MultiPolygon") {
+        part.coordinates.forEach((polygon) => polygon.forEach(ringDistance));
+      } else if (part.type === "GeometryCollection") {
+        (part.geometries || []).forEach(visit);
+      }
+    };
+    visit(geometry);
+    return best;
+  }
+
+  // ---------- immutable state data packs ----------
+  // The signed APK carries this tiny manifest. It names one immutable URL and full
+  // SHA-256 for every supported resource; GitHub Pages never gets coordinates, photos,
+  // report IDs or the API key, only the state-specific path the phone requests.
+  const REMAINING_STATE_ROUTE_CONFIGS = Object.freeze({
+    "in-ar-routing": Object.freeze({
+      state_code: "AR", authority_id: "ar-statewide-unverified", name: "Arunachal Pradesh",
+      scope: "Full State of Arunachal Pradesh", relation_id: 2027346,
+      region_id: "arunachal-pradesh-state", routing_source: "osm_ar_state_boundary",
+      geometry_sha256: "cf8ed446e02b71170c565a43fec2ac4dc730f10f13adf34ab6e95ea4e898134d",
+      envelope: Object.freeze({ min_lng: 91.5623082, min_lat: 26.650863, max_lng: 97.3950905, max_lat: 29.3745566 }),
+    }),
+    "in-as-routing": Object.freeze({
+      state_code: "AS", authority_id: "as-statewide-unverified", name: "Assam",
+      scope: "Full State of Assam", relation_id: 2025886,
+      region_id: "assam-state", routing_source: "osm_as_state_boundary",
+      geometry_sha256: "fd8ac250fc17bfb9c07ab2035d84d874195bd98db60e5bc98731c136a83a59f4",
+      envelope: Object.freeze({ min_lng: 89.6986005, min_lat: 24.136033, max_lng: 96.0124397, max_lat: 27.9712428 }),
+    }),
+    "in-gj-state-routing": Object.freeze({
+      state_code: "GJ", authority_id: "gj-statewide-unverified", name: "Gujarat",
+      scope: "Full State of Gujarat", relation_id: 1949080,
+      region_id: "gujarat-state", routing_source: "osm_gj_state_boundary",
+      geometry_sha256: "11539b5cd872f93d70f7f1ba5fad4ef6fa237e808ff9721d0d6523ec5850024f",
+      envelope: Object.freeze({ min_lng: 68.1756585, min_lat: 20.1195321, max_lng: 74.4764325, max_lat: 24.7118932 }),
+    }),
+    "in-hr-routing": Object.freeze({
+      state_code: "HR", authority_id: "hr-statewide-unverified", name: "Haryana",
+      scope: "Full State of Haryana", relation_id: 1942601,
+      region_id: "haryana-state", routing_source: "osm_hr_state_boundary",
+      geometry_sha256: "3c0c4ddb274c2794ae25aaae3a827c2cbf3d846a49a81cf57ede9161ea5aab14",
+      envelope: Object.freeze({ min_lng: 74.4735074, min_lat: 27.6526273, max_lng: 77.6021432, max_lat: 30.9287706 }),
+    }),
+    "in-hp-routing": Object.freeze({
+      state_code: "HP", authority_id: "hp-statewide-unverified", name: "Himachal Pradesh",
+      scope: "Full State of Himachal Pradesh", relation_id: 364186,
+      region_id: "himachal-pradesh-state", routing_source: "osm_hp_state_boundary",
+      geometry_sha256: "6dd4a1580243a28e582a9eed78d8c005c07654602c3318c846c1077b13221b66",
+      envelope: Object.freeze({ min_lng: 75.5940055, min_lat: 30.3771701, max_lng: 79.0123843, max_lat: 33.2556686 }),
+    }),
+    "in-jh-routing": Object.freeze({
+      state_code: "JH", authority_id: "jh-statewide-unverified", name: "Jharkhand",
+      scope: "Full State of Jharkhand", relation_id: 1960191,
+      region_id: "jharkhand-state", routing_source: "osm_jh_state_boundary",
+      geometry_sha256: "14279df76d745224f5bb9c4076c73a7b5bdaa6f48aa56253f41507500ee46fd7",
+      envelope: Object.freeze({ min_lng: 83.3281137, min_lat: 21.9700317, max_lng: 87.9628253, max_lat: 25.3489225 }),
+    }),
+    "in-mn-routing": Object.freeze({
+      state_code: "MN", authority_id: "mn-statewide-unverified", name: "Manipur",
+      scope: "Full State of Manipur", relation_id: 2027869,
+      region_id: "manipur-state", routing_source: "osm_mn_state_boundary",
+      geometry_sha256: "1e1fac685f3309d7692c2b3164a5e6b69d26b51e7dd57cae5399ed21cbd984e3",
+      envelope: Object.freeze({ min_lng: 92.9707074, min_lat: 23.8336205, max_lng: 94.745244, max_lat: 25.6921015 }),
+    }),
+    "in-ml-routing": Object.freeze({
+      state_code: "ML", authority_id: "ml-statewide-unverified", name: "Meghalaya",
+      scope: "Full State of Meghalaya", relation_id: 2027521,
+      region_id: "meghalaya-state", routing_source: "osm_ml_state_boundary",
+      geometry_sha256: "db598e097615cee41266f4002c503a0b26ca6926eb470360dc38bd6a1d563bcf",
+      envelope: Object.freeze({ min_lng: 89.814444, min_lat: 25.0306475, max_lng: 92.8027367, max_lat: 26.1181651 }),
+    }),
+    "in-mz-routing": Object.freeze({
+      state_code: "MZ", authority_id: "mz-statewide-unverified", name: "Mizoram",
+      scope: "Full State of Mizoram", relation_id: 2029046,
+      region_id: "mizoram-state", routing_source: "osm_mz_state_boundary",
+      geometry_sha256: "1b968536683a5c4940b0da3365c8bb682a145be2f11aff152c498edbd6af2802",
+      envelope: Object.freeze({ min_lng: 92.2602224, min_lat: 21.9400528, max_lng: 93.4373696, max_lat: 24.5231304 }),
+    }),
+    "in-nl-routing": Object.freeze({
+      state_code: "NL", authority_id: "nl-statewide-unverified", name: "Nagaland",
+      scope: "Full State of Nagaland", relation_id: 2027973,
+      region_id: "nagaland-state", routing_source: "osm_nl_state_boundary",
+      geometry_sha256: "af89c3e42da64a065bf363339818b8d547aec93073ffd6e2f08680abc3777949",
+      envelope: Object.freeze({ min_lng: 93.3267005, min_lat: 25.1984274, max_lng: 95.2423775, max_lat: 27.035801 }),
+    }),
+    "in-sk-routing": Object.freeze({
+      state_code: "SK", authority_id: "sk-statewide-unverified", name: "Sikkim",
+      scope: "Full State of Sikkim", relation_id: 1791324,
+      region_id: "sikkim-state", routing_source: "osm_sk_state_boundary",
+      geometry_sha256: "4eaaf81eec2214272b63a7285f8a02bb6ccf008a3f51ef57c4f888574b3c04e8",
+      envelope: Object.freeze({ min_lng: 88.0120333, min_lat: 27.0792596, max_lng: 88.9211683, max_lat: 28.1240465 }),
+    }),
+    "in-tr-routing": Object.freeze({
+      state_code: "TR", authority_id: "tr-statewide-unverified", name: "Tripura",
+      scope: "Full State of Tripura", relation_id: 2026458,
+      region_id: "tripura-state", routing_source: "osm_tr_state_boundary",
+      geometry_sha256: "83f92257ffa7e8b496f3974b671fb68c29c212c0780c9170a189d50a7cd1fde8",
+      envelope: Object.freeze({ min_lng: 91.1508098, min_lat: 22.9376106, max_lng: 92.33585, max_lat: 24.530878 }),
+    }),
+    "in-uk-routing": Object.freeze({
+      state_code: "UK", authority_id: "uk-statewide-unverified", name: "Uttarakhand",
+      scope: "Full State of Uttarakhand", relation_id: 9987086,
+      region_id: "uttarakhand-state", routing_source: "osm_uk_state_boundary",
+      geometry_sha256: "b80016e74aee194fe734062b237855b3a3c8458a74dc345c07657fbc9cdd620a",
+      envelope: Object.freeze({ min_lng: 77.57133, min_lat: 28.7243243, max_lng: 81.044789, max_lat: 31.459016 }),
+    }),
+    "in-an-routing": Object.freeze({
+      state_code: "AN", authority_id: "an-statewide-unverified", name: "Andaman and Nicobar Islands",
+      scope: "Full Union Territory of Andaman and Nicobar Islands", relation_id: 2025855,
+      region_id: "andaman-and-nicobar-islands-ut", routing_source: "osm_an_ut_boundary",
+      geometry_sha256: "8fef75a710cb1c1f3b33f5c13253870a2c9d077768c354f65d4558bac0a2b090",
+      envelope: Object.freeze({ min_lng: 92.2042072, min_lat: 6.7562674, max_lng: 94.2773214, max_lat: 13.6753133 }),
+    }),
+    "in-ch-routing": Object.freeze({
+      state_code: "CH", authority_id: "ch-statewide-unverified", name: "Chandigarh",
+      scope: "Full Union Territory of Chandigarh", relation_id: 1942809,
+      region_id: "chandigarh-ut", routing_source: "osm_ch_ut_boundary",
+      geometry_sha256: "937c65d7f4fb34ddace22a55f32cc87fb6ca409b1f2586babbe4ca185cc6074d",
+      envelope: Object.freeze({ min_lng: 76.7049857, min_lat: 30.664974, max_lng: 76.849028, max_lat: 30.7949512 }),
+    }),
+    "in-dh-routing": Object.freeze({
+      state_code: "DH", authority_id: "dh-statewide-unverified", name: "Dadra and Nagar Haveli and Daman and Diu",
+      scope: "Full Union Territory of Dadra and Nagar Haveli and Daman and Diu", relation_id: 1952530,
+      region_id: "dadra-nagar-haveli-daman-diu-ut", routing_source: "osm_dh_ut_boundary",
+      geometry_sha256: "64dd2ec5067967a41915ba7e3ea1f7c6f29da0efd8fb91a1ad05ecf750d659bb",
+      envelope: Object.freeze({ min_lng: 70.8734588, min_lat: 20.0473907, max_lng: 73.2178258, max_lat: 20.7677936 }),
+    }),
+    "in-jk-routing": Object.freeze({
+      state_code: "JK", authority_id: "jk-statewide-unverified", name: "Jammu and Kashmir",
+      scope: "Full Union Territory of Jammu and Kashmir", relation_id: 1943188,
+      region_id: "jammu-and-kashmir-ut", routing_source: "osm_jk_ut_boundary",
+      geometry_sha256: "50af753f0a7a0ddcc52151bba8abb22024bf1d3629a5b2ead431524f800b9754",
+      envelope: Object.freeze({ min_lng: 73.7500338, min_lat: 32.2763569, max_lng: 76.7803165, max_lat: 34.7871414 }),
+    }),
+    "in-la-routing": Object.freeze({
+      state_code: "LA", authority_id: "la-statewide-unverified", name: "Ladakh",
+      scope: "Full Union Territory of Ladakh", relation_id: 5515045,
+      region_id: "ladakh-ut", routing_source: "osm_la_ut_boundary",
+      geometry_sha256: "816c039eb05986e1a75f53e7f4812b334bba73b32b73196b8813c8e90c9ac28c",
+      envelope: Object.freeze({ min_lng: 75.3269726, min_lat: 32.33574, max_lng: 79.460728, max_lat: 35.6729307 }),
+    }),
+    "in-ld-routing": Object.freeze({
+      state_code: "LD", authority_id: "ld-statewide-unverified", name: "Lakshadweep",
+      scope: "Full Union Territory of Lakshadweep", relation_id: 2027460,
+      region_id: "lakshadweep-ut", routing_source: "osm_ld_ut_boundary",
+      geometry_sha256: "d58545bdcecaa056484fb3ea7c6b3531ce744b5b120f6bac0185c3346cfd3a04",
+      envelope: Object.freeze({ min_lng: 71.5180377, min_lat: 8.0648198, max_lng: 73.9061436, max_lat: 12.6010064 }),
+    }),
+    "in-py-routing": Object.freeze({
+      state_code: "PY", authority_id: "py-statewide-unverified", name: "Puducherry",
+      scope: "Full Union Territory of Puducherry", relation_id: 107001,
+      region_id: "puducherry-ut", routing_source: "osm_py_ut_boundary",
+      geometry_sha256: "8bbb3f321588dacbce22ab379d9ba187d8c97a6a61b553f076a6da06a54c7c2d",
+      envelope: Object.freeze({ min_lng: 75.5265863, min_lat: 10.827721, max_lng: 82.3137136, max_lat: 16.7617112 }),
+    }),
+  });
+  const PACK_SITE_ROOT = "https://coding-parrot.github.io/pothole-reporter/";
+  const SUPPORTED_STATE_PACKS = Object.freeze({
+    "in-dl-routing": { state_code: "DL", kind: "routing", adapter: "delhi-nct-v1" },
+    "in-mh-routing": { state_code: "MH", kind: "routing", adapter: "maharashtra-statewide-v1" },
+    "in-wb-routing": { state_code: "WB", kind: "routing", adapter: "west-bengal-statewide-v1" },
+    "in-pb-routing": { state_code: "PB", kind: "routing", adapter: "statewide-general-v1" },
+    "in-top50-routing": { state_code: "IN", kind: "routing", adapter: "major-city-structured-v1" },
+    "in-ka-routing": { state_code: "KA", kind: "routing", adapter: "karnataka-kgis-v1" },
+    "in-ka-state-routing": { state_code: "KA", kind: "routing", adapter: "statewide-general-v1" },
+    "in-ka-tenders": { state_code: "KA", kind: "tenders", adapter: "karnataka-carriageway-indexed-v2" },
+    "in-kl-routing": { state_code: "KL", kind: "routing", adapter: "statewide-general-v1" },
+    "in-up-routing": { state_code: "UP", kind: "routing", adapter: "statewide-general-v1" },
+    "in-cg-routing": { state_code: "CG", kind: "routing", adapter: "statewide-general-v1" },
+    "in-rj-routing": { state_code: "RJ", kind: "routing", adapter: "statewide-general-v1" },
+    "in-ga-routing": { state_code: "GA", kind: "routing", adapter: "statewide-general-v1" },
+    "in-mp-routing": { state_code: "MP", kind: "routing", adapter: "statewide-general-v1" },
+    "in-br-routing": { state_code: "BR", kind: "routing", adapter: "statewide-general-v1" },
+    "in-od-routing": { state_code: "OD", kind: "routing", adapter: "statewide-general-v1" },
+    "in-tn-routing": { state_code: "TN", kind: "routing", adapter: "municipal-city-v1" },
+    "in-tn-state-routing": { state_code: "TN", kind: "routing", adapter: "statewide-general-v1" },
+    "in-ap-routing": { state_code: "AP", kind: "routing", adapter: "statewide-general-v1" },
+    "in-tg-state-routing": { state_code: "TG", kind: "routing", adapter: "statewide-general-v1" },
+    "in-tg-routing": { state_code: "TG", kind: "routing", adapter: "municipal-city-v1" },
+    "in-gj-routing": { state_code: "GJ", kind: "routing", adapter: "municipal-city-v1" },
+    ...Object.fromEntries(Object.entries(REMAINING_STATE_ROUTE_CONFIGS).map(
+      ([packId, config]) => [packId, {
+        state_code: config.state_code, kind: "routing", adapter: "statewide-general-v1",
+      }],
+    )),
+  });
+  const STATE_PACK_MAX_BYTES = 16 * 1024 * 1024;
+  const STATE_PACK_FETCH_TIMEOUT_MS = 30000;
+  // Contract context is optional and must never make an accepted report feel stuck.
+  // The required routing packs retain their longer timeout; these catalogs get a short
+  // network deadline and the matcher also bounds the complete lookup below.
+  const OPTIONAL_CATALOG_TIMEOUT_MS = 1500;
+  let _statePackManifest = null, _statePackManifestPromise = null;
+  const _statePackMemory = new Map(), _statePackPromises = new Map();
+
+  const sameSet = (values, expected) => values.length === expected.size
+    && values.every((value) => expected.has(value));
+  const exactObjectKeys = (value, keys) => !!value && typeof value === "object"
+    && !Array.isArray(value) && sameSet(Object.keys(value), new Set(keys));
+
+  function validateStatePackManifest(manifest) {
+    if (!exactObjectKeys(manifest,
+      ["format", "schema_version", "catalog_version", "cache", "resources"])
+        || manifest.format !== "pothole-pack-manifest"
+        || manifest.schema_version !== 1 || manifest.catalog_version !== 1) {
+      throw new Error("Invalid state-pack manifest.");
+    }
+    const cache = manifest.cache;
+    if (!exactObjectKeys(cache,
+      ["max_bytes", "routing_max_unused_days", "tender_max_unused_days"])
+        || !Number.isInteger(cache.max_bytes) || cache.max_bytes < 1024 * 1024
+        || cache.max_bytes > 128 * 1024 * 1024
+        || !Number.isInteger(cache.routing_max_unused_days)
+        || cache.routing_max_unused_days < 7 || cache.routing_max_unused_days > 365
+        || !Number.isInteger(cache.tender_max_unused_days)
+        || cache.tender_max_unused_days < 1 || cache.tender_max_unused_days > 180) {
+      throw new Error("Invalid state-pack cache policy.");
+    }
+    const resources = manifest.resources;
+    const expectedIds = new Set(Object.keys(SUPPORTED_STATE_PACKS));
+    if (!resources || typeof resources !== "object" || Array.isArray(resources)
+        || !sameSet(Object.keys(resources), expectedIds)) {
+      throw new Error("State-pack manifest resource set is incomplete.");
+    }
+    for (const [packId, resource] of Object.entries(resources)) {
+      const spec = SUPPORTED_STATE_PACKS[packId];
+      const fields = ["pack_id", "state_code", "kind", "pack_version", "schema_version",
+        "adapter", "path", "url", "bytes", "sha256", "coverage_scope", "statewide",
+        "source_retrieved_at", "review_after", "licenses"];
+      if (spec.kind === "tenders") fields.push("records");
+      const pathMatch = resource && typeof resource.path === "string"
+        ? resource.path.match(/^packs\/v[0-9]+\/states\/([a-z]{2})\/(routing|tenders)-([0-9a-f]{64})\.json$/)
+        : null;
+      if (!exactObjectKeys(resource, fields)
+          || resource.pack_id !== packId || resource.state_code !== spec.state_code
+          || resource.kind !== spec.kind || resource.adapter !== spec.adapter
+          || resource.pack_version !== 1 || resource.schema_version !== 1
+          || !pathMatch || pathMatch[1] !== spec.state_code.toLowerCase()
+          || pathMatch[2] !== spec.kind || pathMatch[3] !== resource.sha256
+          || resource.url !== PACK_SITE_ROOT + resource.path
+          || !Number.isInteger(resource.bytes) || resource.bytes <= 0
+          || resource.bytes > STATE_PACK_MAX_BYTES
+          || !/^[0-9a-f]{64}$/.test(resource.sha256)
+          || typeof resource.coverage_scope !== "string" || !resource.coverage_scope
+          || resource.coverage_scope.length > 200 || typeof resource.statewide !== "boolean"
+          || !/^\d{4}-\d{2}-\d{2}$/.test(resource.source_retrieved_at)
+          || !/^\d{4}-\d{2}-\d{2}$/.test(resource.review_after)
+          || !Array.isArray(resource.licenses) || !resource.licenses.length
+          || resource.licenses.length > 10
+          || resource.licenses.some((item) => typeof item !== "string" || !item || item.length > 300)
+          || (spec.kind === "tenders"
+            && (!Number.isInteger(resource.records) || resource.records <= 0 || resource.records > 100000))) {
+        throw new Error(`Invalid state-pack resource: ${packId}`);
+      }
+    }
+    return manifest;
+  }
+
+  async function getStatePackManifest() {
+    if (_statePackManifest) return _statePackManifest;
+    if (_statePackManifestPromise) return _statePackManifestPromise;
+    _statePackManifestPromise = (async () => {
+      try {
+        const response = await fetch("pack-manifest-v1.35.json", { cache: "no-store" });
+        if (!response.ok) return null;
+        const text = await response.text();
+        if (!text || text.length > 128 * 1024) return null;
+        _statePackManifest = validateStatePackManifest(JSON.parse(text));
+      } catch (e) { /* a malformed bundled manifest disables routing; it never guesses */ }
+      return _statePackManifest;
+    })();
+    const result = await _statePackManifestPromise;
+    _statePackManifestPromise = null;
+    return result;
+  }
+
+  function resolvePackUrl(resource) {
+    if (!resource || typeof resource.path !== "string") return null;
+    const localHost = location.hostname === "localhost" || location.hostname === "127.0.0.1"
+      || location.hostname === "::1";
+    // Capacitor also uses https://localhost. Its files contain no packs, so the native
+    // app must use the pinned production URL; only the browser test/development server
+    // maps the same immutable path locally.
+    return !NATIVE && localHost ? `/${resource.path}` : resource.url;
+  }
+
+  async function sha256Bytes(value) {
+    if (!(window.crypto && window.crypto.subtle)) return null;
+    const bytes = value instanceof ArrayBuffer
+      ? value : value && value.buffer instanceof ArrayBuffer
+        ? value.buffer.slice(value.byteOffset || 0, (value.byteOffset || 0) + value.byteLength)
+        : null;
+    if (!bytes) return null;
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  function validatePackEnvelope(resource, pack, kind) {
+    const fields = kind === "routing"
+      ? ["format", "schema_version", "pack_id", "pack_version", "state_code",
+          "adapter", "generated_at", "authorities", "payload"]
+      : ["format", "schema_version", "pack_id", "pack_version", "state_code",
+          "adapter", "generated_at", "tenders"];
+    if (!exactObjectKeys(pack, fields)
+        || pack.format !== (kind === "routing" ? "pothole-routing-pack" : "pothole-tender-pack")
+        || pack.schema_version !== resource.schema_version
+        || pack.pack_id !== resource.pack_id || pack.pack_version !== resource.pack_version
+        || pack.state_code !== resource.state_code || pack.adapter !== resource.adapter
+        || pack.generated_at !== resource.source_retrieved_at) {
+      throw new Error("State-pack envelope does not match its signed manifest entry.");
+    }
+  }
+
+  function validateKarnatakaBodies(payload) {
+    const bodies = payload && payload.bodies;
+    const entries = bodies && typeof bodies === "object" && !Array.isArray(bodies)
+      ? Object.entries(bodies) : [];
+    const allowed = new Set(["name", "type", "officer", "email", "source", "matched_from", "short"]);
+    const types = new Set(["CC", "CMC", "TMC", "TP", "NAC"]);
+    if (!entries.length || entries.length > 500) return false;
+    return entries.every(([lgd, body]) => /^\d{3,12}$/.test(lgd)
+      && body && typeof body === "object" && !Array.isArray(body)
+      && Object.keys(body).every((field) => allowed.has(field))
+      && typeof body.name === "string" && !!body.name && body.name.length <= 120
+      && typeof body.type === "string" && types.has(body.type)
+      && typeof body.officer === "string" && !!body.officer && body.officer.length <= 100
+      && typeof body.email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)
+      && body.email.length <= 200
+      && typeof body.source === "string" && !!body.source && body.source.length <= 500
+      && ["matched_from", "short"].every((field) => body[field] === undefined
+        || (typeof body[field] === "string" && body[field].length <= 200)));
+  }
+
+  function validMunicipalEnvelope(value) {
+    return exactObjectKeys(value, ["min_lng", "min_lat", "max_lng", "max_lat"])
+      && [value.min_lng, value.max_lng].every((item) => Number.isFinite(item) && item >= -180 && item <= 180)
+      && [value.min_lat, value.max_lat].every((item) => Number.isFinite(item) && item >= -90 && item <= 90)
+      && value.min_lng < value.max_lng && value.min_lat < value.max_lat;
+  }
+
+  function municipalGeometryBounds(geometry) {
+    if (!hasCoverageGeometry(geometry)) return null;
+    const bounds = { min_lng: Infinity, min_lat: Infinity, max_lng: -Infinity, max_lat: -Infinity };
+    const visit = (value) => {
+      if (Array.isArray(value) && value.length >= 2
+          && Number.isFinite(value[0]) && Number.isFinite(value[1])) {
+        bounds.min_lng = Math.min(bounds.min_lng, value[0]);
+        bounds.min_lat = Math.min(bounds.min_lat, value[1]);
+        bounds.max_lng = Math.max(bounds.max_lng, value[0]);
+        bounds.max_lat = Math.max(bounds.max_lat, value[1]);
+      } else if (Array.isArray(value)) value.forEach(visit);
+    };
+    visit(geometry.coordinates);
+    return Object.values(bounds).every(Number.isFinite) ? bounds : null;
+  }
+
+  const validMunicipalAliasList = (value) => Array.isArray(value)
+    && value.length > 0 && value.length <= 30
+    && value.every((item) => typeof item === "string" && !!item && item.length <= 100);
+
+  const sameMunicipalEnvelope = (value, expected) => validMunicipalEnvelope(value)
+    && Object.keys(expected).every((field) => value[field] === expected[field]);
+
+  const sameMunicipalAliases = (value, expected) => validMunicipalAliasList(value)
+    && value.length === expected.length
+    && value.every((item, index) => item === expected[index]);
+
+  const validOfficialPointQuery = (value, spatialRel) => !!value
+    && /^https:\/\/[^\s]+$/.test(String(value.query_url || ""))
+    && value.query_where === "1=1"
+    && value.query_geometry_type === "esriGeometryEnvelope"
+    && Number.isInteger(value.query_in_sr) && value.query_in_sr === 4326
+    && value.query_spatial_rel === spatialRel;
+
+  function validMunicipalExclusion(exclusion, envelope) {
+    if (!exclusion || !["bbox", "official_point_query"].includes(exclusion.mode)) return false;
+    const fields = ["id", "name", "mode", "bbox", "source_name", "source_url", "routing_note"];
+    if (exclusion.mode === "official_point_query") {
+      fields.push("query_url", "query_where", "query_geometry_type", "query_in_sr",
+        "query_spatial_rel", "source_object_id");
+    }
+    return exactObjectKeys(exclusion, fields)
+      && /^[a-z0-9][a-z0-9-]{2,100}$/.test(exclusion.id)
+      && validMunicipalEnvelope(exclusion.bbox)
+      && /^https:\/\/[^\s]+$/.test(exclusion.source_url)
+      && ["name", "source_name", "routing_note"].every((field) =>
+        typeof exclusion[field] === "string" && !!exclusion[field]
+        && exclusion[field].length <= 500)
+      && exclusion.bbox.min_lng >= envelope.min_lng
+      && exclusion.bbox.min_lat >= envelope.min_lat
+      && exclusion.bbox.max_lng <= envelope.max_lng
+      && exclusion.bbox.max_lat <= envelope.max_lat
+      && (exclusion.mode !== "official_point_query"
+        || (typeof exclusion.source_object_id === "string" && !!exclusion.source_object_id
+          && exclusion.source_object_id.length <= 200
+          && validOfficialPointQuery(exclusion, "esriSpatialRelIntersects")));
+  }
+
+  function canonicalJson(value) {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+    if (value && typeof value === "object") {
+      return `{${Object.keys(value).sort().map((key) =>
+        `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  }
+
+  async function validateMunicipalCityPayload(resource, pack) {
+    const payload = pack.payload;
+    if (!exactObjectKeys(payload, ["version", "retrieved_at", "regions"])
+        || payload.version !== 1 || payload.retrieved_at !== pack.generated_at
+        || !Array.isArray(payload.regions) || !payload.regions.length
+        || payload.regions.length > 100) {
+      return false;
+    }
+    const expected = MUNICIPAL_CITY_CONFIGS[resource.pack_id];
+    if (!expected || payload.regions.length !== 1) return false;
+    const authorityDigest = await sha256Hex(canonicalJson(pack.authorities));
+    const regionDigest = await sha256Hex(canonicalJson(payload.regions[0]));
+    if (authorityDigest !== expected.authority_sha256
+        || regionDigest !== expected.region_sha256) return false;
+
+    const authorityIds = new Set(pack.authorities.map((authority) => authority.id));
+    const usedAuthorityIds = new Set();
+    const commonFields = [
+      "id", "authority_id", "name", "scope", "routing_mode", "routing_source",
+      "match_value", "state_aliases", "place_aliases", "envelope", "source_name",
+      "source_home_url", "source_url", "source_license", "attribution",
+      "official_scope_reference", "routing_note", "limitations", "exclusions", "source_object_id",
+    ];
+    for (const region of payload.regions) {
+      if (!region || !["boundary", "structured_geocode", "official_point_query"]
+        .includes(region.routing_mode)) return false;
+      const fields = [...commonFields];
+      if (region.routing_mode === "boundary") {
+        fields.push("coordinate_precision", "area_km2", "bbox", "geometry_sha256", "geometry");
+      } else if (region.routing_mode === "official_point_query") {
+        fields.push("query_url", "query_where", "query_geometry_type", "query_in_sr",
+          "query_spatial_rel", "official_area_km2", "legal_references");
+      }
+      const strings = ["id", "authority_id", "name", "scope", "routing_source", "match_value",
+        "source_name", "source_home_url", "source_url", "source_license", "attribution",
+        "official_scope_reference", "routing_note", "source_object_id"];
+      if (!exactObjectKeys(region, fields)
+          || region.id !== expected.region_id
+          || region.authority_id !== expected.authority_id
+          || region.routing_mode !== expected.routing_mode
+          || region.routing_source !== expected.routing_source
+          || !sameMunicipalEnvelope(region.envelope, expected.envelope)
+          || !sameMunicipalAliases(region.state_aliases, expected.state_aliases)
+          || !sameMunicipalAliases(region.place_aliases, expected.place_aliases)
+          || !/^[a-z0-9][a-z0-9-]{2,100}$/.test(region.id)
+          || !new RegExp(`^${resource.state_code.toLowerCase()}-[a-z0-9-]{2,80}$`).test(region.authority_id)
+          || strings.some((field) => typeof region[field] !== "string"
+            || !region[field] || region[field].length > 1000)
+          || !/^https:\/\/[^\s]+$/.test(region.source_home_url)
+          || !/^https:\/\/[^\s]+$/.test(region.source_url)
+          || !/^https:\/\/[^\s]+$/.test(region.official_scope_reference)
+          || !validMunicipalAliasList(region.state_aliases)
+          || !validMunicipalAliasList(region.place_aliases)
+          || !validMunicipalEnvelope(region.envelope)
+          || !Array.isArray(region.limitations) || !region.limitations.length
+          || region.limitations.length > 10
+          || region.limitations.some((item) => typeof item !== "string" || !item || item.length > 500)
+          || !Array.isArray(region.exclusions) || region.exclusions.length > 10
+          || region.exclusions.some((exclusion) =>
+            !validMunicipalExclusion(exclusion, region.envelope))
+          || !authorityIds.has(region.authority_id) || usedAuthorityIds.has(region.authority_id)) {
+        return false;
+      }
+      usedAuthorityIds.add(region.authority_id);
+      if (region.routing_mode === "boundary") {
+        const digest = hasCoverageGeometry(region.geometry)
+          ? await sha256Hex(JSON.stringify(region.geometry)) : null;
+        const calculated = municipalGeometryBounds(region.geometry);
+        const near = (first, second) => Math.abs(first - second) <= 1e-7;
+        if (!Number.isInteger(region.coordinate_precision) || region.coordinate_precision !== 7
+            || !Number.isFinite(region.area_km2) || region.area_km2 <= 1 || region.area_km2 > 10000
+            || !validMunicipalEnvelope(region.bbox) || !calculated
+            || !Object.keys(calculated).every((key) => near(calculated[key], region.bbox[key]))
+            || calculated.min_lng < region.envelope.min_lng
+            || calculated.min_lat < region.envelope.min_lat
+            || calculated.max_lng > region.envelope.max_lng
+            || calculated.max_lat > region.envelope.max_lat
+            || !/^[0-9a-f]{64}$/.test(region.geometry_sha256)
+            || digest !== region.geometry_sha256) {
+          return false;
+        }
+      } else if (region.routing_mode === "official_point_query") {
+        if (!validOfficialPointQuery(region, "esriSpatialRelWithin")
+            || !Number.isFinite(region.official_area_km2)
+            || region.official_area_km2 <= 1 || region.official_area_km2 > 10000
+            || !Array.isArray(region.legal_references)
+            || !region.legal_references.length || region.legal_references.length > 10
+            || region.legal_references.some((reference) =>
+              !exactObjectKeys(reference, ["title", "date", "url"])
+              || typeof reference.title !== "string" || !reference.title
+              || reference.title.length > 500
+              || !/^\d{4}-\d{2}-\d{2}$/.test(String(reference.date || ""))
+              || !/^https:\/\/[^\s]+$/.test(String(reference.url || "")))) {
+          return false;
+        }
+      }
+    }
+    return usedAuthorityIds.size === authorityIds.size;
+  }
+
+  const TOP50_MAJOR_CITY_RANKS = new Set([
+    9, 10, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+    27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 41, 42, 45, 46, 47, 48, 49, 50,
+  ]);
+  const TOP50_AUTHORITY_BY_STATE = Object.freeze({
+    GJ: "in-gj-enagar", RJ: "in-rj-sampark", UP: "in-up-jansunwai",
+    MP: "in-mp-cm-helpline", TN: "in-tn-cm-helpline", KL: "in-kl-ksmart",
+    BR: "in-br-lok-shikayat", AP: "in-ap-puramithra", HR: "in-hr-nagar-darshan",
+    JH: "in-jh-municipal-grievance", JK: "in-jk-samadhan", CG: "in-cg-nidaan",
+  });
+
+  async function validatePunjabPayload(pack) {
+    const payload = pack.payload;
+    const region = payload && payload.region;
+    const fields = [
+      "id", "authority_id", "name", "scope", "osm_relation_id", "source_name",
+      "source_home_url", "source_url", "source_license", "attribution", "routing_note",
+      "limitations", "coordinate_precision", "bbox", "geometry_sha256", "geometry",
+    ];
+    const digest = region && hasCoverageGeometry(region.geometry)
+      ? await sha256Hex(JSON.stringify(region.geometry)) : null;
+    const calculated = region && municipalGeometryBounds(region.geometry);
+    const near = (first, second) => Math.abs(first - second) <= 1e-7;
+    return exactObjectKeys(payload, ["version", "retrieved_at", "region"])
+      && payload.version === 1 && payload.retrieved_at === pack.generated_at
+      && exactObjectKeys(region, fields)
+      && region.id === "punjab-state"
+      && region.authority_id === "pb-statewide-unverified"
+      && region.name === "Punjab" && Number(region.osm_relation_id) === 1942686
+      && Number.isInteger(region.coordinate_precision) && region.coordinate_precision === 7
+      && validMunicipalEnvelope(region.bbox) && calculated
+      && Object.keys(calculated).every((key) => near(calculated[key], region.bbox[key]))
+      && region.geometry_sha256 === PUNJAB_STATE_GEOMETRY_SHA256
+      && digest === PUNJAB_STATE_GEOMETRY_SHA256
+      && ["scope", "source_name", "source_license", "attribution", "routing_note"]
+        .every((field) => typeof region[field] === "string"
+          && !!region[field] && region[field].length <= 1000)
+      && ["source_home_url", "source_url"]
+        .every((field) => /^https:\/\/[^\s]+$/.test(String(region[field] || "")))
+      && Array.isArray(region.limitations) && region.limitations.length > 0
+      && region.limitations.length <= 10
+      && region.limitations.every((item) => typeof item === "string"
+        && !!item && item.length <= 500);
+  }
+
+  async function validateTamilNaduPayload(pack) {
+    const payload = pack.payload;
+    const region = payload && payload.region;
+    const fields = [
+      "id", "authority_id", "name", "scope", "osm_relation_id", "source_name",
+      "source_home_url", "source_url", "source_license", "attribution", "routing_note",
+      "limitations", "coordinate_precision", "bbox", "geometry_sha256", "geometry",
+    ];
+    const digest = region && hasCoverageGeometry(region.geometry)
+      ? await sha256Hex(JSON.stringify(region.geometry)) : null;
+    const calculated = region && municipalGeometryBounds(region.geometry);
+    const near = (first, second) => Math.abs(first - second) <= 1e-7;
+    return exactObjectKeys(payload, ["version", "retrieved_at", "region"])
+      && payload.version === 1 && payload.retrieved_at === pack.generated_at
+      && exactObjectKeys(region, fields)
+      && region.id === "tamil-nadu-state"
+      && region.authority_id === "tn-statewide-unverified"
+      && region.name === "Tamil Nadu" && Number(region.osm_relation_id) === 96905
+      && Number.isInteger(region.coordinate_precision) && region.coordinate_precision === 7
+      && validMunicipalEnvelope(region.bbox) && calculated
+      && Object.keys(calculated).every((key) => near(calculated[key], region.bbox[key]))
+      && region.geometry_sha256 === TAMIL_NADU_STATE_GEOMETRY_SHA256
+      && digest === TAMIL_NADU_STATE_GEOMETRY_SHA256
+      && ["scope", "source_name", "source_license", "attribution", "routing_note"]
+        .every((field) => typeof region[field] === "string"
+          && !!region[field] && region[field].length <= 1000)
+      && ["source_home_url", "source_url"]
+        .every((field) => /^https:\/\/[^\s]+$/.test(String(region[field] || "")))
+      && Array.isArray(region.limitations) && region.limitations.length > 0
+      && region.limitations.length <= 10
+      && region.limitations.every((item) => typeof item === "string"
+        && !!item && item.length <= 500);
+  }
+
+  async function validateAndhraPradeshPayload(pack) {
+    const payload = pack.payload;
+    const region = payload && payload.region;
+    const fields = [
+      "id", "authority_id", "name", "scope", "osm_relation_id", "source_name",
+      "source_home_url", "source_url", "source_license", "attribution", "routing_note",
+      "limitations", "coordinate_precision", "bbox", "geometry_sha256", "geometry",
+    ];
+    const digest = region && hasCoverageGeometry(region.geometry)
+      ? await sha256Hex(JSON.stringify(region.geometry)) : null;
+    const calculated = region && municipalGeometryBounds(region.geometry);
+    const near = (first, second) => Math.abs(first - second) <= 1e-7;
+    return exactObjectKeys(payload, ["version", "retrieved_at", "region"])
+      && payload.version === 1 && payload.retrieved_at === pack.generated_at
+      && exactObjectKeys(region, fields)
+      && region.id === "andhra-pradesh-state"
+      && region.authority_id === "ap-statewide-unverified"
+      && region.name === "Andhra Pradesh" && Number(region.osm_relation_id) === 2022095
+      && Number.isInteger(region.coordinate_precision) && region.coordinate_precision === 7
+      && validMunicipalEnvelope(region.bbox) && calculated
+      && Object.keys(calculated).every((key) => near(calculated[key], region.bbox[key]))
+      && region.geometry_sha256 === ANDHRA_PRADESH_STATE_GEOMETRY_SHA256
+      && digest === ANDHRA_PRADESH_STATE_GEOMETRY_SHA256
+      && ["scope", "source_name", "source_license", "attribution", "routing_note"]
+        .every((field) => typeof region[field] === "string"
+          && !!region[field] && region[field].length <= 1000)
+      && ["source_home_url", "source_url"]
+        .every((field) => /^https:\/\/[^\s]+$/.test(String(region[field] || "")))
+      && Array.isArray(region.limitations) && region.limitations.length > 0
+      && region.limitations.length <= 10
+      && region.limitations.every((item) => typeof item === "string"
+        && !!item && item.length <= 500);
+  }
+
+  async function validateTelanganaPayload(pack) {
+    const payload = pack.payload;
+    const region = payload && payload.region;
+    const fields = [
+      "id", "authority_id", "name", "scope", "osm_relation_id", "source_name",
+      "source_home_url", "source_url", "source_license", "attribution", "routing_note",
+      "limitations", "coordinate_precision", "bbox", "geometry_sha256", "geometry",
+    ];
+    const digest = region && hasCoverageGeometry(region.geometry)
+      ? await sha256Hex(JSON.stringify(region.geometry)) : null;
+    const calculated = region && municipalGeometryBounds(region.geometry);
+    const near = (first, second) => Math.abs(first - second) <= 1e-7;
+    return exactObjectKeys(payload, ["version", "retrieved_at", "region"])
+      && payload.version === 1 && payload.retrieved_at === pack.generated_at
+      && exactObjectKeys(region, fields)
+      && region.id === "telangana-state"
+      && region.authority_id === "tg-statewide-unverified"
+      && region.name === "Telangana" && Number(region.osm_relation_id) === 3250963
+      && Number.isInteger(region.coordinate_precision) && region.coordinate_precision === 7
+      && validMunicipalEnvelope(region.bbox) && calculated
+      && Object.keys(calculated).every((key) => near(calculated[key], region.bbox[key]))
+      && region.geometry_sha256 === TELANGANA_STATE_GEOMETRY_SHA256
+      && digest === TELANGANA_STATE_GEOMETRY_SHA256
+      && ["scope", "source_name", "source_license", "attribution", "routing_note"]
+        .every((field) => typeof region[field] === "string"
+          && !!region[field] && region[field].length <= 1000)
+      && ["source_home_url", "source_url"]
+        .every((field) => /^https:\/\/[^\s]+$/.test(String(region[field] || "")))
+      && Array.isArray(region.limitations) && region.limitations.length > 0
+      && region.limitations.length <= 10
+      && region.limitations.every((item) => typeof item === "string"
+        && !!item && item.length <= 500);
+  }
+
+  async function validatePinnedStatewidePayload(pack, expected) {
+    const payload = pack.payload;
+    const region = payload && payload.region;
+    const fields = [
+      "id", "authority_id", "name", "scope", "osm_relation_id", "source_name",
+      "source_home_url", "source_url", "source_license", "attribution", "routing_note",
+      "limitations", "coordinate_precision", "bbox", "geometry_sha256", "geometry",
+    ];
+    const digest = region && hasCoverageGeometry(region.geometry)
+      ? await sha256Hex(JSON.stringify(region.geometry)) : null;
+    const calculated = region && municipalGeometryBounds(region.geometry);
+    const near = (first, second) => Math.abs(first - second) <= 1e-7;
+    return exactObjectKeys(payload, ["version", "retrieved_at", "region"])
+      && payload.version === 1 && payload.retrieved_at === pack.generated_at
+      && exactObjectKeys(region, fields)
+      && region.id === expected.region_id && region.authority_id === expected.authority_id
+      && region.name === expected.name && region.scope === expected.scope
+      && Number(region.osm_relation_id) === expected.relation_id
+      && region.source_home_url === `https://www.openstreetmap.org/relation/${expected.relation_id}`
+      && region.source_url.startsWith("https://nominatim.openstreetmap.org/lookup?")
+      && region.source_url.includes(`osm_ids=R${expected.relation_id}`)
+      && Number.isInteger(region.coordinate_precision) && region.coordinate_precision === 7
+      && validMunicipalEnvelope(region.bbox) && calculated
+      && Object.keys(calculated).every((key) => near(calculated[key], region.bbox[key]))
+      && region.geometry_sha256 === expected.geometry_sha256
+      && digest === expected.geometry_sha256
+      && ["source_name", "source_license", "attribution", "routing_note"]
+        .every((field) => typeof region[field] === "string"
+          && !!region[field] && region[field].length <= 1000)
+      && Array.isArray(region.limitations) && region.limitations.length > 0
+      && region.limitations.length <= 10
+      && region.limitations.every((item) => typeof item === "string"
+        && !!item && item.length <= 500);
+  }
+
+  const validateKarnatakaStatePayload = (pack) => validatePinnedStatewidePayload(pack, {
+    region_id: "karnataka-state", authority_id: "ka-statewide-unverified",
+    name: "Karnataka", scope: "Full State of Karnataka", relation_id: 2019939,
+    geometry_sha256: KARNATAKA_STATE_GEOMETRY_SHA256,
+  });
+
+  const validateKeralaPayload = (pack) => validatePinnedStatewidePayload(pack, {
+    region_id: "kerala-state", authority_id: "kl-statewide-unverified",
+    name: "Kerala", scope: "Full State of Kerala; excludes Mahe, Puducherry Union Territory",
+    relation_id: 2018151, geometry_sha256: KERALA_STATE_GEOMETRY_SHA256,
+  });
+
+  const validateUttarPradeshPayload = (pack) => validatePinnedStatewidePayload(pack, {
+    region_id: "uttar-pradesh-state", authority_id: "up-statewide-unverified",
+    name: "Uttar Pradesh",
+    scope: "Full State of Uttar Pradesh; excludes Delhi National Capital Territory",
+    relation_id: 1942587, geometry_sha256: UTTAR_PRADESH_STATE_GEOMETRY_SHA256,
+  });
+
+  const validateChhattisgarhPayload = (pack) => validatePinnedStatewidePayload(pack, {
+    region_id: "chhattisgarh-state", authority_id: "cg-statewide-unverified",
+    name: "Chhattisgarh", scope: "Full State of Chhattisgarh",
+    relation_id: 1972004, geometry_sha256: CHHATTISGARH_STATE_GEOMETRY_SHA256,
+  });
+
+  const validateRajasthanPayload = (pack) => validatePinnedStatewidePayload(pack, {
+    region_id: "rajasthan-state", authority_id: "rj-statewide-unverified",
+    name: "Rajasthan", scope: "Full State of Rajasthan",
+    relation_id: 1942920, geometry_sha256: RAJASTHAN_STATE_GEOMETRY_SHA256,
+  });
+
+  const validateGoaPayload = (pack) => validatePinnedStatewidePayload(pack, {
+    region_id: "goa-state", authority_id: "ga-statewide-unverified",
+    name: "Goa", scope: "Full State of Goa",
+    relation_id: 11251493, geometry_sha256: GOA_STATE_GEOMETRY_SHA256,
+  });
+
+  const validateMadhyaPradeshPayload = (pack) => validatePinnedStatewidePayload(pack, {
+    region_id: "madhya-pradesh-state", authority_id: "mp-statewide-unverified",
+    name: "Madhya Pradesh", scope: "Full State of Madhya Pradesh",
+    relation_id: 1950071, geometry_sha256: MADHYA_PRADESH_STATE_GEOMETRY_SHA256,
+  });
+
+  const validateBiharPayload = (pack) => validatePinnedStatewidePayload(pack, {
+    region_id: "bihar-state", authority_id: "br-statewide-unverified",
+    name: "Bihar", scope: "Full State of Bihar",
+    relation_id: 1958982, geometry_sha256: BIHAR_STATE_GEOMETRY_SHA256,
+  });
+
+  const validateOdishaPayload = (pack) => validatePinnedStatewidePayload(pack, {
+    region_id: "odisha-state", authority_id: "od-statewide-unverified",
+    name: "Odisha", scope: "Full State of Odisha",
+    relation_id: 1984022, geometry_sha256: ODISHA_STATE_GEOMETRY_SHA256,
+  });
+
+  function validateMajorCityPayload(pack) {
+    const payload = pack.payload;
+    const expectedAuthorityIds = new Set(Object.values(TOP50_AUTHORITY_BY_STATE));
+    const authorityIds = new Set(pack.authorities.map((authority) => authority.id));
+    if (!exactObjectKeys(payload, ["version", "retrieved_at", "regions"])
+        || payload.version !== 1 || payload.retrieved_at !== pack.generated_at
+        || !Array.isArray(payload.regions) || payload.regions.length !== 35
+        || !sameSet([...authorityIds], expectedAuthorityIds)) return false;
+    const regionFields = [
+      "rank", "id", "authority_id", "name", "state_code", "scope", "routing_mode",
+      "routing_source", "match_value", "state_aliases", "place_aliases", "envelope",
+      "source_name", "source_home_url", "source_url", "source_license", "attribution",
+      "official_scope_reference", "routing_note", "limitations", "exclusions",
+      "source_object_id", "supported_issue_types",
+    ];
+    const seenRanks = new Set(), seenIds = new Set(), usedAuthorities = new Set();
+    for (const region of payload.regions) {
+      const expectedAuthority = region && TOP50_AUTHORITY_BY_STATE[region.state_code];
+      const sourceMatch = region && typeof region.match_value === "string"
+        ? region.match_value.match(/^OpenStreetMap (node|way|relation) ([1-9][0-9]*)$/) : null;
+      const strings = [
+        "id", "authority_id", "name", "state_code", "scope", "routing_source",
+        "match_value", "source_name", "source_home_url", "source_url", "source_license",
+        "attribution", "official_scope_reference", "routing_note", "source_object_id",
+      ];
+      if (!exactObjectKeys(region, regionFields)
+          || !Number.isInteger(region.rank) || !TOP50_MAJOR_CITY_RANKS.has(region.rank)
+          || seenRanks.has(region.rank)
+          || !/^[a-z0-9][a-z0-9-]{2,100}$/.test(String(region.id || ""))
+          || seenIds.has(region.id)
+          || !expectedAuthority || region.authority_id !== expectedAuthority
+          || !authorityIds.has(region.authority_id)
+          || region.routing_mode !== "structured_geocode"
+          || region.routing_source !== "nominatim_structured_city"
+          || strings.some((field) => typeof region[field] !== "string"
+            || !region[field] || region[field].length > 1000)
+          || !sourceMatch
+          || region.source_object_id !== `osm:${sourceMatch[1]}:${sourceMatch[2]}`
+          || !/^https:\/\/[^\s]+$/.test(region.source_home_url)
+          || !/^https:\/\/[^\s]+$/.test(region.source_url)
+          || !/^https:\/\/[^\s]+$/.test(region.official_scope_reference)
+          || !validMunicipalAliasList(region.state_aliases)
+          || !validMunicipalAliasList(region.place_aliases)
+          || !validMunicipalEnvelope(region.envelope)
+          || !Array.isArray(region.limitations) || !region.limitations.length
+          || region.limitations.length > 10
+          || region.limitations.some((item) => typeof item !== "string"
+            || !item || item.length > 500)
+          || !Array.isArray(region.exclusions) || region.exclusions.length !== 0
+          || !Array.isArray(region.supported_issue_types)
+          || new Set(region.supported_issue_types).size !== ISSUE_TYPES.length
+          || !sameSet(region.supported_issue_types, new Set(ISSUE_TYPES))) {
+        return false;
+      }
+      seenRanks.add(region.rank);
+      seenIds.add(region.id);
+      usedAuthorities.add(region.authority_id);
+    }
+    return sameSet([...seenRanks], TOP50_MAJOR_CITY_RANKS)
+      && sameSet([...usedAuthorities], expectedAuthorityIds);
+  }
+
+  async function validateRoutingPack(resource, pack) {
+    validatePackEnvelope(resource, pack, "routing");
+    if (!Array.isArray(pack.authorities) || pack.authorities.length > 1000) {
+      throw new Error("Routing pack authority list is invalid.");
+    }
+    validateOfficialHandoffRegistry(pack.authorities);
+    const payload = pack.payload;
+    const remainingConfig = REMAINING_STATE_ROUTE_CONFIGS[resource.pack_id];
+    if (remainingConfig) {
+      if (pack.state_code !== remainingConfig.state_code
+          || pack.authorities.length !== 1
+          || pack.authorities[0].id !== remainingConfig.authority_id
+          || !await validatePinnedStatewidePayload(pack, {
+            region_id: remainingConfig.region_id,
+            authority_id: remainingConfig.authority_id,
+            name: remainingConfig.name,
+            scope: remainingConfig.scope,
+            relation_id: remainingConfig.relation_id,
+            geometry_sha256: remainingConfig.geometry_sha256,
+          })) {
+        throw new Error("State/UT routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-dl-routing") {
+      const region = payload && payload.region;
+      const digest = region && hasCoverageGeometry(region.geometry)
+        ? await sha256Hex(JSON.stringify(region.geometry)) : null;
+      if (!payload || payload.version !== 1 || !region || pack.authorities.length !== 1
+          || pack.authorities[0].id !== "dl-pwd-sewa" || region.id !== "delhi-nct"
+          || region.authority_id !== "dl-pwd-sewa" || Number(region.osm_relation_id) !== 1942586
+          || region.geometry_sha256 !== DELHI_GEOMETRY_SHA256
+          || digest !== DELHI_GEOMETRY_SHA256) {
+        throw new Error("Delhi routing pack failed its boundary or authority checks.");
+      }
+    } else if (resource.pack_id === "in-wb-routing") {
+      const byId = new Map(pack.authorities.map((authority) => [authority.id, authority]));
+      const regions = payload && payload.regions;
+      const kmc = regions && regions.kmc;
+      const state = regions && regions.west_bengal;
+      const kmcDigest = kmc && hasCoverageGeometry(kmc.geometry)
+        ? await sha256Hex(JSON.stringify(kmc.geometry)) : null;
+      const stateDigest = state && hasCoverageGeometry(state.geometry)
+        ? await sha256Hex(JSON.stringify(state.geometry)) : null;
+      if (!payload || payload.version !== 2 || !regions || !kmc || !state
+          || pack.authorities.length !== 2 || !byId.has("wb-kmc")
+          || !byId.has("wb-statewide-unverified")
+          || kmc.authority_id !== "wb-kmc"
+          || String(kmc.ulb_code) !== "250299" || String(kmc.mun_id) !== "250299_0000001"
+          || kmc.geometry_sha256 !== KMC_GEOMETRY_SHA256
+          || kmcDigest !== KMC_GEOMETRY_SHA256
+          || state.authority_id !== "wb-statewide-unverified"
+          || Number(state.source_relation_id) !== 1960177
+          || state.geometry_sha256 !== WEST_BENGAL_STATE_GEOMETRY_SHA256
+          || stateDigest !== WEST_BENGAL_STATE_GEOMETRY_SHA256) {
+        throw new Error("West Bengal routing pack failed its boundary or authority checks.");
+      }
+    } else if (resource.pack_id === "in-mh-routing") {
+      const byId = new Map(pack.authorities.map((authority) => [authority.id, authority]));
+      const mmrAuthorities = pack.authorities.filter((authority) => authority.id.startsWith("mh-")
+        && authority.id !== "mh-pmc" && authority.id !== "mh-mmr-unverified"
+        && authority.id !== "mh-statewide-unverified");
+      const fallbackIds = new Set(mmrAuthorities.map((authority) => authority.id)
+        .filter((id) => !MMR_DIRECT_AUTHORITY_IDS.has(id)));
+      const state = payload && payload.regions && payload.regions.maharashtra;
+      const stateDigest = state && hasCoverageGeometry(state.geometry)
+        ? await sha256Hex(JSON.stringify(state.geometry)) : null;
+      if (!payload || payload.version !== 2 || !payload.regions || !payload.regions.mmr
+          || !payload.regions.pmc || !state
+          || pack.authorities.length !== 22 || mmrAuthorities.length !== 19
+          || !byId.has("mh-pmc") || !byId.has("mh-mmr-unverified")
+          || !byId.has("mh-statewide-unverified")
+          || !hasCoverageGeometry(payload.regions.mmr.geometry)
+          || !hasCoverageGeometry(payload.regions.pmc.geometry)
+          || state.authority_id !== "mh-statewide-unverified"
+          || Number(state.source_relation_id) !== 1950884
+          || state.geometry_sha256 !== MAHARASHTRA_STATE_GEOMETRY_SHA256
+          || stateDigest !== MAHARASHTRA_STATE_GEOMETRY_SHA256
+          || !validMmrAuthorityBoundaries(payload.regions.mmr, fallbackIds)) {
+        throw new Error("Maharashtra routing pack failed its boundary or authority checks.");
+      }
+      validateAuthorityRegistry(mmrAuthorities);
+    } else if (resource.pack_id === "in-pb-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "pb-statewide-unverified"
+          || !await validatePunjabPayload(pack)) {
+        throw new Error("Punjab routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-tn-state-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "tn-statewide-unverified"
+          || !await validateTamilNaduPayload(pack)) {
+        throw new Error("Tamil Nadu routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-ap-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "ap-statewide-unverified"
+          || !await validateAndhraPradeshPayload(pack)) {
+        throw new Error("Andhra Pradesh routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-tg-state-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "tg-statewide-unverified"
+          || !await validateTelanganaPayload(pack)) {
+        throw new Error("Telangana routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-ka-state-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "ka-statewide-unverified"
+          || !await validateKarnatakaStatePayload(pack)) {
+        throw new Error("Karnataka statewide routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-kl-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "kl-statewide-unverified"
+          || !await validateKeralaPayload(pack)) {
+        throw new Error("Kerala routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-up-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "up-statewide-unverified"
+          || !await validateUttarPradeshPayload(pack)) {
+        throw new Error("Uttar Pradesh routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-cg-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "cg-statewide-unverified"
+          || !await validateChhattisgarhPayload(pack)) {
+        throw new Error("Chhattisgarh routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-rj-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "rj-statewide-unverified"
+          || !await validateRajasthanPayload(pack)) {
+        throw new Error("Rajasthan routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-ga-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "ga-statewide-unverified"
+          || !await validateGoaPayload(pack)) {
+        throw new Error("Goa routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-mp-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "mp-statewide-unverified"
+          || !await validateMadhyaPradeshPayload(pack)) {
+        throw new Error("Madhya Pradesh routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-br-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "br-statewide-unverified"
+          || !await validateBiharPayload(pack)) {
+        throw new Error("Bihar routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-od-routing") {
+      if (pack.authorities.length !== 1
+          || pack.authorities[0].id !== "od-statewide-unverified"
+          || !await validateOdishaPayload(pack)) {
+        throw new Error("Odisha routing pack failed its boundary, source or authority checks.");
+      }
+    } else if (resource.pack_id === "in-top50-routing") {
+      if (!validateMajorCityPayload(pack)) {
+        throw new Error("Major-city routing pack failed its source, region or authority checks.");
+      }
+    } else if (resource.pack_id === "in-ka-routing") {
+      if (pack.authorities.length || !validateKarnatakaBodies(payload)) {
+        throw new Error("Karnataka routing pack failed its LGD contact checks.");
+      }
+    } else if (resource.adapter === "municipal-city-v1") {
+      if (!await validateMunicipalCityPayload(resource, pack)) {
+        throw new Error("Municipal-city routing pack failed its boundary, source or authority checks.");
+      }
+    } else {
+      throw new Error("Unsupported routing pack.");
+    }
+    // Install contacts only after every byte, identity and resource-specific check passed.
+    installRoutingAuthorities(pack);
+    return pack;
+  }
+
+  function validateTenderPack(resource, pack) {
+    validatePackEnvelope(resource, pack, "tenders");
+    const rows = pack.tenders;
+    const fields = new Set(["tn", "t", "loc", "c", "d", "b"]), seen = new Set();
+    if (!Array.isArray(rows) || rows.length !== resource.records || rows.length > 100000) {
+      throw new Error("Tender-pack record count is invalid.");
+    }
+    for (const row of rows) {
+      if (!exactObjectKeys(row, fields)
+          || typeof row.tn !== "string" || !row.tn || row.tn.length > 100
+          || typeof row.t !== "string" || !row.t || row.t.length > 500
+          || typeof row.loc !== "string" || row.loc.length > 200
+          || typeof row.c !== "string" || row.c.length > 200
+          || typeof row.d !== "string" || !/^\d{2}-\d{2}-\d{4}$/.test(row.d)
+          || typeof row.b !== "string" || !/^(?:BLR|\d{3,12})$/.test(row.b)) {
+        throw new Error("Tender pack contains an invalid record.");
+      }
+      const identity = `${row.tn}\u0000${row.b}`;
+      if (seen.has(identity)) throw new Error("Tender pack contains a duplicate record.");
+      seen.add(identity);
+    }
+    return pack;
+  }
+
+  async function validateDecodedStatePack(resource, bytes) {
+    if (!(bytes instanceof ArrayBuffer) || bytes.byteLength !== resource.bytes) {
+      throw new Error("State-pack byte length does not match its signed manifest.");
+    }
+    const digest = await sha256Bytes(bytes);
+    if (!digest || digest !== resource.sha256) {
+      throw new Error("State-pack checksum does not match its signed manifest.");
+    }
+    if (!window.TextDecoder) throw new Error("This device cannot decode verified state data.");
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const pack = JSON.parse(text);
+    return resource.kind === "routing"
+      ? validateRoutingPack(resource, pack) : validateTenderPack(resource, pack);
+  }
+
+  const statePackCacheKey = (resource) =>
+    `${resource.pack_id}@${resource.pack_version}:${resource.sha256}`;
+  const allStatePacks = () => op("readonly", (store) => store.getAll(), "state_packs");
+  const getCachedStatePack = (key) => op("readonly", (store) => store.get(key), "state_packs");
+  const putCachedStatePack = (record) => op("readwrite", (store) => store.put(record), "state_packs");
+  const deleteCachedStatePack = (key) => op("readwrite", (store) => store.delete(key), "state_packs");
+
+  async function cachedPackBytes(record) {
+    const value = record && (record.blob || record.payload);
+    if (value instanceof Blob) return value.arrayBuffer();
+    if (value instanceof ArrayBuffer) return value.slice(0);
+    if (ArrayBuffer.isView(value)) {
+      return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+    }
+    throw new Error("Cached state pack has no binary payload.");
+  }
+
+  async function touchStatePack(record) {
+    if (!record || Date.now() - Number(record.last_used_at || 0) < 24 * 60 * 60 * 1000) return;
+    record.last_used_at = Date.now();
+    try { await putCachedStatePack(record); } catch (e) { /* usage metadata is optional */ }
+  }
+
+  async function pruneStatePacks(activePackId = null) {
+    const [manifest, highwayManifest, contractManifest, roadNoticeManifest,
+      roadAgreementManifest] = await Promise.all([
+      getStatePackManifest(), getHighwayPackManifest(), getContractPackManifest(),
+      getRoadNoticeManifest(), getRoadAgreementManifest(),
+    ]);
+    if (!manifest && !highwayManifest && !contractManifest && !roadNoticeManifest
+        && !roadAgreementManifest) {
+      return { removed: 0, bytes: 0 };
+    }
+    let records;
+    try { records = await allStatePacks(); } catch (e) { return { removed: 0, bytes: 0 }; }
+    const resources = [
+      ...Object.values((manifest && manifest.resources) || {}),
+      ...Object.values((highwayManifest && highwayManifest.tiles) || {}),
+      ...Object.values((contractManifest && contractManifest.resources) || {}),
+      ...Object.values((roadNoticeManifest && roadNoticeManifest.resources) || {}),
+      ...Object.values((roadAgreementManifest && roadAgreementManifest.resources) || {}),
+    ];
+    const currentByKey = new Map(resources
+      .map((resource) => [statePackCacheKey(resource), resource]));
+    const protectedIds = new Set([
+      activePackId, ..._statePackPromises.keys(),
+      ...[..._highwayTilePromises.keys()].map((id) => `in-nh-${id}`),
+      ..._contractPackPromises.keys(),
+      ..._roadNoticePackPromises.keys(),
+      ..._roadAgreementPackPromises.keys(),
+    ]
+      .filter(Boolean));
+    const now = Date.now(), toDelete = [], kept = [];
+    for (const record of records || []) {
+      const resource = record && currentByKey.get(record.cache_key);
+      if (!resource || record.pack_id !== resource.pack_id || record.sha256 !== resource.sha256
+          || record.bytes !== resource.bytes) {
+        toDelete.push(record); continue;
+      }
+      const ageDays = Math.max(0, now - Number(record.last_used_at || record.installed_at || 0))
+        / (24 * 60 * 60 * 1000);
+      const unusedLimit = resource.kind === "highways"
+        ? highwayManifest.cache.max_unused_days
+        : resource.kind === "highway_contracts"
+          ? contractManifest.cache.max_unused_days
+          : resource.kind === "road_procurement_notices"
+            ? roadNoticeManifest.cache.max_unused_days
+          : resource.kind === "road_current_agreements"
+            ? roadAgreementManifest.cache.max_unused_days
+          : resource.kind === "tenders"
+            ? manifest.cache.tender_max_unused_days : manifest.cache.routing_max_unused_days;
+      if (ageDays > unusedLimit && !protectedIds.has(resource.pack_id)) {
+        toDelete.push(record); continue;
+      }
+      kept.push({ record, resource });
+    }
+    let total = kept.reduce((sum, item) => sum + Math.max(0, Number(item.record.bytes) || 0), 0);
+    kept.sort((left, right) => {
+      const tenderFirst = (left.resource.kind === "tenders" ? 0 : 1)
+        - (right.resource.kind === "tenders" ? 0 : 1);
+      return tenderFirst || Number(left.record.last_used_at || 0) - Number(right.record.last_used_at || 0);
+    });
+    const maxBytes = Math.min(
+      manifest ? manifest.cache.max_bytes : Infinity,
+      highwayManifest ? highwayManifest.cache.max_bytes : Infinity,
+      contractManifest ? contractManifest.cache.max_bytes : Infinity,
+      roadNoticeManifest ? roadNoticeManifest.cache.max_bytes : Infinity,
+      roadAgreementManifest ? roadAgreementManifest.cache.max_bytes : Infinity);
+    for (const item of kept) {
+      if (total <= maxBytes) break;
+      if (protectedIds.has(item.resource.pack_id)) continue;
+      toDelete.push(item.record);
+      total -= Math.max(0, Number(item.record.bytes) || 0);
+    }
+    let removed = 0, removedBytes = 0;
+    for (const record of toDelete) {
+      try {
+        await deleteCachedStatePack(record.cache_key);
+        removed++;
+        removedBytes += Math.max(0, Number(record.bytes) || 0);
+      } catch (e) { /* cleanup must never break the active report */ }
+    }
+    return { removed, bytes: removedBytes };
+  }
+
+  async function fetchStatePack(resource) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), STATE_PACK_FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(resolvePackUrl(resource), {
+        cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer",
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const contentType = response.headers.get("content-type") || "";
+      // Content-Length can describe gzip/br transfer bytes while arrayBuffer() contains
+      // decoded bytes. The post-read exact length and SHA below are the authoritative
+      // checks, so a CDN compression choice cannot disable every production pack.
+      if (contentType && !/json/i.test(contentType)) return null;
+      const bytes = await response.arrayBuffer();
+      const pack = await validateDecodedStatePack(resource, bytes);
+      return { pack, bytes };
+    } catch (e) { return null; }
+    finally { clearTimeout(timer); }
+  }
+
+  async function loadStatePack(packId) {
+    if (_statePackPromises.has(packId)) return _statePackPromises.get(packId);
+    const task = (async () => {
+      const manifest = await getStatePackManifest();
+      const resource = manifest && manifest.resources[packId];
+      // Routing data includes contacts and official handoff metadata, not only durable
+      // polygons. Once its declared review window expires, fail closed until a refreshed
+      // signed pack is published rather than silently sending citizens to a stale desk.
+      if (!resource || !catalogResourceWithinReview(resource)) return null;
+      const cacheKey = statePackCacheKey(resource);
+      const memory = _statePackMemory.get(packId);
+      if (memory && memory.cache_key === cacheKey) return memory.pack;
+
+      let cached = null;
+      try { cached = await getCachedStatePack(cacheKey); } catch (e) { /* download below */ }
+      if (cached) {
+        try {
+          const pack = await validateDecodedStatePack(resource, await cachedPackBytes(cached));
+          _statePackMemory.set(packId, { cache_key: cacheKey, pack, resource });
+          touchStatePack(cached);
+          pruneStatePacks(packId);
+          return pack;
+        } catch (e) {
+          try { await deleteCachedStatePack(cacheKey); } catch (_) {}
+        }
+      }
+
+      const downloaded = await fetchStatePack(resource);
+      if (!downloaded) return null;
+      const { pack, bytes } = downloaded;
+      const now = Date.now();
+      if (bytes instanceof ArrayBuffer) {
+        const record = {
+          cache_key: cacheKey, pack_id: resource.pack_id, pack_version: resource.pack_version,
+          state_code: resource.state_code, kind: resource.kind, sha256: resource.sha256,
+          bytes: resource.bytes, installed_at: now, last_used_at: now,
+          blob: new Blob([bytes], { type: "application/json" }),
+        };
+        try { await putCachedStatePack(record); }
+        catch (e) {
+          await pruneStatePacks(packId);
+          try { await putCachedStatePack(record); } catch (_) { /* valid for this session */ }
+        }
+      }
+      _statePackMemory.set(packId, { cache_key: cacheKey, pack, resource });
+      pruneStatePacks(packId);
+      return pack;
+    })();
+    _statePackPromises.set(packId, task);
+    try { return await task; }
+    finally { _statePackPromises.delete(packId); }
+  }
+
+  function statePackProvenance(packId, prefix = "routing") {
+    const item = _statePackMemory.get(packId);
+    const resource = item && item.resource;
+    if (!resource) return {};
+    return {
+      [`${prefix}_pack_id`]: resource.pack_id,
+      [`${prefix}_pack_version`]: resource.pack_version,
+      [`${prefix}_pack_sha256`]: resource.sha256,
+      [`${prefix}_pack_state_code`]: resource.state_code,
+    };
+  }
+
+  // Current/open catalogs are evidence only while their builder-declared review window
+  // remains current. A frozen manifest must fail closed instead of turning an old portal
+  // status into a claim about today's project or bid state.
+  function catalogResourceWithinReview(resource, now = Date.now()) {
+    if (!resource || !/^\d{4}-\d{2}-\d{2}$/.test(String(resource.review_after || ""))) {
+      return false;
+    }
+    const deadline = Date.parse(`${resource.review_after}T23:59:59.999Z`);
+    return Number.isFinite(deadline) && Number.isFinite(now) && now <= deadline;
+  }
+
+  async function fetchOptionalCatalogManifest(filename, validate) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), OPTIONAL_CATALOG_TIMEOUT_MS);
+    try {
+      const response = await fetch(filename, {
+        cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer",
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const text = await response.text();
+      if (!text || text.length > 128 * 1024) return null;
+      return validate(JSON.parse(text));
+    } catch (e) { return null; }
+    finally { clearTimeout(timer); }
+  }
+
+  // Contract data has a separate, append-only catalog. Keeping it out of the v1.35
+  // routing catalog preserves the immutable Play closed-test bundle while allowing the
+  // web app and a later Android release to fetch only the nearby State/UT highway pack.
+  const CONTRACT_MANIFEST_FILE = "contract-manifest-v1.36.json";
+  const CONTRACT_PACK_MAX_BYTES = 8 * 1024 * 1024;
+  let _contractPackManifest = null, _contractPackManifestPromise = null;
+  const _contractPackMemory = new Map(), _contractPackPromises = new Map();
+
+  function validateContractPackManifest(manifest) {
+    if (!exactObjectKeys(manifest,
+      ["format", "schema_version", "catalog_version", "generated_at", "cache", "resources"])
+        || manifest.format !== "pothole-contract-manifest"
+        || manifest.schema_version !== 1 || manifest.catalog_version !== 1
+        || !/^\d{4}-\d{2}-\d{2}$/.test(manifest.generated_at)
+        || !exactObjectKeys(manifest.cache, ["max_bytes", "max_unused_days"])
+        || !Number.isInteger(manifest.cache.max_bytes)
+        || manifest.cache.max_bytes < 1024 * 1024 || manifest.cache.max_bytes > 128 * 1024 * 1024
+        || !Number.isInteger(manifest.cache.max_unused_days)
+        || manifest.cache.max_unused_days < 1 || manifest.cache.max_unused_days > 90
+        || !manifest.resources || typeof manifest.resources !== "object"
+        || Array.isArray(manifest.resources)) {
+      throw new Error("Invalid contract-pack manifest.");
+    }
+    for (const [packId, resource] of Object.entries(manifest.resources)) {
+      const fields = ["pack_id", "state_code", "kind", "pack_version", "schema_version",
+        "adapter", "path", "url", "bytes", "sha256", "records", "coverage_scope",
+        "source_retrieved_at", "review_after", "licenses"];
+      const state = String(resource && resource.state_code || "");
+      const pathMatch = resource && typeof resource.path === "string"
+        ? resource.path.match(/^packs\/v1\/contracts\/([a-z]{2})\/highways-([0-9a-f]{64})\.json$/)
+        : null;
+      if (!exactObjectKeys(resource, fields)
+          || packId !== `in-nh-contracts-${state.toLowerCase()}`
+          || resource.pack_id !== packId || !/^[A-Z]{2}$/.test(state)
+          || resource.kind !== "highway_contracts"
+          || resource.adapter !== "nhai-nhidcl-public-projects-v1"
+          || resource.pack_version !== 1 || resource.schema_version !== 1
+          || !pathMatch || pathMatch[1] !== state.toLowerCase()
+          || pathMatch[2] !== resource.sha256
+          || resource.url !== PACK_SITE_ROOT + resource.path
+          || !Number.isInteger(resource.bytes) || resource.bytes <= 0
+          || resource.bytes > CONTRACT_PACK_MAX_BYTES
+          || !/^[0-9a-f]{64}$/.test(resource.sha256)
+          || !Number.isInteger(resource.records) || resource.records <= 0
+          || resource.records > 10000
+          || typeof resource.coverage_scope !== "string" || !resource.coverage_scope
+          || !/^\d{4}-\d{2}-\d{2}$/.test(resource.source_retrieved_at)
+          || !/^\d{4}-\d{2}-\d{2}$/.test(resource.review_after)
+          || !Array.isArray(resource.licenses) || !resource.licenses.length
+          || resource.licenses.some((item) => typeof item !== "string" || !item)) {
+        throw new Error(`Invalid contract-pack resource: ${packId}`);
+      }
+    }
+    return manifest;
+  }
+
+  async function getContractPackManifest() {
+    if (_contractPackManifest) return _contractPackManifest;
+    if (_contractPackManifestPromise) return _contractPackManifestPromise;
+    _contractPackManifestPromise = fetchOptionalCatalogManifest(
+      CONTRACT_MANIFEST_FILE, validateContractPackManifest).then((manifest) => {
+      _contractPackManifest = manifest;
+      return manifest;
+    });
+    const result = await _contractPackManifestPromise;
+    _contractPackManifestPromise = null;
+    return result;
+  }
+
+  const validContractDate = (value) => value === null
+    || (typeof value === "string" && value.length <= 40);
+
+  function validateHighwayContractPack(resource, pack) {
+    if (!exactObjectKeys(pack, ["format", "schema_version", "pack_id", "pack_version",
+      "state_code", "adapter", "generated_at", "contracts"])
+        || pack.format !== "pothole-highway-contract-pack"
+        || pack.schema_version !== 1 || pack.pack_version !== 1
+        || pack.pack_id !== resource.pack_id || pack.state_code !== resource.state_code
+        || pack.adapter !== resource.adapter || pack.generated_at !== resource.source_retrieved_at
+        || !Array.isArray(pack.contracts) || pack.contracts.length !== resource.records) {
+      throw new Error("Highway contract-pack envelope is invalid.");
+    }
+    const fields = new Set(["record_id", "reference_label", "reference_value", "state_code",
+      "agency", "lifecycle", "lifecycle_status", "title", "highway_refs", "chainages",
+      "contractor", "published_at", "start_date", "likely_completion_date", "division",
+      "source_name", "source_url", "retrieved_at", "scope_verified", "segment_verified",
+      "award_verified", "dlp_verified"]);
+    const seen = new Set();
+    for (const row of pack.contracts) {
+      if (!exactObjectKeys(row, fields)
+          || typeof row.record_id !== "string" || !row.record_id || row.record_id.length > 160
+          || !["UPC", "Tender ID", "NHIDCL notice"].includes(row.reference_label)
+          || typeof row.reference_value !== "string" || !row.reference_value
+          || row.reference_value.length > 200 || row.state_code !== resource.state_code
+          || !["NHAI", "MoRTH", "NHIDCL"].includes(row.agency)
+          || !["current_project", "procurement_notice"].includes(row.lifecycle)
+          || typeof row.lifecycle_status !== "string" || !row.lifecycle_status
+          || row.lifecycle_status.length > 160
+          || typeof row.title !== "string" || !row.title || row.title.length > 1200
+          || !Array.isArray(row.highway_refs) || !row.highway_refs.length
+          || row.highway_refs.length > 12
+          || row.highway_refs.some((ref) => typeof ref !== "string" || !HIGHWAY_REF_RE.test(ref))
+          || !Array.isArray(row.chainages) || row.chainages.length > 16
+          || row.chainages.some((range) => !exactObjectKeys(range, ["start_km", "end_km"])
+            || !Number.isFinite(range.start_km) || !Number.isFinite(range.end_km)
+            || range.start_km < 0 || range.end_km < range.start_km || range.end_km > 10000)
+          || !(row.contractor === null || (typeof row.contractor === "string"
+            && row.contractor.length > 0 && row.contractor.length <= 300))
+          || ![row.published_at, row.start_date, row.likely_completion_date].every(validContractDate)
+          || !(row.division === null || (typeof row.division === "string" && row.division.length <= 300))
+          || typeof row.source_name !== "string" || !row.source_name
+          || !/^https:\/\//.test(String(row.source_url || ""))
+          || !/^\d{4}-\d{2}-\d{2}$/.test(String(row.retrieved_at || ""))
+          || row.scope_verified !== true || row.segment_verified !== false
+          || typeof row.award_verified !== "boolean" || row.dlp_verified !== false
+          || (row.lifecycle === "procurement_notice"
+            && (row.contractor !== null || row.award_verified !== false))) {
+        throw new Error("Highway contract pack contains an invalid record.");
+      }
+      if (seen.has(row.record_id)) throw new Error("Highway contract pack contains a duplicate.");
+      seen.add(row.record_id);
+    }
+    return pack;
+  }
+
+  async function validateDecodedContractPack(resource, bytes) {
+    if (!(bytes instanceof ArrayBuffer) || bytes.byteLength !== resource.bytes) {
+      throw new Error("Contract-pack byte length does not match its manifest.");
+    }
+    const digest = await sha256Bytes(bytes);
+    if (!digest || digest !== resource.sha256 || !window.TextDecoder) {
+      throw new Error("Contract-pack checksum does not match its manifest.");
+    }
+    const pack = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return validateHighwayContractPack(resource, pack);
+  }
+
+  async function fetchContractPack(resource) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), OPTIONAL_CATALOG_TIMEOUT_MS);
+    try {
+      const response = await fetch(resolvePackUrl(resource), {
+        cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer",
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType && !/json/i.test(contentType)) return null;
+      const bytes = await response.arrayBuffer();
+      return { pack: await validateDecodedContractPack(resource, bytes), bytes };
+    } catch (e) { return null; }
+    finally { clearTimeout(timer); }
+  }
+
+  async function loadHighwayContractPack(stateCode) {
+    if (!/^[A-Z]{2}$/.test(String(stateCode || ""))) return null;
+    const packId = `in-nh-contracts-${stateCode.toLowerCase()}`;
+    if (_contractPackPromises.has(packId)) return _contractPackPromises.get(packId);
+    const task = (async () => {
+      const manifest = await getContractPackManifest();
+      const resource = manifest && manifest.resources[packId];
+      if (!resource || !catalogResourceWithinReview(resource)) return null;
+      const cacheKey = statePackCacheKey(resource);
+      const memory = _contractPackMemory.get(packId);
+      if (memory && memory.cache_key === cacheKey) return memory.pack;
+      let cached = null;
+      try { cached = await getCachedStatePack(cacheKey); } catch (e) { /* download below */ }
+      if (cached) {
+        try {
+          const pack = await validateDecodedContractPack(resource, await cachedPackBytes(cached));
+          _contractPackMemory.set(packId, { cache_key: cacheKey, pack, resource });
+          touchStatePack(cached);
+          pruneStatePacks(packId);
+          return pack;
+        } catch (e) {
+          try { await deleteCachedStatePack(cacheKey); } catch (_) {}
+        }
+      }
+      const downloaded = await fetchContractPack(resource);
+      if (!downloaded) return null;
+      const now = Date.now();
+      const record = {
+        cache_key: cacheKey, pack_id: resource.pack_id, pack_version: resource.pack_version,
+        state_code: resource.state_code, kind: resource.kind, sha256: resource.sha256,
+        bytes: resource.bytes, installed_at: now, last_used_at: now,
+        blob: new Blob([downloaded.bytes], { type: "application/json" }),
+      };
+      try { await putCachedStatePack(record); }
+      catch (e) {
+        await pruneStatePacks(packId);
+        try { await putCachedStatePack(record); } catch (_) { /* valid for this session */ }
+      }
+      _contractPackMemory.set(packId, { cache_key: cacheKey, pack: downloaded.pack, resource });
+      pruneStatePacks(packId);
+      return downloaded.pack;
+    })();
+    _contractPackPromises.set(packId, task);
+    try { return await task; }
+    finally { _contractPackPromises.delete(packId); }
+  }
+
+  function contractPackProvenance(stateCode) {
+    const packId = `in-nh-contracts-${String(stateCode || "").toLowerCase()}`;
+    const item = _contractPackMemory.get(packId);
+    const resource = item && item.resource;
+    if (!resource) return {};
+    return {
+      tender_pack_id: resource.pack_id,
+      tender_pack_version: resource.pack_version,
+      tender_pack_sha256: resource.sha256,
+      tender_pack_state_code: resource.state_code,
+    };
+  }
+
+  function resetContractPackMemory() {
+    _contractPackManifest = null;
+    _contractPackManifestPromise = null;
+    _contractPackMemory.clear();
+    _contractPackPromises.clear();
+  }
+
+  // Current official State/UT portal listings are procurement notices, not awards. They use a
+  // separate catalog and schema so a notice can never acquire contractor, segment or
+  // warranty fields merely by passing through the National Highway contract loader.
+  const ROAD_NOTICE_MANIFEST_FILE = "road-notice-manifest-v1.36.json";
+  const ROAD_NOTICE_PACK_MAX_BYTES = 8 * 1024 * 1024;
+  let _roadNoticeManifest = null, _roadNoticeManifestPromise = null;
+  const _roadNoticePackMemory = new Map(), _roadNoticePackPromises = new Map();
+
+  function validRoadNoticePolicy(policy) {
+    return exactObjectKeys(policy, ["award_verified", "candidate_only", "dlp_verified",
+      "lifecycle", "scope", "segment_verified"])
+      && policy.candidate_only === true && policy.lifecycle === "procurement_notice"
+      && policy.scope === "road_surface" && policy.segment_verified === false
+      && policy.award_verified === false && policy.dlp_verified === false;
+  }
+
+  function validateRoadNoticeManifest(manifest) {
+    if (!exactObjectKeys(manifest, ["format", "schema_version", "catalog_version",
+      "generated_at", "cache", "inference_policy", "resources"])
+        || manifest.format !== "pothole-road-notice-manifest"
+        || manifest.schema_version !== 1 || manifest.catalog_version !== 1
+        || !/^\d{4}-\d{2}-\d{2}$/.test(String(manifest.generated_at || ""))
+        || !exactObjectKeys(manifest.cache, ["max_bytes", "max_unused_days"])
+        || !Number.isInteger(manifest.cache.max_bytes)
+        || manifest.cache.max_bytes < 1024 * 1024
+        || manifest.cache.max_bytes > 128 * 1024 * 1024
+        || !Number.isInteger(manifest.cache.max_unused_days)
+        || manifest.cache.max_unused_days < 1 || manifest.cache.max_unused_days > 90
+        || !validRoadNoticePolicy(manifest.inference_policy)
+        || !manifest.resources || typeof manifest.resources !== "object"
+        || Array.isArray(manifest.resources)) {
+      throw new Error("Invalid road-notice manifest.");
+    }
+    for (const [packId, resource] of Object.entries(manifest.resources)) {
+      const fields = ["adapter", "bytes", "candidate_only", "kind", "licenses",
+        "lifecycle", "pack_id", "pack_version", "path", "records", "review_after",
+        "rows_excluded_by_scope", "rows_scanned", "schema_version", "sha256",
+        "source_retrieved_at", "sources", "state_code", "url"];
+      const state = String(resource && resource.state_code || "");
+      const pathMatch = resource && typeof resource.path === "string"
+        ? resource.path.match(
+          /^packs\/v1\/road-notices\/([a-z]{2})\/notices-([0-9a-f]{64})\.json$/)
+        : null;
+      if (!exactObjectKeys(resource, fields)
+          || packId !== `in-road-notices-${state.toLowerCase()}`
+          || resource.pack_id !== packId || !/^[A-Z]{2}$/.test(state)
+          || resource.kind !== "road_procurement_notices"
+          || resource.adapter !== "official-road-notices-v2"
+          || resource.lifecycle !== "procurement_notice"
+          || resource.candidate_only !== true
+          || resource.pack_version !== 1 || resource.schema_version !== 1
+          || !pathMatch || pathMatch[1] !== state.toLowerCase()
+          || pathMatch[2] !== resource.sha256
+          || resource.url !== PACK_SITE_ROOT + resource.path
+          || !Number.isInteger(resource.bytes) || resource.bytes <= 0
+          || resource.bytes > ROAD_NOTICE_PACK_MAX_BYTES
+          || !/^[0-9a-f]{64}$/.test(String(resource.sha256 || ""))
+          || !Number.isInteger(resource.records) || resource.records < 0
+          || resource.records > 20000
+          || !Number.isInteger(resource.sources) || resource.sources < 1
+          || !Number.isInteger(resource.rows_scanned) || resource.rows_scanned < 0
+          || !Number.isInteger(resource.rows_excluded_by_scope)
+          || resource.rows_excluded_by_scope < 0
+          || resource.rows_excluded_by_scope + resource.records !== resource.rows_scanned
+          || !/^\d{4}-\d{2}-\d{2}$/.test(String(resource.source_retrieved_at || ""))
+          || !/^\d{4}-\d{2}-\d{2}$/.test(String(resource.review_after || ""))
+          || !Array.isArray(resource.licenses) || !resource.licenses.length
+          || resource.licenses.some((item) => typeof item !== "string" || !item)) {
+        throw new Error(`Invalid road-notice resource: ${packId}`);
+      }
+    }
+    return manifest;
+  }
+
+  async function getRoadNoticeManifest() {
+    if (_roadNoticeManifest) return _roadNoticeManifest;
+    if (_roadNoticeManifestPromise) return _roadNoticeManifestPromise;
+    _roadNoticeManifestPromise = fetchOptionalCatalogManifest(
+      ROAD_NOTICE_MANIFEST_FILE, validateRoadNoticeManifest).then((manifest) => {
+      _roadNoticeManifest = manifest;
+      return manifest;
+    });
+    const result = await _roadNoticeManifestPromise;
+    _roadNoticeManifestPromise = null;
+    return result;
+  }
+
+  const ROAD_NOTICE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/;
+
+  function validateRoadNoticePack(resource, pack) {
+    if (!exactObjectKeys(pack, ["adapter", "format", "generated_at", "inference_policy",
+      "notices", "pack_id", "pack_version", "schema_version", "sources", "state_code"])
+        || pack.format !== "pothole-official-road-notice-pack"
+        || pack.schema_version !== 1 || pack.pack_version !== 1
+        || pack.pack_id !== resource.pack_id || pack.state_code !== resource.state_code
+        || pack.adapter !== resource.adapter || pack.generated_at !== resource.source_retrieved_at
+        || !validRoadNoticePolicy(pack.inference_policy)
+        || !Array.isArray(pack.sources) || pack.sources.length !== resource.sources
+        || !Array.isArray(pack.notices) || pack.notices.length !== resource.records) {
+      throw new Error("Road-notice pack envelope is invalid.");
+    }
+    const sourceFields = ["retrieved_at", "rows_excluded_by_scope", "rows_scanned",
+      "source_id", "source_name", "source_url"];
+    const sourceIds = new Set();
+    for (const source of pack.sources) {
+      if (!exactObjectKeys(source, sourceFields)
+          || !/^in-[a-z]{2}-[a-z0-9][a-z0-9-]*$/.test(String(source.source_id || ""))
+          || typeof source.source_name !== "string" || !source.source_name
+          || source.source_name.length > 300
+          || !/^https:\/\//.test(String(source.source_url || ""))
+          || !ROAD_NOTICE_TIMESTAMP_RE.test(String(source.retrieved_at || ""))
+          || !Number.isInteger(source.rows_scanned) || source.rows_scanned < 0
+          || !Number.isInteger(source.rows_excluded_by_scope)
+          || source.rows_excluded_by_scope < 0
+          || source.rows_excluded_by_scope > source.rows_scanned
+          || sourceIds.has(source.source_id)) {
+        throw new Error("Road-notice pack source receipt is invalid.");
+      }
+      sourceIds.add(source.source_id);
+    }
+    const noticeFields = ["award_verified", "closing_at", "dlp_verified", "lifecycle",
+      "opening_at", "organisation_chain", "published_at", "record_id", "scope",
+      "segment_verified", "source_id", "source_url", "tender_id", "tender_reference", "title"];
+    const seen = new Set();
+    for (const row of pack.notices) {
+      if (!exactObjectKeys(row, noticeFields)
+          || typeof row.record_id !== "string" || !row.record_id
+          || row.record_id.length > 280 || seen.has(row.record_id)
+          || typeof row.tender_id !== "string" || !row.tender_id
+          || row.tender_id.length > 160
+          || typeof row.tender_reference !== "string" || !row.tender_reference
+          || row.tender_reference.length > 300
+          || typeof row.title !== "string" || !row.title || row.title.length > 1200
+          || typeof row.organisation_chain !== "string" || !row.organisation_chain
+          || row.organisation_chain.length > 800
+          || !ROAD_NOTICE_TIMESTAMP_RE.test(String(row.closing_at || ""))
+          || ![row.published_at, row.opening_at]
+            .every((value) => value === null
+              || ROAD_NOTICE_TIMESTAMP_RE.test(String(value || "")))
+          || !sourceIds.has(row.source_id)
+          || !/^https:\/\//.test(String(row.source_url || ""))
+          || row.lifecycle !== "procurement_notice" || row.scope !== "road_surface"
+          || row.segment_verified !== false || row.award_verified !== false
+          || row.dlp_verified !== false
+          || !tenderCoversCarriageway(row.title, row.tender_reference)) {
+        throw new Error("Road-notice pack contains an invalid record.");
+      }
+      seen.add(row.record_id);
+    }
+    const scanned = pack.sources.reduce((sum, source) => sum + source.rows_scanned, 0);
+    const excluded = pack.sources.reduce(
+      (sum, source) => sum + source.rows_excluded_by_scope, 0);
+    if (scanned !== resource.rows_scanned || excluded !== resource.rows_excluded_by_scope
+        || excluded + pack.notices.length !== scanned) {
+      throw new Error("Road-notice pack source accounting is invalid.");
+    }
+    return pack;
+  }
+
+  async function validateDecodedRoadNoticePack(resource, bytes) {
+    if (!(bytes instanceof ArrayBuffer) || bytes.byteLength !== resource.bytes) {
+      throw new Error("Road-notice pack byte length does not match its manifest.");
+    }
+    const digest = await sha256Bytes(bytes);
+    if (!digest || digest !== resource.sha256 || !window.TextDecoder) {
+      throw new Error("Road-notice pack checksum does not match its manifest.");
+    }
+    const pack = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return validateRoadNoticePack(resource, pack);
+  }
+
+  async function fetchRoadNoticePack(resource) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), OPTIONAL_CATALOG_TIMEOUT_MS);
+    try {
+      const response = await fetch(resolvePackUrl(resource), {
+        cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer",
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType && !/json/i.test(contentType)) return null;
+      const bytes = await response.arrayBuffer();
+      return { pack: await validateDecodedRoadNoticePack(resource, bytes), bytes };
+    } catch (e) { return null; }
+    finally { clearTimeout(timer); }
+  }
+
+  async function loadRoadNoticePack(stateCode) {
+    if (!/^[A-Z]{2}$/.test(String(stateCode || ""))) return null;
+    const packId = `in-road-notices-${stateCode.toLowerCase()}`;
+    if (_roadNoticePackPromises.has(packId)) return _roadNoticePackPromises.get(packId);
+    const task = (async () => {
+      const manifest = await getRoadNoticeManifest();
+      const resource = manifest && manifest.resources[packId];
+      if (!resource || !catalogResourceWithinReview(resource)) return null;
+      const cacheKey = statePackCacheKey(resource);
+      const memory = _roadNoticePackMemory.get(packId);
+      if (memory && memory.cache_key === cacheKey) return memory.pack;
+      let cached = null;
+      try { cached = await getCachedStatePack(cacheKey); } catch (e) { /* download below */ }
+      if (cached) {
+        try {
+          const pack = await validateDecodedRoadNoticePack(resource, await cachedPackBytes(cached));
+          _roadNoticePackMemory.set(packId, { cache_key: cacheKey, pack, resource });
+          touchStatePack(cached);
+          pruneStatePacks(packId);
+          return pack;
+        } catch (e) {
+          try { await deleteCachedStatePack(cacheKey); } catch (_) {}
+        }
+      }
+      const downloaded = await fetchRoadNoticePack(resource);
+      if (!downloaded) return null;
+      const now = Date.now();
+      const record = {
+        cache_key: cacheKey, pack_id: resource.pack_id, pack_version: resource.pack_version,
+        state_code: resource.state_code, kind: resource.kind, sha256: resource.sha256,
+        bytes: resource.bytes, installed_at: now, last_used_at: now,
+        blob: new Blob([downloaded.bytes], { type: "application/json" }),
+      };
+      try { await putCachedStatePack(record); }
+      catch (e) {
+        await pruneStatePacks(packId);
+        try { await putCachedStatePack(record); } catch (_) { /* valid for this session */ }
+      }
+      _roadNoticePackMemory.set(packId,
+        { cache_key: cacheKey, pack: downloaded.pack, resource });
+      pruneStatePacks(packId);
+      return downloaded.pack;
+    })();
+    _roadNoticePackPromises.set(packId, task);
+    try { return await task; }
+    finally { _roadNoticePackPromises.delete(packId); }
+  }
+
+  function roadNoticePackProvenance(stateCode) {
+    const packId = `in-road-notices-${String(stateCode || "").toLowerCase()}`;
+    const item = _roadNoticePackMemory.get(packId);
+    const resource = item && item.resource;
+    if (!resource) return {};
+    return {
+      tender_pack_id: resource.pack_id,
+      tender_pack_version: resource.pack_version,
+      tender_pack_sha256: resource.sha256,
+      tender_pack_state_code: resource.state_code,
+    };
+  }
+
+  function resetRoadNoticePackMemory() {
+    _roadNoticeManifest = null;
+    _roadNoticeManifestPromise = null;
+    _roadNoticePackMemory.clear();
+    _roadNoticePackPromises.clear();
+  }
+
+  // PMGSY/OMMAS publishes road and agreement identifiers for source-reported
+  // "In Progress" projects. This is stronger location evidence than a procurement
+  // notice, but it still supplies no road geometry, named contractor, completion /
+  // maintenance dates or DLP. A separate schema keeps those absences enforceable.
+  const ROAD_AGREEMENT_MANIFEST_FILE = "road-agreement-manifest-v1.36.json";
+  const ROAD_AGREEMENT_PACK_MAX_BYTES = 8 * 1024 * 1024;
+  let _roadAgreementManifest = null, _roadAgreementManifestPromise = null;
+  const _roadAgreementPackMemory = new Map(), _roadAgreementPackPromises = new Map();
+
+  function validRoadAgreementPolicy(policy) {
+    return exactObjectKeys(policy, ["agreement_verified", "award_verified", "candidate_only",
+      "contractor_assignment_verified", "dlp_verified", "freshness_window_years", "lifecycle",
+      "scope_verified", "segment_verified", "source_status"])
+      && policy.candidate_only === true && policy.lifecycle === "current_project"
+      && policy.source_status === "In Progress" && policy.segment_verified === false
+      && policy.freshness_window_years === 5 && policy.scope_verified === true
+      && policy.agreement_verified === true && policy.award_verified === false
+      && policy.contractor_assignment_verified === false && policy.dlp_verified === false;
+  }
+
+  function validateRoadAgreementManifest(manifest) {
+    if (!exactObjectKeys(manifest, ["format", "schema_version", "catalog_version",
+      "generated_at", "cache", "inference_policy", "resources"])
+        || manifest.format !== "pothole-road-agreement-manifest"
+        || manifest.schema_version !== 1 || manifest.catalog_version !== 1
+        || !/^\d{4}-\d{2}-\d{2}$/.test(String(manifest.generated_at || ""))
+        || !exactObjectKeys(manifest.cache, ["max_bytes", "max_unused_days"])
+        || !Number.isInteger(manifest.cache.max_bytes)
+        || manifest.cache.max_bytes < 1024 * 1024
+        || manifest.cache.max_bytes > 256 * 1024 * 1024
+        || !Number.isInteger(manifest.cache.max_unused_days)
+        || manifest.cache.max_unused_days < 1 || manifest.cache.max_unused_days > 90
+        || !validRoadAgreementPolicy(manifest.inference_policy)
+        || !manifest.resources || typeof manifest.resources !== "object"
+        || Array.isArray(manifest.resources)) {
+      throw new Error("Invalid road-agreement manifest.");
+    }
+    for (const [packId, resource] of Object.entries(manifest.resources)) {
+      const fields = ["adapter", "bytes", "candidate_only", "kind", "licenses",
+        "lifecycle", "pack_id", "pack_version", "path", "records", "review_after",
+        "rows_excluded_by_freshness", "rows_excluded_by_status", "rows_excluded_invalid", "rows_scanned",
+        "schema_version", "sha256", "source_retrieved_at", "sources", "state_code", "url"];
+      const state = String(resource && resource.state_code || "");
+      const pathMatch = resource && typeof resource.path === "string"
+        ? resource.path.match(
+          /^packs\/v1\/road-agreements\/([a-z]{2})\/agreements-([0-9a-f]{64})\.json$/)
+        : null;
+      if (!exactObjectKeys(resource, fields)
+          || packId !== `in-road-agreements-${state.toLowerCase()}`
+          || resource.pack_id !== packId || !/^[A-Z]{2}$/.test(state)
+          || resource.kind !== "road_current_agreements"
+          || resource.adapter !== "pmgsy-ommas-in-progress-v1"
+          || resource.lifecycle !== "current_project" || resource.candidate_only !== true
+          || resource.pack_version !== 1 || resource.schema_version !== 1
+          || !pathMatch || pathMatch[1] !== state.toLowerCase()
+          || pathMatch[2] !== resource.sha256
+          || resource.url !== PACK_SITE_ROOT + resource.path
+          || !Number.isInteger(resource.bytes) || resource.bytes <= 0
+          || resource.bytes > ROAD_AGREEMENT_PACK_MAX_BYTES
+          || !/^[0-9a-f]{64}$/.test(String(resource.sha256 || ""))
+          || !Number.isInteger(resource.records) || resource.records < 0
+          || resource.records > 50000
+          || !Number.isInteger(resource.sources) || resource.sources < 1
+          || !Number.isInteger(resource.rows_scanned) || resource.rows_scanned < 0
+          || !Number.isInteger(resource.rows_excluded_by_status)
+          || resource.rows_excluded_by_status < 0
+          || !Number.isInteger(resource.rows_excluded_by_freshness)
+          || resource.rows_excluded_by_freshness < 0
+          || !Number.isInteger(resource.rows_excluded_invalid)
+          || resource.rows_excluded_invalid < 0
+          || resource.rows_excluded_by_status + resource.rows_excluded_by_freshness
+            + resource.rows_excluded_invalid
+            + resource.records !== resource.rows_scanned
+          || !/^\d{4}-\d{2}-\d{2}$/.test(String(resource.source_retrieved_at || ""))
+          || !/^\d{4}-\d{2}-\d{2}$/.test(String(resource.review_after || ""))
+          || !Array.isArray(resource.licenses) || !resource.licenses.length
+          || resource.licenses.some((item) => typeof item !== "string" || !item)) {
+        throw new Error(`Invalid road-agreement resource: ${packId}`);
+      }
+    }
+    return manifest;
+  }
+
+  async function getRoadAgreementManifest() {
+    if (_roadAgreementManifest) return _roadAgreementManifest;
+    if (_roadAgreementManifestPromise) return _roadAgreementManifestPromise;
+    _roadAgreementManifestPromise = fetchOptionalCatalogManifest(
+      ROAD_AGREEMENT_MANIFEST_FILE, validateRoadAgreementManifest).then((manifest) => {
+      _roadAgreementManifest = manifest;
+      return manifest;
+    });
+    const result = await _roadAgreementManifestPromise;
+    _roadAgreementManifestPromise = null;
+    return result;
+  }
+
+  const nullableRoadAgreementText = (value, max = 400) => value === null
+    || (typeof value === "string" && value.length > 0 && value.length <= max);
+
+  function validateRoadAgreementPack(resource, pack) {
+    if (!exactObjectKeys(pack, ["adapter", "agreement_fields", "agreements", "format",
+      "generated_at", "inference_policy", "pack_id", "pack_version", "schema_version",
+      "sources", "state_code"])
+        || pack.format !== "pothole-pmgsy-road-agreement-pack"
+        || pack.schema_version !== 1 || pack.pack_version !== 1
+        || pack.pack_id !== resource.pack_id || pack.state_code !== resource.state_code
+        || pack.adapter !== resource.adapter || pack.generated_at !== resource.source_retrieved_at
+        || !validRoadAgreementPolicy(pack.inference_policy)
+        || JSON.stringify(pack.agreement_fields) !== JSON.stringify(["record_id", "reference_value",
+          "title", "road_id", "district_name", "road_from", "road_to", "agreement_number",
+          "agreement_date"])
+        || !Array.isArray(pack.sources) || pack.sources.length !== resource.sources
+        || !Array.isArray(pack.agreements) || pack.agreements.length !== resource.records) {
+      throw new Error("Road-agreement pack envelope is invalid.");
+    }
+    const sourceFields = ["endpoint", "freshness_window_years", "records_kept", "retrieved_at",
+      "rows_excluded_by_freshness", "rows_excluded_by_status", "rows_excluded_invalid",
+      "rows_scanned", "source_id", "source_name", "source_state_id", "source_state_name",
+      "source_url"];
+    const sourceIds = new Set();
+    for (const source of pack.sources) {
+      if (!exactObjectKeys(source, sourceFields)
+          || typeof source.source_id !== "string" || !source.source_id
+          || source.source_id.length > 160 || sourceIds.has(source.source_id)
+          || typeof source.source_name !== "string" || !source.source_name
+          || source.source_name.length > 300
+          || !/^https:\/\//.test(String(source.source_url || ""))
+          || !/^https:\/\//.test(String(source.endpoint || ""))
+          || !Number.isInteger(source.source_state_id) || source.source_state_id < 1
+          || typeof source.source_state_name !== "string" || !source.source_state_name
+          || source.source_state_name.length > 160
+          || !ROAD_NOTICE_TIMESTAMP_RE.test(String(source.retrieved_at || ""))
+          || !Number.isInteger(source.rows_scanned) || source.rows_scanned < 0
+          || !Number.isInteger(source.rows_excluded_by_status)
+          || source.rows_excluded_by_status < 0
+          || source.freshness_window_years !== 5
+          || !Number.isInteger(source.rows_excluded_by_freshness)
+          || source.rows_excluded_by_freshness < 0
+          || !Number.isInteger(source.rows_excluded_invalid)
+          || source.rows_excluded_invalid < 0
+          || !Number.isInteger(source.records_kept) || source.records_kept < 0
+          || source.rows_excluded_by_status + source.rows_excluded_by_freshness
+            + source.rows_excluded_invalid
+            + source.records_kept !== source.rows_scanned) {
+        throw new Error("Road-agreement pack source receipt is invalid.");
+      }
+      sourceIds.add(source.source_id);
+    }
+    const agreementFields = pack.agreement_fields;
+    const seen = new Set();
+    const decoded = [];
+    const firstSource = pack.sources[0];
+    const retrievedAt = resource.source_retrieved_at;
+    const latestAgreementDate = Date.parse(`${retrievedAt}T23:59:59.999Z`);
+    const earliestDateObject = new Date(`${retrievedAt}T00:00:00Z`);
+    earliestDateObject.setUTCFullYear(earliestDateObject.getUTCFullYear()
+      - pack.inference_policy.freshness_window_years);
+    const earliestAgreementDate = earliestDateObject.getTime();
+    for (const values of pack.agreements) {
+      if (!Array.isArray(values) || values.length !== agreementFields.length) {
+        throw new Error("Road-agreement pack contains an invalid record.");
+      }
+      const row = Object.fromEntries(agreementFields.map((field, index) => [field, values[index]]));
+      const agreementTime = Date.parse(`${row.agreement_date}T00:00:00Z`);
+      if (typeof row.record_id !== "string" || !row.record_id
+          || row.record_id.length > 240 || seen.has(row.record_id)
+          || typeof row.reference_value !== "string" || !row.reference_value
+          || row.reference_value.length > 200
+          || typeof row.title !== "string" || !row.title || row.title.length > 1200
+          || !(Number.isInteger(row.road_id) || (typeof row.road_id === "string"
+            && row.road_id.length > 0 && row.road_id.length <= 160))
+          || !nullableRoadAgreementText(row.district_name, 240)
+          || !nullableRoadAgreementText(row.road_from, 400)
+          || !nullableRoadAgreementText(row.road_to, 400)
+          || typeof row.agreement_number !== "string" || !row.agreement_number
+          || row.agreement_number.length > 300
+          || !/^\d{4}-\d{2}-\d{2}$/.test(String(row.agreement_date || ""))
+          || !Number.isFinite(agreementTime) || agreementTime < earliestAgreementDate
+          || agreementTime > latestAgreementDate) {
+        throw new Error("Road-agreement pack contains an invalid record.");
+      }
+      seen.add(row.record_id);
+      decoded.push({
+        ...row,
+        reference_label: "PMGSY package",
+        state_code: resource.state_code,
+        agency: "NRIDA / OMMAS",
+        lifecycle: "current_project",
+        lifecycle_status: "In Progress",
+        lifecycle_basis: "source-reported WORK_STATUS; agreement date within five-year snapshot window",
+        package_number: row.reference_value,
+        contractor: null,
+        scope_verified: true,
+        segment_verified: false,
+        agreement_verified: true,
+        award_verified: false,
+        contractor_assignment_verified: false,
+        dlp_verified: false,
+        source_name: firstSource.source_name,
+        // The JSON endpoint is POST-only and not a useful citation when opened by an
+        // officer. Link the official dashboard root; package/agreement IDs remain in
+        // the complaint and the endpoint stays pinned inside the source receipt.
+        source_url: firstSource.source_url,
+        retrieved_at: retrievedAt,
+      });
+    }
+    const scanned = pack.sources.reduce((sum, source) => sum + source.rows_scanned, 0);
+    const excludedStatus = pack.sources.reduce(
+      (sum, source) => sum + source.rows_excluded_by_status, 0);
+    const excludedFreshness = pack.sources.reduce(
+      (sum, source) => sum + source.rows_excluded_by_freshness, 0);
+    const excludedInvalid = pack.sources.reduce(
+      (sum, source) => sum + source.rows_excluded_invalid, 0);
+    const kept = pack.sources.reduce((sum, source) => sum + source.records_kept, 0);
+    if (scanned !== resource.rows_scanned
+        || excludedStatus !== resource.rows_excluded_by_status
+        || excludedFreshness !== resource.rows_excluded_by_freshness
+        || excludedInvalid !== resource.rows_excluded_invalid
+        || kept !== resource.records || kept !== pack.agreements.length) {
+      throw new Error("Road-agreement pack source accounting is invalid.");
+    }
+    // Keep the downloaded representation compact; only decoded, validated objects enter
+    // the in-memory matcher and IndexedDB continues storing the original immutable bytes.
+    pack.agreements = decoded;
+    return pack;
+  }
+
+  async function validateDecodedRoadAgreementPack(resource, bytes) {
+    if (!(bytes instanceof ArrayBuffer) || bytes.byteLength !== resource.bytes) {
+      throw new Error("Road-agreement pack byte length does not match its manifest.");
+    }
+    const digest = await sha256Bytes(bytes);
+    if (!digest || digest !== resource.sha256 || !window.TextDecoder) {
+      throw new Error("Road-agreement pack checksum does not match its manifest.");
+    }
+    const pack = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return validateRoadAgreementPack(resource, pack);
+  }
+
+  async function fetchRoadAgreementPack(resource) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), OPTIONAL_CATALOG_TIMEOUT_MS);
+    try {
+      const response = await fetch(resolvePackUrl(resource), {
+        cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer",
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType && !/json/i.test(contentType)) return null;
+      const bytes = await response.arrayBuffer();
+      return { pack: await validateDecodedRoadAgreementPack(resource, bytes), bytes };
+    } catch (e) { return null; }
+    finally { clearTimeout(timer); }
+  }
+
+  async function loadRoadAgreementPack(stateCode) {
+    if (!/^[A-Z]{2}$/.test(String(stateCode || ""))) return null;
+    const packId = `in-road-agreements-${stateCode.toLowerCase()}`;
+    if (_roadAgreementPackPromises.has(packId)) return _roadAgreementPackPromises.get(packId);
+    const task = (async () => {
+      const manifest = await getRoadAgreementManifest();
+      const resource = manifest && manifest.resources[packId];
+      if (!resource || !catalogResourceWithinReview(resource)) return null;
+      const cacheKey = statePackCacheKey(resource);
+      const memory = _roadAgreementPackMemory.get(packId);
+      if (memory && memory.cache_key === cacheKey) return memory.pack;
+      let cached = null;
+      try { cached = await getCachedStatePack(cacheKey); } catch (e) { /* download below */ }
+      if (cached) {
+        try {
+          const pack = await validateDecodedRoadAgreementPack(
+            resource, await cachedPackBytes(cached));
+          _roadAgreementPackMemory.set(packId, { cache_key: cacheKey, pack, resource });
+          touchStatePack(cached);
+          pruneStatePacks(packId);
+          return pack;
+        } catch (e) {
+          try { await deleteCachedStatePack(cacheKey); } catch (_) {}
+        }
+      }
+      const downloaded = await fetchRoadAgreementPack(resource);
+      if (!downloaded) return null;
+      const now = Date.now();
+      const record = {
+        cache_key: cacheKey, pack_id: resource.pack_id, pack_version: resource.pack_version,
+        state_code: resource.state_code, kind: resource.kind, sha256: resource.sha256,
+        bytes: resource.bytes, installed_at: now, last_used_at: now,
+        blob: new Blob([downloaded.bytes], { type: "application/json" }),
+      };
+      try { await putCachedStatePack(record); }
+      catch (e) {
+        await pruneStatePacks(packId);
+        try { await putCachedStatePack(record); } catch (_) { /* valid for this session */ }
+      }
+      _roadAgreementPackMemory.set(packId,
+        { cache_key: cacheKey, pack: downloaded.pack, resource });
+      pruneStatePacks(packId);
+      return downloaded.pack;
+    })();
+    _roadAgreementPackPromises.set(packId, task);
+    try { return await task; }
+    finally { _roadAgreementPackPromises.delete(packId); }
+  }
+
+  function roadAgreementPackProvenance(stateCode) {
+    const packId = `in-road-agreements-${String(stateCode || "").toLowerCase()}`;
+    const item = _roadAgreementPackMemory.get(packId);
+    const resource = item && item.resource;
+    if (!resource) return {};
+    return {
+      tender_pack_id: resource.pack_id,
+      tender_pack_version: resource.pack_version,
+      tender_pack_sha256: resource.sha256,
+      tender_pack_state_code: resource.state_code,
+    };
+  }
+
+  function resetRoadAgreementPackMemory() {
+    _roadAgreementManifest = null;
+    _roadAgreementManifestPromise = null;
+    _roadAgreementPackMemory.clear();
+    _roadAgreementPackPromises.clear();
+  }
+
+  function resetStatePackMemory() {
+    _statePackManifest = null;
+    _statePackManifestPromise = null;
+    _statePackMemory.clear();
+    _statePackPromises.clear();
+    resetContractPackMemory();
+    municipalCityCoverageCache.clear();
+    municipalCityCoveragePromises.clear();
+    _punjabCoverage = null;
+    _punjabCoveragePromise = null;
+    _tamilNaduCoverage = null;
+    _tamilNaduCoveragePromise = null;
+    _andhraPradeshCoverage = null;
+    _andhraPradeshCoveragePromise = null;
+    _telanganaCoverage = null;
+    _telanganaCoveragePromise = null;
+    _newStateCoverage.clear();
+    _newStateCoveragePromises.clear();
+    _majorCityCoverage = null;
+    _majorCityCoveragePromise = null;
+    _tenders = null;
+    _byBody = null;
+    resetHighwayPackMemory();
+    resetRoadNoticePackMemory();
+    resetRoadAgreementPackMemory();
+  }
+
+  // ---------- nationwide National Highway tiles ----------
+  // The app ships only this small catalog. Each immutable 2-degree tile is downloaded
+  // after a report has a location, checked against its pinned SHA-256, and cached in the
+  // same bounded store as state packs. Geometry says that a point is on a mapped NH/NE
+  // carriageway; it deliberately does not pretend to identify the maintaining agency.
+  const HIGHWAY_MANIFEST_MAX_BYTES = 512 * 1024;
+  const HIGHWAY_TILE_MAX_BYTES = 8 * 1024 * 1024;
+  const HIGHWAY_FETCH_TIMEOUT_MS = 30000;
+  const HIGHWAY_REF_RE = /^N[HE]-[0-9]{1,4}[A-Z]{0,3}(?: \/ N[HE]-[0-9]{1,4}[A-Z]{0,3})*$/;
+  let _highwayManifest = null, _highwayManifestPromise = null;
+  const _highwayTileMemory = new Map(), _highwayTilePromises = new Map();
+
+  function validateHighwayManifest(manifest) {
+    if (!exactObjectKeys(manifest,
+      ["authority", "cache", "catalog_version", "format", "match", "schema_version",
+        "source", "tiles"])
+        || manifest.format !== "pothole-highway-pack-manifest"
+        || manifest.schema_version !== 1 || manifest.catalog_version !== 1) {
+      throw new Error("Invalid National Highway manifest.");
+    }
+    const cache = manifest.cache;
+    if (!exactObjectKeys(cache, ["max_bytes", "max_unused_days"])
+        || cache.max_bytes !== 67108864 || cache.max_unused_days !== 90) {
+      throw new Error("Invalid National Highway cache policy.");
+    }
+    const match = manifest.match;
+    if (!exactObjectKeys(match,
+      ["max_gps_accuracy_m", "max_match_distance_m", "minimum_match_distance_m",
+        "tile_buffer_m", "tile_size_degrees"])
+        || match.max_gps_accuracy_m !== 30 || match.max_match_distance_m !== 45
+        || match.minimum_match_distance_m !== 15 || match.tile_buffer_m !== 60
+        || match.tile_size_degrees !== 2) {
+      throw new Error("Invalid National Highway matching policy.");
+    }
+    const authority = manifest.authority;
+    validateOfficialHandoffRegistry([authority]);
+    if (!exactObjectKeys(authority,
+      ["alternate_handoff_name", "alternate_handoff_url", "handoff_name",
+        "handoff_package", "handoff_url", "helpline", "id", "name"])
+        || authority.id !== "in-national-highway"
+        || authority.handoff_name !== "Rajmargyatra"
+        || authority.handoff_package !== "com.nhai.rajmargyatra"
+        || authority.handoff_url !== "https://play.google.com/store/apps/details?id=com.nhai.rajmargyatra"
+        || authority.alternate_handoff_name !== "CPGRAMS"
+        || authority.alternate_handoff_url !== "https://pgportal.gov.in/"
+        || authority.helpline !== "1033") {
+      throw new Error("Invalid National Highway official handoff.");
+    }
+    const source = manifest.source;
+    const sourceFields = [
+      "accepted_features", "attribution", "distinct_refs", "limitations",
+      "mapped_carriageway_km", "output_features", "output_points", "source_features",
+      "source_filter", "source_home_url", "source_license", "source_md5", "source_name",
+      "source_points", "source_retrieved_at", "source_url", "tile_count",
+    ];
+    if (!exactObjectKeys(source, sourceFields)
+        || source.source_name !== "OpenStreetMap India extract by Geofabrik"
+        || source.source_url !== "https://download.geofabrik.de/asia/india-260820.osm.pbf"
+        || source.source_retrieved_at !== "2026-08-20"
+        || source.source_md5 !== "c5e0a62a1cb00c80d8c5948bf18370d7"
+        || source.source_license !== "Open Data Commons Open Database License (ODbL) 1.0"
+        || !Array.isArray(source.limitations) || source.limitations.length !== 3
+        || !Number.isInteger(source.accepted_features) || source.accepted_features < 100000
+        || !Number.isInteger(source.distinct_refs) || source.distinct_refs < 500) {
+      throw new Error("Invalid National Highway source receipt.");
+    }
+    const tiles = manifest.tiles;
+    if (!tiles || typeof tiles !== "object" || Array.isArray(tiles)
+        || Object.keys(tiles).length < 50 || Object.keys(tiles).length > 300
+        || source.tile_count !== Object.keys(tiles).length) {
+      throw new Error("Invalid National Highway tile catalog.");
+    }
+    const fields = ["bbox", "bytes", "feature_count", "kind", "pack_id", "pack_version",
+      "path", "ref_count", "schema_version", "sha256", "state_code", "tile_id", "url"];
+    for (const [identifier, resource] of Object.entries(tiles)) {
+      const idMatch = identifier.match(/^e([0-9]{3})n([0-9]{2})$/);
+      const pathMatch = resource && typeof resource.path === "string"
+        ? resource.path.match(/^packs\/v1\/highways\/(e[0-9]{3}n[0-9]{2})-([0-9a-f]{64})\.json$/)
+        : null;
+      const lng = idMatch ? Number(idMatch[1]) : NaN;
+      const lat = idMatch ? Number(idMatch[2]) : NaN;
+      if (!exactObjectKeys(resource, fields) || !idMatch
+          || resource.tile_id !== identifier || resource.pack_id !== `in-nh-${identifier}`
+          || resource.kind !== "highways" || resource.state_code !== "IN"
+          || resource.pack_version !== 1 || resource.schema_version !== 1
+          || !pathMatch || pathMatch[1] !== identifier || pathMatch[2] !== resource.sha256
+          || resource.url !== PACK_SITE_ROOT + resource.path
+          || !Number.isInteger(resource.bytes) || resource.bytes <= 0
+          || resource.bytes > HIGHWAY_TILE_MAX_BYTES
+          || !Number.isInteger(resource.feature_count) || resource.feature_count <= 0
+          || !Number.isInteger(resource.ref_count) || resource.ref_count <= 0
+          || !Array.isArray(resource.bbox) || resource.bbox.length !== 4
+          || resource.bbox[0] !== lng || resource.bbox[1] !== lat
+          || resource.bbox[2] !== lng + 2 || resource.bbox[3] !== lat + 2) {
+        throw new Error(`Invalid National Highway tile resource: ${identifier}`);
+      }
+    }
+    replaceStableObject(NATIONAL_HIGHWAY_AUTHORITY, authority);
+    return manifest;
+  }
+
+  async function getHighwayPackManifest() {
+    if (_highwayManifest) return _highwayManifest;
+    if (_highwayManifestPromise) return _highwayManifestPromise;
+    _highwayManifestPromise = (async () => {
+      try {
+        const response = await fetch("highway-manifest.json", { cache: "no-store" });
+        if (!response.ok) return null;
+        const text = await response.text();
+        if (!text || text.length > HIGHWAY_MANIFEST_MAX_BYTES) return null;
+        _highwayManifest = validateHighwayManifest(JSON.parse(text));
+      } catch (e) { /* missing or malformed highway data fails closed at routing time */ }
+      return _highwayManifest;
+    })();
+    const result = await _highwayManifestPromise;
+    _highwayManifestPromise = null;
+    return result;
+  }
+
+  function validateHighwayTile(resource, bytes) {
+    if (!(bytes instanceof ArrayBuffer) || bytes.byteLength !== resource.bytes) {
+      throw new Error("National Highway tile byte length does not match its manifest.");
+    }
+    return sha256Bytes(bytes).then((digest) => {
+      if (!digest || digest !== resource.sha256 || !window.TextDecoder) {
+        throw new Error("National Highway tile checksum does not match its manifest.");
+      }
+      const pack = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      if (!exactObjectKeys(pack,
+        ["coordinate_scale", "features", "format", "generated_at", "pack_id", "pack_version",
+          "schema_version", "tile_id"])
+          || pack.format !== "pothole-national-highway-tile"
+          || pack.schema_version !== 1 || pack.pack_version !== 1
+          || pack.pack_id !== resource.pack_id || pack.tile_id !== resource.tile_id
+          || pack.generated_at !== "2026-08-20" || pack.coordinate_scale !== 100000
+          || !Array.isArray(pack.features) || pack.features.length !== resource.feature_count) {
+        throw new Error("National Highway tile envelope is invalid.");
+      }
+      const refs = new Set();
+      for (const feature of pack.features) {
+        if (!Array.isArray(feature) || feature.length !== 3
+            || typeof feature[0] !== "string" || !HIGHWAY_REF_RE.test(feature[0])
+            || !Array.isArray(feature[1]) || feature[1].length !== 4
+            || feature[1].some((value) => !Number.isInteger(value))
+            || feature[1][0] > feature[1][2] || feature[1][1] > feature[1][3]
+            || !Array.isArray(feature[2]) || feature[2].length < 4
+            || feature[2].length % 2 || feature[2].some((value) =>
+              !Number.isInteger(value) || Math.abs(value) > 10000000)) {
+          throw new Error("National Highway tile contains an invalid feature.");
+        }
+        refs.add(feature[0]);
+      }
+      if (refs.size !== resource.ref_count) {
+        throw new Error("National Highway tile reference count is invalid.");
+      }
+      return pack;
+    });
+  }
+
+  async function fetchHighwayTile(resource) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HIGHWAY_FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(resolvePackUrl(resource), {
+        cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer",
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType && !/json/i.test(contentType)) return null;
+      const bytes = await response.arrayBuffer();
+      return { pack: await validateHighwayTile(resource, bytes), bytes };
+    } catch (e) { return null; }
+    finally { clearTimeout(timer); }
+  }
+
+  async function loadHighwayTile(identifier) {
+    if (_highwayTilePromises.has(identifier)) return _highwayTilePromises.get(identifier);
+    const task = (async () => {
+      const manifest = await getHighwayPackManifest();
+      const resource = manifest && manifest.tiles[identifier];
+      if (!resource) return null;
+      const cacheKey = statePackCacheKey(resource);
+      const memory = _highwayTileMemory.get(identifier);
+      if (memory && memory.cache_key === cacheKey) return memory.pack;
+      let cached = null;
+      try { cached = await getCachedStatePack(cacheKey); } catch (e) { /* download below */ }
+      if (cached) {
+        try {
+          const pack = await validateHighwayTile(resource, await cachedPackBytes(cached));
+          _highwayTileMemory.set(identifier, { cache_key: cacheKey, pack, resource });
+          touchStatePack(cached);
+          pruneStatePacks(resource.pack_id);
+          return pack;
+        } catch (e) {
+          try { await deleteCachedStatePack(cacheKey); } catch (_) {}
+        }
+      }
+      const downloaded = await fetchHighwayTile(resource);
+      if (!downloaded) return null;
+      const now = Date.now();
+      const record = {
+        cache_key: cacheKey, pack_id: resource.pack_id, pack_version: resource.pack_version,
+        state_code: "IN", kind: "highways", sha256: resource.sha256,
+        bytes: resource.bytes, installed_at: now, last_used_at: now,
+        blob: new Blob([downloaded.bytes], { type: "application/json" }),
+      };
+      try { await putCachedStatePack(record); }
+      catch (e) {
+        await pruneStatePacks(resource.pack_id);
+        try { await putCachedStatePack(record); } catch (_) { /* valid for this session */ }
+      }
+      _highwayTileMemory.set(identifier,
+        { cache_key: cacheKey, pack: downloaded.pack, resource });
+      pruneStatePacks(resource.pack_id);
+      return downloaded.pack;
+    })();
+    _highwayTilePromises.set(identifier, task);
+    try { return await task; }
+    finally { _highwayTilePromises.delete(identifier); }
+  }
+
+  function highwayPackProvenance(identifier) {
+    const item = _highwayTileMemory.get(identifier);
+    const resource = item && item.resource;
+    if (!resource) return {};
+    return {
+      routing_pack_id: resource.pack_id,
+      routing_pack_version: resource.pack_version,
+      routing_pack_sha256: resource.sha256,
+      routing_pack_state_code: "IN",
+    };
+  }
+
+  function resetHighwayPackMemory() {
+    _highwayManifest = null;
+    _highwayManifestPromise = null;
+    _highwayTileMemory.clear();
+    _highwayTilePromises.clear();
+    replaceStableObject(NATIONAL_HIGHWAY_AUTHORITY, {});
+  }
+
+  function highwayTileIdFor(lat, lng, tileSize = 2) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)
+        || lat < 0 || lng < 0 || lat >= 100 || lng >= 100) return null;
+    const west = Math.floor(lng / tileSize) * tileSize;
+    const south = Math.floor(lat / tileSize) * tileSize;
+    return `e${String(west).padStart(3, "0")}n${String(south).padStart(2, "0")}`;
+  }
+
+  function pointToHighwaySegment(lng, lat, aLng, aLat, bLng, bLat) {
+    const rad = Math.PI / 180;
+    const metresPerLng = 111320 * Math.cos(lat * rad);
+    const ax = (aLng - lng) * metresPerLng, ay = (aLat - lat) * 110540;
+    const bx = (bLng - lng) * metresPerLng, by = (bLat - lat) * 110540;
+    const dx = bx - ax, dy = by - ay, denom = dx * dx + dy * dy;
+    const turn = denom ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / denom)) : 0;
+    const distance = Math.hypot(ax + turn * dx, ay + turn * dy);
+    const bearing = ((Math.atan2(dx, dy) * 180 / Math.PI) + 360) % 360;
+    return { distance, bearing };
+  }
+
+  const undirectedHeadingDifference = (left, right) => {
+    const difference = Math.abs(left - right) % 180;
+    return Math.min(difference, 180 - difference);
+  };
+
+  function matchHighwayTile(pack, manifest, lat, lng, gpsAccuracy, heading, speed) {
+    if (!pack || !manifest) return null;
+    const policy = manifest.match;
+    const accurate = Number.isFinite(gpsAccuracy) && gpsAccuracy >= 0
+      && gpsAccuracy <= policy.max_gps_accuracy_m;
+    const threshold = accurate
+      ? Math.min(policy.max_match_distance_m,
+        Math.max(policy.minimum_match_distance_m, gpsAccuracy + 8))
+      : policy.minimum_match_distance_m;
+    const scale = pack.coordinate_scale;
+    const latPad = Math.ceil(policy.max_match_distance_m / 110540 * scale);
+    const lngPad = Math.ceil(policy.max_match_distance_m
+      / Math.max(20000, 111320 * Math.cos(lat * Math.PI / 180)) * scale);
+    const targetLng = Math.round(lng * scale), targetLat = Math.round(lat * scale);
+    let best = null, secondDifferent = null;
+    for (const feature of pack.features) {
+      const ref = feature[0], bbox = feature[1], encoded = feature[2];
+      if (targetLng < bbox[0] - lngPad || targetLng > bbox[2] + lngPad
+          || targetLat < bbox[1] - latPad || targetLat > bbox[3] + latPad) continue;
+      let x = encoded[0], y = encoded[1];
+      for (let index = 2; index < encoded.length; index += 2) {
+        const nextX = x + encoded[index], nextY = y + encoded[index + 1];
+        const segment = pointToHighwaySegment(
+          lng, lat, x / scale, y / scale, nextX / scale, nextY / scale);
+        const candidate = { ref, distance: segment.distance, bearing: segment.bearing };
+        if (!best || candidate.distance < best.distance) {
+          if (best && best.ref !== candidate.ref
+              && (!secondDifferent || best.distance < secondDifferent.distance)) {
+            secondDifferent = best;
+          }
+          best = candidate;
+        } else if (candidate.ref !== best.ref
+            && (!secondDifferent || candidate.distance < secondDifferent.distance)) {
+          secondDifferent = candidate;
+        }
+        x = nextX; y = nextY;
+      }
+    }
+    if (!best || best.distance > threshold) return null;
+    if (!accurate) return { uncertain: true, match: best };
+    if (secondDifferent
+        && secondDifferent.distance <= best.distance + Math.max(6, gpsAccuracy)) {
+      return { uncertain: true, match: best, alternate: secondDifferent };
+    }
+    if (Number.isFinite(heading) && Number.isFinite(speed) && speed >= 2
+        && undirectedHeadingDifference(heading, best.bearing) > 55) return null;
+    return { uncertain: false, match: best };
+  }
+
+  async function nationalHighwayRoute(lat, lng, gpsAccuracy, heading, speed) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    const inIndiaEnvelope = lat >= 5 && lat <= 36 && lng >= 67 && lng <= 98;
+    if (!inIndiaEnvelope) return null;
+    const manifest = await getHighwayPackManifest();
+    if (!manifest) return unroutedRoute("road_class_unknown");
+    const identifier = highwayTileIdFor(lat, lng, manifest.match.tile_size_degrees);
+    const resource = identifier && manifest.tiles[identifier];
+    if (!resource) return null;
+    const pack = await loadHighwayTile(identifier);
+    if (!pack) return unroutedRoute("road_class_unknown");
+    const result = matchHighwayTile(pack, manifest, lat, lng, gpsAccuracy, heading, speed);
+    if (!result) return null;
+    if (result.uncertain) return unroutedRoute("location_uncertain", result.match.ref);
+    const route = authorityRoute(NATIONAL_HIGHWAY_AUTHORITY, {
+      routing_source: "osm_national_highway_geometry",
+      match_field: "mapped_carriageway",
+      match_value: `${result.match.ref} · ${Math.round(result.match.distance)} m`,
+      region: "national-highway",
+    });
+    return {
+      ...route,
+      highway_ref: result.match.ref,
+      ownership_unverified: true,
+      tender_eligible: false,
+      ...highwayPackProvenance(identifier),
+    };
+  }
+
+  async function clearPackCache() {
+    try { await op("readwrite", (store) => store.clear(), "state_packs"); } catch (e) {}
+    resetStatePackMemory();
+  }
+
+  let _maharashtraCoverage = null, _maharashtraCoveragePromise = null;
+  async function maharashtraCoverage() {
+    if (_maharashtraCoverage) return _maharashtraCoverage;
+    if (_maharashtraCoveragePromise) return _maharashtraCoveragePromise;
+    _maharashtraCoveragePromise = (async () => {
+      try {
+        const pack = await loadStatePack("in-mh-routing");
+        const data = pack && pack.payload;
+        if (data && data.version === 2 && data.regions
+            && data.regions.mmr && data.regions.pmc && data.regions.maharashtra
+            && hasCoverageGeometry(data.regions.mmr.geometry)
+            && hasCoverageGeometry(data.regions.pmc.geometry)
+            && hasCoverageGeometry(data.regions.maharashtra.geometry)
+            && validMmrAuthorityBoundaries(data.regions.mmr)) {
+          _maharashtraCoverage = data;
+        }
+      } catch (e) { /* fail closed; a retry is allowed on the next report */ }
+      return _maharashtraCoverage;
+    })();
+    const result = await _maharashtraCoveragePromise;
+    _maharashtraCoveragePromise = null;
+    return result;
+  }
+
+  const isMaharashtraGeocode = (geo) => !!geo
+    && String(geo.country_code || "").toLowerCase() === "in"
+    && MUMBAI_STATES.has(normaliseAuthorityValue(geo.state));
+
+  // Wide enough to include the complete state plus a small rejection margin, but narrow
+  // enough that unrelated reports do not download Maharashtra's routing pack. The pinned
+  // state polygon—not this rectangle or a geocoder label—decides statewide containment.
+  const MAHARASHTRA_ROUTING_ENVELOPE = {
+    minLat: 15.40, maxLat: 22.20, minLng: 72.40, maxLng: 81.10,
+  };
+  const MAHARASHTRA_STATE_GEOMETRY_SHA256 =
+    "1f5555fede30d19d58ffafabb7d38c8cba0af7b27f7c7129d10480351a0304ce";
+  const inMaharashtraRoutingEnvelope = (lat, lng) => Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= MAHARASHTRA_ROUTING_ENVELOPE.minLat
+    && lat <= MAHARASHTRA_ROUTING_ENVELOPE.maxLat
+    && lng >= MAHARASHTRA_ROUTING_ENVELOPE.minLng
+    && lng <= MAHARASHTRA_ROUTING_ENVELOPE.maxLng;
+  const isKarnatakaGeocode = (geo) => !!geo
+    && String(geo.country_code || "").toLowerCase() === "in"
+    && KARNATAKA_STATES.has(normaliseAuthorityValue(geo.state));
+  const isKnownNonKarnatakaGeocode = (geo) => !!geo
+    && !!String(geo.state || "").trim()
+    && !!String(geo.country_code || "").trim()
+    && (String(geo.country_code).toLowerCase() !== "in" || !isKarnatakaGeocode(geo));
+  const KARNATAKA_ROUTING_ENVELOPE = {
+    minLat: 11.40, maxLat: 18.60, minLng: 73.90, maxLng: 78.80,
+  };
+  const inKarnatakaRoutingEnvelope = (lat, lng) => Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= KARNATAKA_ROUTING_ENVELOPE.minLat
+    && lat <= KARNATAKA_ROUTING_ENVELOPE.maxLat
+    && lng >= KARNATAKA_ROUTING_ENVELOPE.minLng
+    && lng <= KARNATAKA_ROUTING_ENVELOPE.maxLng;
+
+  // The relevance envelope is intentionally wider than Delhi NCT. Nearby Noida,
+  // Gurugram, Ghaziabad and Faridabad may enter this download prefilter, but only the
+  // pinned polygon can select Delhi; an outside point continues to exact state routes.
+  const DELHI_ENVELOPE = { minLat: 28.10, maxLat: 29.10, minLng: 76.65, maxLng: 77.65 };
+  const DELHI_GEOMETRY_SHA256 = "3462ba68bdbbc1fdebc99403aa9e1f9db5e0b78e30ca138b2d25df7463506ab3";
+  const inDelhiEnvelope = (lat, lng) => Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= DELHI_ENVELOPE.minLat && lat <= DELHI_ENVELOPE.maxLat
+    && lng >= DELHI_ENVELOPE.minLng && lng <= DELHI_ENVELOPE.maxLng;
+
+  // This coarse rectangle only decides whether to download the West Bengal pack. The
+  // checksum-pinned state polygon—not the rectangle or a geocoder label—accepts a point.
+  const WEST_BENGAL_ROUTING_ENVELOPE = {
+    minLat: 21.40, maxLat: 27.40, minLng: 85.60, maxLng: 90.10,
+  };
+  // This digest is over JSON.stringify(region.geometry). IDs and a closed ring are not
+  // enough: a valid-shaped but wrong polygon could otherwise send Howrah to KMC. Updating
+  // the boundary is therefore an explicit code-and-data release, never a silent asset swap.
+  const KMC_GEOMETRY_SHA256 = "fa9e157d8cdc8d918dd934a77a5dcde375d3108598412cb8ca3e19ca2d916bf5";
+  const WEST_BENGAL_STATE_GEOMETRY_SHA256 =
+    "aa4ab13c3064be2e168889f6eb02e87c59e01bc709d36b66bece534dfea23015";
+  const isWestBengalGeocode = (geo) => !!geo
+    && String(geo.country_code || "").toLowerCase() === "in"
+    && WEST_BENGAL_STATES.has(normaliseAuthorityValue(geo.state));
+  const inWestBengalRoutingEnvelope = (lat, lng) => Number.isFinite(lat) && Number.isFinite(lng)
+    && lat >= WEST_BENGAL_ROUTING_ENVELOPE.minLat
+    && lat <= WEST_BENGAL_ROUTING_ENVELOPE.maxLat
+    && lng >= WEST_BENGAL_ROUTING_ENVELOPE.minLng
+    && lng <= WEST_BENGAL_ROUTING_ENVELOPE.maxLng;
+
+  const PUNJAB_ROUTING_ENVELOPE = {
+    min_lng: 73.8798336, min_lat: 29.5429378, max_lng: 76.9390583, max_lat: 32.5111793,
+  };
+  const PUNJAB_STATE_GEOMETRY_SHA256 =
+    "e113eb774f4f353d3c7a9c98830f4b665f9bd4d166ed3b84e90855bdf38f5782";
+  const TAMIL_NADU_ROUTING_ENVELOPE = {
+    min_lng: 76.2329467, min_lat: 8.0768938, max_lng: 80.3592971, max_lat: 13.5639111,
+  };
+  const TAMIL_NADU_STATE_GEOMETRY_SHA256 =
+    "b3034527326b1120366adaf4b7c3df4bd0b8c7aab4d82b28e3dde189b39c313e";
+  const ANDHRA_PRADESH_ROUTING_ENVELOPE = {
+    min_lng: 76.7600837, min_lat: 12.6238599, max_lng: 84.7658033, max_lat: 19.166806,
+  };
+  const ANDHRA_PRADESH_STATE_GEOMETRY_SHA256 =
+    "4e36d9c16fda044dceab7a5b08955cb19046bb1bddd052b7671a8311e90cd71c";
+  const TELANGANA_ROUTING_ENVELOPE = {
+    min_lng: 77.236585, min_lat: 15.8364246, max_lng: 81.3226246, max_lat: 19.9172962,
+  };
+  const TELANGANA_STATE_GEOMETRY_SHA256 =
+    "77183815e4b698ec1e823f4a94a6f213d1d827ea35de8fec8c0ab3b6a9d15175";
+  const KARNATAKA_STATE_ROUTING_ENVELOPE = {
+    min_lng: 74.0543908, min_lat: 11.5945587, max_lng: 78.5875761, max_lat: 18.4766494,
+  };
+  const KARNATAKA_STATE_GEOMETRY_SHA256 =
+    "9d7fe3f01a80cb41712c09139efcd43e0e11a644849d5f3bffe125cc0bc1c5ad";
+  const KERALA_ROUTING_ENVELOPE = {
+    min_lng: 74.8640682, min_lat: 8.2935318, max_lng: 77.4123612, max_lat: 12.7960559,
+  };
+  const KERALA_STATE_GEOMETRY_SHA256 =
+    "51e226750b1d6c08a5030e6074e2641282e01c328f46d8aee741de664bef705c";
+  const UTTAR_PRADESH_ROUTING_ENVELOPE = {
+    min_lng: 77.0838761, min_lat: 23.8706272, max_lng: 84.6345091, max_lat: 30.4063828,
+  };
+  const UTTAR_PRADESH_STATE_GEOMETRY_SHA256 =
+    "2dbb5237cab5eb029f517c1d79451663c1fc49affe0e0789b11f0565180db015";
+  const CHHATTISGARH_ROUTING_ENVELOPE = {
+    min_lng: 80.2441803, min_lat: 17.7822157, max_lng: 84.3959641, max_lat: 24.1066864,
+  };
+  const CHHATTISGARH_STATE_GEOMETRY_SHA256 =
+    "827e89a598571ade84db77390bca5daf98c9f67fbae716b17193f4ccdc2876eb";
+  const RAJASTHAN_ROUTING_ENVELOPE = {
+    min_lng: 69.4844368, min_lat: 23.0586612, max_lng: 78.2720089, max_lat: 30.198253,
+  };
+  const RAJASTHAN_STATE_GEOMETRY_SHA256 =
+    "dcde670675d0fc50e292c6b306b1f80d9d68a1323250c29d6eddc97992491a36";
+  const GOA_ROUTING_ENVELOPE = {
+    min_lng: 73.6756012, min_lat: 14.7529315, max_lng: 74.3361139, max_lat: 15.8007631,
+  };
+  const GOA_STATE_GEOMETRY_SHA256 =
+    "f4c47a79a3671d333d47f66a597d66b6295a78b1cd7cd3cba7bc2db472190e4f";
+  const MADHYA_PRADESH_ROUTING_ENVELOPE = {
+    min_lng: 74.029382, min_lat: 21.0706885, max_lng: 82.8126116, max_lat: 26.8695616,
+  };
+  const MADHYA_PRADESH_STATE_GEOMETRY_SHA256 =
+    "24f0c93ed8bd40c4c6b4e1f650c3b9870b1e65ccd5d7b00ea0193a8a5aedc357";
+  const BIHAR_ROUTING_ENVELOPE = {
+    min_lng: 83.3212566, min_lat: 24.2857164, max_lng: 88.2937958, max_lat: 27.521635,
+  };
+  const BIHAR_STATE_GEOMETRY_SHA256 =
+    "3d846e20cfee28a656d6dd808c4dad37a4f1c95852f9f292b0acefde708f4b24";
+  const ODISHA_ROUTING_ENVELOPE = {
+    min_lng: 81.3885855, min_lat: 17.8122733, max_lng: 87.4861351, max_lat: 22.5675932,
+  };
+  const ODISHA_STATE_GEOMETRY_SHA256 =
+    "af0fe4941b6cdd2abe5dc5717db8875bec6b68a2d6671002d2afc9c7d37d5179";
+
+  // These coarse centres only decide whether the small, checksum-pinned national pack
+  // should be loaded. The pack's own envelope plus an exact structured city/state match
+  // decides the route. A 0.30-degree radius deliberately permits harmless overlaps;
+  // neither proximity nor a nearest-city guess can ever select an authority.
+  const MAJOR_CITY_CANDIDATE_CENTRES = Object.freeze([
+    [21.209489, 72.831706], [26.915458, 75.818982], [26.460914, 80.321759],
+    [26.8381, 80.9346], [28.671153, 77.412036], [22.720362, 75.8682],
+    [11.001812, 76.962842], [9.967903, 76.244438], [25.595002, 85.138016],
+    [11.245056, 75.775472], [23.258486, 77.401989], [10.52701, 76.214621],
+    [22.297314, 73.194257], [27.175255, 78.009816], [17.693553, 83.29213],
+    [11.06136, 76.068589], [8.488227, 76.947551], [11.876384, 75.373797],
+    [16.511531, 80.616047], [9.908938, 78.109301], [25.335649, 83.007629],
+    [28.99633, 77.706192], [28.403148, 77.310556], [22.305326, 70.802838],
+    [22.801519, 86.202958], [23.163565, 79.929642], [34.074744, 74.820444],
+    [25.43813, 81.8338], [23.795281, 86.430964], [26.279825, 73.018724],
+    [23.37005, 85.325039], [21.238091, 81.633699], [8.887053, 76.59067],
+    [26.203725, 78.157363], [21.212068, 81.373285],
+  ]);
+  const inMajorCityCandidateEnvelope = (lat, lng) => Number.isFinite(lat)
+    && Number.isFinite(lng) && MAJOR_CITY_CANDIDATE_CENTRES.some((centre) =>
+      Math.abs(lat - centre[0]) <= 0.30 && Math.abs(lng - centre[1]) <= 0.30);
+
+  async function sha256Hex(value) {
+    if (!window.TextEncoder) return null;
+    const bytes = new TextEncoder().encode(value);
+    return sha256Bytes(bytes);
+  }
+
+  let _delhiCoverage = null, _delhiCoveragePromise = null;
+  async function delhiCoverage() {
+    if (_delhiCoverage) return _delhiCoverage;
+    if (_delhiCoveragePromise) return _delhiCoveragePromise;
+    _delhiCoveragePromise = (async () => {
+      try {
+        const pack = await loadStatePack("in-dl-routing");
+        const data = pack && pack.payload;
+        const region = data && data.region;
+        const geometryDigest = region && hasCoverageGeometry(region.geometry)
+          ? await sha256Hex(JSON.stringify(region.geometry)) : null;
+        if (data && data.version === 1 && region
+            && region.id === "delhi-nct"
+            && region.authority_id === DELHI_PWD_AUTHORITY.id
+            && Number(region.osm_relation_id) === 1942586
+            && region.geometry_sha256 === DELHI_GEOMETRY_SHA256
+            && geometryDigest === DELHI_GEOMETRY_SHA256) {
+          _delhiCoverage = data;
+        }
+      } catch (e) { /* fail closed; a retry is allowed on the next report */ }
+      return _delhiCoverage;
+    })();
+    const result = await _delhiCoveragePromise;
+    _delhiCoveragePromise = null;
+    return result;
+  }
+
+  async function delhiRouteFromGeocode(_geo, lat, lng, gpsAccuracy) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !inDelhiEnvelope(lat, lng)) return null;
+    const coverage = await delhiCoverage();
+    if (!coverage) return unroutedRoute("jurisdiction_unavailable");
+
+    const geometry = coverage.region.geometry;
+    const inNct = pointInGeometry(lng, lat, geometry);
+    const enforceGpsAccuracy = gpsAccuracy !== undefined;
+    if (enforceGpsAccuracy
+        && (!Number.isFinite(gpsAccuracy) || gpsAccuracy < 0 || gpsAccuracy > 30)) {
+      return inNct ? unroutedRoute("location_uncertain") : null;
+    }
+    if (Number.isFinite(gpsAccuracy)
+        && geometryBoundaryDistanceMeters(lng, lat, geometry) <= gpsAccuracy) {
+      return unroutedRoute("location_uncertain");
+    }
+    // The broad NCR rectangle is only a download prefilter. Ghaziabad and Faridabad
+    // overlap it, so a coordinate outside the exact NCT polygon must be allowed to try
+    // their own reviewed route. The helper preserves its legacy outside-area result;
+    // routeOfficer treats that result as "no vote" and continues to the next adapter.
+    if (!inNct) return unroutedRoute("outside_area");
+
+    return authorityRoute(DELHI_PWD_AUTHORITY, {
+      routing_source: "osm_delhi_nct_boundary",
+      match_field: "boundary",
+      match_value: "OpenStreetMap relation 1942586",
+      region: "delhi",
+    });
+  }
+
+  let _westBengalCoverage = null, _westBengalCoveragePromise = null;
+  async function westBengalCoverage() {
+    if (_westBengalCoverage) return _westBengalCoverage;
+    if (_westBengalCoveragePromise) return _westBengalCoveragePromise;
+    _westBengalCoveragePromise = (async () => {
+      try {
+        const pack = await loadStatePack("in-wb-routing");
+        const data = pack && pack.payload;
+        const regions = data && data.regions;
+        const kmc = regions && regions.kmc;
+        const state = regions && regions.west_bengal;
+        const kmcDigest = kmc && hasCoverageGeometry(kmc.geometry)
+          ? await sha256Hex(JSON.stringify(kmc.geometry)) : null;
+        const stateDigest = state && hasCoverageGeometry(state.geometry)
+          ? await sha256Hex(JSON.stringify(state.geometry)) : null;
+        if (data && data.version === 2 && kmc && state
+            && kmc.authority_id === KMC_AUTHORITY.id
+            && String(kmc.ulb_code) === "250299"
+            && String(kmc.mun_id) === "250299_0000001"
+            && kmc.geometry_sha256 === KMC_GEOMETRY_SHA256
+            && kmcDigest === KMC_GEOMETRY_SHA256
+            && state.authority_id === WEST_BENGAL_STATE_AUTHORITY.id
+            && Number(state.source_relation_id) === 1960177
+            && state.geometry_sha256 === WEST_BENGAL_STATE_GEOMETRY_SHA256
+            && stateDigest === WEST_BENGAL_STATE_GEOMETRY_SHA256) {
+          _westBengalCoverage = data;
+        }
+      } catch (e) { /* fail closed; a retry is allowed on the next report */ }
+      return _westBengalCoverage;
+    })();
+    const result = await _westBengalCoveragePromise;
+    _westBengalCoveragePromise = null;
+    return result;
+  }
+
+  // Kept as a compatibility alias for existing KMC tests and saved-report code.
+  const kolkataCoverage = westBengalCoverage;
+
+  async function kolkataRouteFromGeocode(geo, lat, lng, gpsAccuracy) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    // Coordinates decide which state pack gets a vote. A stale reverse-geocoder label
+    // must not let West Bengal block a coordinate-verified Chennai or Maharashtra route.
+    if (!inWestBengalRoutingEnvelope(lat, lng)) return null;
+    const coverage = await westBengalCoverage();
+    if (!coverage) return unroutedRoute("jurisdiction_unavailable");
+
+    const stateGeometry = coverage.regions.west_bengal.geometry;
+    const kmcGeometry = coverage.regions.kmc.geometry;
+    const inState = pointInGeometry(lng, lat, stateGeometry);
+    const inKmc = pointInGeometry(lng, lat, kmcGeometry);
+    const enforceGpsAccuracy = gpsAccuracy !== undefined;
+    if (enforceGpsAccuracy
+        && (!Number.isFinite(gpsAccuracy) || gpsAccuracy < 0 || gpsAccuracy > 30)) {
+      return (inState || inKmc) ? unroutedRoute("location_uncertain") : null;
+    }
+    if (Number.isFinite(gpsAccuracy)) {
+      const stateEdgeDistance = geometryBoundaryDistanceMeters(lng, lat, stateGeometry);
+      const kmcEdgeDistance = geometryBoundaryDistanceMeters(lng, lat, kmcGeometry);
+      if (stateEdgeDistance <= gpsAccuracy || kmcEdgeDistance <= gpsAccuracy) {
+        return unroutedRoute("location_uncertain");
+      }
+    }
+    // This rectangle also reaches neighbouring Jharkhand and Odisha. Only the exact
+    // state geometry gets a vote. routeOfficer continues after this legacy helper result.
+    if (!inState) return unroutedRoute("outside_area");
+
+    if (inKmc) {
+      return authorityRoute(KMC_AUTHORITY, {
+        routing_source: "wb_udma_official_gis",
+        match_field: "boundary",
+        match_value: "wb_municipal_boundary:250299_0000001",
+        region: "kolkata",
+      });
+    }
+    return authorityRoute(WEST_BENGAL_STATE_AUTHORITY, {
+      routing_source: "osm_west_bengal_state_boundary",
+      match_field: "boundary",
+      match_value: "West Bengal (OpenStreetMap relation 1960177)",
+      region: "west-bengal",
+    });
+  }
+
+  // Small relevance envelopes stay in the APK so a Chennai report never downloads the
+  // Gujarat pack (and vice versa). The detailed coordinates and contacts remain in the
+  // checksum-pinned state pack and are installed only after full validation.
+  const MUNICIPAL_CITY_CONFIGS = Object.freeze({
+    "in-tn-routing": {
+      region_id: "chennai-gcc",
+      authority_id: "tn-gcc",
+      routing_mode: "boundary",
+      routing_source: "osm_gcc_boundary",
+      authority_sha256: "07dfd3529ac5b999ed0a93e65f9de6726fc75892ed04a2ea26a11978dab5fd73",
+      region_sha256: "9a898af4d0f107587b3948ca9917c27acae471519b9157f79e6e661fe45eef3a",
+      state_aliases: ["tamil nadu", "tamilnadu", "தமிழ்நாடு"],
+      place_aliases: ["chennai", "madras", "சென்னை"],
+      envelope: { min_lng: 80.05, min_lat: 12.75, max_lng: 80.40, max_lat: 13.30 },
+    },
+    "in-tg-routing": {
+      region_id: "hyderabad-cure-2053",
+      authority_id: "tg-cure-shared",
+      routing_mode: "official_point_query",
+      routing_source: "tgrac_cure_2053_point_query",
+      authority_sha256: "f532d0edf9021be2de8ec52fdd45ef15ac497ed5f77b3ed479cda4c2574f7109",
+      region_sha256: "0ee992fa5fc50c3aeb35900514ddde1e235bf3fa169a0cfaff1ace63580fb4ec",
+      state_aliases: ["telangana", "తెలంగాణ"],
+      place_aliases: ["hyderabad", "secunderabad", "హైదరాబాద్", "హైదరాబాదు"],
+      envelope: { min_lng: 78.15, min_lat: 17.10, max_lng: 78.82, max_lat: 17.72 },
+    },
+    "in-gj-routing": {
+      region_id: "ahmedabad-amc",
+      authority_id: "gj-amc",
+      routing_mode: "boundary",
+      routing_source: "opencity_amc_wards_union",
+      authority_sha256: "3367eca455389437650195de677f3e9f7031f75e4894a0cad2ad3ed96de80720",
+      region_sha256: "86b08ba11e6ad0fe53a599356d9229fbc5302983dcf8c80e435250f281625b59",
+      state_aliases: ["gujarat", "ગુજરાત"],
+      place_aliases: ["ahmedabad", "amdavad", "અમદાવાદ", "अहमदाबाद"],
+      envelope: { min_lng: 72.40, min_lat: 22.85, max_lng: 72.75, max_lat: 23.20 },
+    },
+  });
+  const municipalCityCoverageCache = new Map();
+  const municipalCityCoveragePromises = new Map();
+
+  const pointInEnvelope = (lat, lng, envelope) => Number.isFinite(lat) && Number.isFinite(lng)
+    && !!envelope && lng >= envelope.min_lng && lng <= envelope.max_lng
+    && lat >= envelope.min_lat && lat <= envelope.max_lat;
+
+  const envelopeGeometry = (envelope) => ({
+    type: "Polygon",
+    coordinates: [[
+      [envelope.min_lng, envelope.min_lat], [envelope.max_lng, envelope.min_lat],
+      [envelope.max_lng, envelope.max_lat], [envelope.min_lng, envelope.max_lat],
+      [envelope.min_lng, envelope.min_lat],
+    ]],
+  });
+
+  function indianStateMatches(geo, aliases) {
+    if (!geo || normaliseAuthorityValue(geo.country_code) !== "in") return false;
+    const state = normaliseAuthorityValue(geo.state);
+    return aliases.some((alias) => normaliseAuthorityValue(alias) === state);
+  }
+
+  async function municipalCityCoverage(packId) {
+    if (!MUNICIPAL_CITY_CONFIGS[packId]) return null;
+    if (municipalCityCoverageCache.has(packId)) return municipalCityCoverageCache.get(packId);
+    if (municipalCityCoveragePromises.has(packId)) return municipalCityCoveragePromises.get(packId);
+    const request = (async () => {
+      try {
+        const pack = await loadStatePack(packId);
+        const payload = pack && pack.payload;
+        if (payload && payload.version === 1 && Array.isArray(payload.regions)
+            && payload.regions.length) {
+          municipalCityCoverageCache.set(packId, payload);
+          return payload;
+        }
+      } catch (e) { /* fail closed and allow a later retry */ }
+      return null;
+    })();
+    municipalCityCoveragePromises.set(packId, request);
+    try { return await request; }
+    finally { municipalCityCoveragePromises.delete(packId); }
+  }
+
+  function structuredPlaceMatch(geo, region) {
+    if (!indianStateMatches(geo, region.state_aliases)) return null;
+    const aliases = new Set(region.place_aliases.map(normaliseAuthorityValue));
+    const supplied = ["city", "municipality"].map((field) => ({
+      field, raw: geo[field], value: normaliseAuthorityValue(geo[field]),
+    })).filter((item) => !!item.value);
+    // Nominatim can return both fields. One exact match must not override another
+    // non-empty civic field naming a different place.
+    if (!supplied.length || supplied.some((item) => !aliases.has(item.value))) return null;
+    return { field: supplied[0].field, value: supplied[0].raw };
+  }
+
+  let _punjabCoverage = null, _punjabCoveragePromise = null;
+  async function punjabCoverage() {
+    if (_punjabCoverage) return _punjabCoverage;
+    if (_punjabCoveragePromise) return _punjabCoveragePromise;
+    _punjabCoveragePromise = (async () => {
+      try {
+        const pack = await loadStatePack("in-pb-routing");
+        const payload = pack && pack.payload;
+        const region = payload && payload.region;
+        if (payload && payload.version === 1 && region
+            && region.authority_id === PUNJAB_STATE_AUTHORITY.id
+            && Number(region.osm_relation_id) === 1942686
+            && region.geometry_sha256 === PUNJAB_STATE_GEOMETRY_SHA256
+            && hasCoverageGeometry(region.geometry)) {
+          _punjabCoverage = payload;
+        }
+      } catch (e) { /* fail closed and allow a later retry */ }
+      return _punjabCoverage;
+    })();
+    const result = await _punjabCoveragePromise;
+    _punjabCoveragePromise = null;
+    return result;
+  }
+
+  async function punjabRouteFromGeocode(_geo, lat, lng, gpsAccuracy) {
+    if (!pointInEnvelope(lat, lng, PUNJAB_ROUTING_ENVELOPE)) return null;
+    const coverage = await punjabCoverage();
+    if (!coverage) return unroutedRoute("jurisdiction_unavailable");
+    const geometry = coverage.region.geometry;
+    const inState = pointInGeometry(lng, lat, geometry);
+    const enforceGpsAccuracy = gpsAccuracy !== undefined;
+    if (enforceGpsAccuracy
+        && (!Number.isFinite(gpsAccuracy) || gpsAccuracy < 0 || gpsAccuracy > 30)) {
+      return inState ? unroutedRoute("location_uncertain") : null;
+    }
+    if (Number.isFinite(gpsAccuracy)
+        && geometryBoundaryDistanceMeters(lng, lat, geometry) <= gpsAccuracy) {
+      return unroutedRoute("location_uncertain");
+    }
+    // Chandigarh and neighbouring states sit inside the coarse prefilter. The pinned
+    // Punjab polygon is authoritative, so these coordinates continue to later routes.
+    if (!inState) return null;
+    return authorityRoute(PUNJAB_STATE_AUTHORITY, {
+      routing_source: "osm_punjab_state_boundary",
+      match_field: "boundary",
+      match_value: "Punjab (OpenStreetMap relation 1942686)",
+      region: "punjab-state",
+      pack_id: "in-pb-routing",
+    });
+  }
+
+  let _tamilNaduCoverage = null, _tamilNaduCoveragePromise = null;
+  async function tamilNaduCoverage() {
+    if (_tamilNaduCoverage) return _tamilNaduCoverage;
+    if (_tamilNaduCoveragePromise) return _tamilNaduCoveragePromise;
+    _tamilNaduCoveragePromise = (async () => {
+      try {
+        const pack = await loadStatePack("in-tn-state-routing");
+        const payload = pack && pack.payload;
+        const region = payload && payload.region;
+        if (payload && payload.version === 1 && region
+            && region.authority_id === TAMIL_NADU_STATE_AUTHORITY.id
+            && Number(region.osm_relation_id) === 96905
+            && region.geometry_sha256 === TAMIL_NADU_STATE_GEOMETRY_SHA256
+            && hasCoverageGeometry(region.geometry)) {
+          _tamilNaduCoverage = payload;
+        }
+      } catch (e) { /* fail closed and allow a later retry */ }
+      return _tamilNaduCoverage;
+    })();
+    const result = await _tamilNaduCoveragePromise;
+    _tamilNaduCoveragePromise = null;
+    return result;
+  }
+
+  async function tamilNaduRouteFromGeocode(_geo, lat, lng, gpsAccuracy) {
+    if (!pointInEnvelope(lat, lng, TAMIL_NADU_ROUTING_ENVELOPE)) return null;
+    const coverage = await tamilNaduCoverage();
+    if (!coverage) return unroutedRoute("jurisdiction_unavailable");
+    const geometry = coverage.region.geometry;
+    const inState = pointInGeometry(lng, lat, geometry);
+    const enforceGpsAccuracy = gpsAccuracy !== undefined;
+    if (enforceGpsAccuracy
+        && (!Number.isFinite(gpsAccuracy) || gpsAccuracy < 0 || gpsAccuracy > 30)) {
+      return inState ? unroutedRoute("location_uncertain") : null;
+    }
+    if (Number.isFinite(gpsAccuracy)
+        && geometryBoundaryDistanceMeters(lng, lat, geometry) <= gpsAccuracy) {
+      return unroutedRoute("location_uncertain");
+    }
+    // Puducherry's enclaves and neighbouring states sit inside the coarse download
+    // rectangle. Only the checksum-pinned Tamil Nadu polygon may select this handoff.
+    if (!inState) return null;
+    return authorityRoute(TAMIL_NADU_STATE_AUTHORITY, {
+      routing_source: "osm_tamil_nadu_state_boundary",
+      match_field: "boundary",
+      match_value: "Tamil Nadu (OpenStreetMap relation 96905)",
+      region: "tamil-nadu-state",
+      pack_id: "in-tn-state-routing",
+    });
+  }
+
+  let _andhraPradeshCoverage = null, _andhraPradeshCoveragePromise = null;
+  async function andhraPradeshCoverage() {
+    if (_andhraPradeshCoverage) return _andhraPradeshCoverage;
+    if (_andhraPradeshCoveragePromise) return _andhraPradeshCoveragePromise;
+    _andhraPradeshCoveragePromise = (async () => {
+      try {
+        const pack = await loadStatePack("in-ap-routing");
+        const payload = pack && pack.payload;
+        const region = payload && payload.region;
+        if (payload && payload.version === 1 && region
+            && region.authority_id === ANDHRA_PRADESH_STATE_AUTHORITY.id
+            && Number(region.osm_relation_id) === 2022095
+            && region.geometry_sha256 === ANDHRA_PRADESH_STATE_GEOMETRY_SHA256
+            && hasCoverageGeometry(region.geometry)) {
+          _andhraPradeshCoverage = payload;
+        }
+      } catch (e) { /* fail closed and allow a later retry */ }
+      return _andhraPradeshCoverage;
+    })();
+    const result = await _andhraPradeshCoveragePromise;
+    _andhraPradeshCoveragePromise = null;
+    return result;
+  }
+
+  async function andhraPradeshRouteFromGeocode(_geo, lat, lng, gpsAccuracy) {
+    if (!pointInEnvelope(lat, lng, ANDHRA_PRADESH_ROUTING_ENVELOPE)) return null;
+    const coverage = await andhraPradeshCoverage();
+    if (!coverage) return unroutedRoute("jurisdiction_unavailable");
+    const geometry = coverage.region.geometry;
+    const inState = pointInGeometry(lng, lat, geometry);
+    const enforceGpsAccuracy = gpsAccuracy !== undefined;
+    if (enforceGpsAccuracy
+        && (!Number.isFinite(gpsAccuracy) || gpsAccuracy < 0 || gpsAccuracy > 30)) {
+      return inState ? unroutedRoute("location_uncertain") : null;
+    }
+    if (Number.isFinite(gpsAccuracy)
+        && geometryBoundaryDistanceMeters(lng, lat, geometry) <= gpsAccuracy) {
+      return unroutedRoute("location_uncertain");
+    }
+    // Yanam and neighbouring states overlap the coarse download rectangle. Only the
+    // checksum-pinned Andhra Pradesh polygon may select the statewide handoff.
+    if (!inState) return null;
+    return authorityRoute(ANDHRA_PRADESH_STATE_AUTHORITY, {
+      routing_source: "osm_andhra_pradesh_state_boundary",
+      match_field: "boundary",
+      match_value: "Andhra Pradesh (OpenStreetMap relation 2022095)",
+      region: "andhra-pradesh-state",
+      pack_id: "in-ap-routing",
+    });
+  }
+
+  let _telanganaCoverage = null, _telanganaCoveragePromise = null;
+  async function telanganaCoverage() {
+    if (_telanganaCoverage) return _telanganaCoverage;
+    if (_telanganaCoveragePromise) return _telanganaCoveragePromise;
+    _telanganaCoveragePromise = (async () => {
+      try {
+        const pack = await loadStatePack("in-tg-state-routing");
+        const payload = pack && pack.payload;
+        const region = payload && payload.region;
+        if (payload && payload.version === 1 && region
+            && region.authority_id === TELANGANA_STATE_AUTHORITY.id
+            && Number(region.osm_relation_id) === 3250963
+            && region.geometry_sha256 === TELANGANA_STATE_GEOMETRY_SHA256
+            && hasCoverageGeometry(region.geometry)) {
+          _telanganaCoverage = payload;
+        }
+      } catch (e) { /* fail closed and allow a later retry */ }
+      return _telanganaCoverage;
+    })();
+    const result = await _telanganaCoveragePromise;
+    _telanganaCoveragePromise = null;
+    return result;
+  }
+
+  async function telanganaRouteFromGeocode(_geo, lat, lng, gpsAccuracy) {
+    if (!pointInEnvelope(lat, lng, TELANGANA_ROUTING_ENVELOPE)) return null;
+    const coverage = await telanganaCoverage();
+    if (!coverage) return unroutedRoute("jurisdiction_unavailable");
+    const geometry = coverage.region.geometry;
+    const inState = pointInGeometry(lng, lat, geometry);
+    const enforceGpsAccuracy = gpsAccuracy !== undefined;
+    if (enforceGpsAccuracy
+        && (!Number.isFinite(gpsAccuracy) || gpsAccuracy < 0 || gpsAccuracy > 30)) {
+      return inState ? unroutedRoute("location_uncertain") : null;
+    }
+    if (Number.isFinite(gpsAccuracy)
+        && geometryBoundaryDistanceMeters(lng, lat, geometry) <= gpsAccuracy) {
+      return unroutedRoute("location_uncertain");
+    }
+    // The coarse rectangle overlaps Andhra Pradesh, Karnataka, Maharashtra and
+    // Chhattisgarh. Only the checksum-pinned Telangana polygon can select Prajavani.
+    if (!inState) return null;
+    return authorityRoute(TELANGANA_STATE_AUTHORITY, {
+      routing_source: "osm_telangana_state_boundary",
+      match_field: "boundary",
+      match_value: "Telangana (OpenStreetMap relation 3250963)",
+      region: "telangana-state",
+      pack_id: "in-tg-state-routing",
+    });
+  }
+
+  const _newStateCoverage = new Map();
+  const _newStateCoveragePromises = new Map();
+  async function pinnedStateCoverage(packId, authority, relationId, geometrySha256) {
+    if (_newStateCoverage.has(packId)) return _newStateCoverage.get(packId);
+    if (_newStateCoveragePromises.has(packId)) return _newStateCoveragePromises.get(packId);
+    const request = (async () => {
+      try {
+        const pack = await loadStatePack(packId);
+        const payload = pack && pack.payload;
+        const region = payload && payload.region;
+        const authorityId = typeof authority === "string" ? authority : authority.id;
+        if (payload && payload.version === 1 && region
+            && region.authority_id === authorityId
+            && Number(region.osm_relation_id) === relationId
+            && region.geometry_sha256 === geometrySha256
+            && hasCoverageGeometry(region.geometry)) {
+          _newStateCoverage.set(packId, payload);
+          return payload;
+        }
+      } catch (e) { /* fail closed and allow a later retry */ }
+      return null;
+    })();
+    _newStateCoveragePromises.set(packId, request);
+    try { return await request; }
+    finally { _newStateCoveragePromises.delete(packId); }
+  }
+
+  const karnatakaStateCoverage = () => pinnedStateCoverage(
+    "in-ka-state-routing", KARNATAKA_STATE_AUTHORITY, 2019939,
+    KARNATAKA_STATE_GEOMETRY_SHA256);
+  const keralaCoverage = () => pinnedStateCoverage(
+    "in-kl-routing", KERALA_STATE_AUTHORITY, 2018151, KERALA_STATE_GEOMETRY_SHA256);
+  const uttarPradeshCoverage = () => pinnedStateCoverage(
+    "in-up-routing", UTTAR_PRADESH_STATE_AUTHORITY, 1942587,
+    UTTAR_PRADESH_STATE_GEOMETRY_SHA256);
+  const chhattisgarhCoverage = () => pinnedStateCoverage(
+    "in-cg-routing", CHHATTISGARH_STATE_AUTHORITY, 1972004,
+    CHHATTISGARH_STATE_GEOMETRY_SHA256);
+  const rajasthanCoverage = () => pinnedStateCoverage(
+    "in-rj-routing", RAJASTHAN_STATE_AUTHORITY, 1942920,
+    RAJASTHAN_STATE_GEOMETRY_SHA256);
+  const goaCoverage = () => pinnedStateCoverage(
+    "in-ga-routing", GOA_STATE_AUTHORITY, 11251493,
+    GOA_STATE_GEOMETRY_SHA256);
+  const madhyaPradeshCoverage = () => pinnedStateCoverage(
+    "in-mp-routing", MADHYA_PRADESH_STATE_AUTHORITY, 1950071,
+    MADHYA_PRADESH_STATE_GEOMETRY_SHA256);
+  const biharCoverage = () => pinnedStateCoverage(
+    "in-br-routing", BIHAR_STATE_AUTHORITY, 1958982,
+    BIHAR_STATE_GEOMETRY_SHA256);
+  const odishaCoverage = () => pinnedStateCoverage(
+    "in-od-routing", ODISHA_STATE_AUTHORITY, 1984022,
+    ODISHA_STATE_GEOMETRY_SHA256);
+
+  async function pinnedStateRoute(lat, lng, gpsAccuracy, config) {
+    if (!pointInEnvelope(lat, lng, config.envelope)) return null;
+    const coverage = await config.coverage();
+    if (!coverage) return unroutedRoute("jurisdiction_unavailable");
+    const geometry = coverage.region.geometry;
+    const inState = pointInGeometry(lng, lat, geometry);
+    const enforceGpsAccuracy = gpsAccuracy !== undefined;
+    if (enforceGpsAccuracy
+        && (!Number.isFinite(gpsAccuracy) || gpsAccuracy < 0 || gpsAccuracy > 30)) {
+      return inState ? unroutedRoute("location_uncertain") : null;
+    }
+    if (Number.isFinite(gpsAccuracy)
+        && geometryBoundaryDistanceMeters(lng, lat, geometry) <= gpsAccuracy) {
+      return unroutedRoute("location_uncertain");
+    }
+    if (!inState) return null;
+    const authority = config.authority || REMAINING_STATE_AUTHORITIES.get(config.pack_id);
+    if (!authority || authority.id !== coverage.region.authority_id) {
+      return unroutedRoute("jurisdiction_unavailable");
+    }
+    return authorityRoute(authority, {
+      routing_source: config.routing_source,
+      match_field: "boundary",
+      match_value: `${config.name} (OpenStreetMap relation ${config.relation_id})`,
+      region: config.region_id,
+      pack_id: config.pack_id,
+    });
+  }
+
+  const karnatakaStateRouteFromGeocode = (_geo, lat, lng, gpsAccuracy) =>
+    pinnedStateRoute(lat, lng, gpsAccuracy, {
+      envelope: KARNATAKA_STATE_ROUTING_ENVELOPE,
+      coverage: karnatakaStateCoverage,
+      authority: KARNATAKA_STATE_AUTHORITY,
+      routing_source: "osm_karnataka_state_boundary",
+      name: "Karnataka",
+      relation_id: 2019939,
+      region_id: "karnataka-state",
+      pack_id: "in-ka-state-routing",
+    });
+
+  const keralaRouteFromGeocode = (_geo, lat, lng, gpsAccuracy) =>
+    pinnedStateRoute(lat, lng, gpsAccuracy, {
+      envelope: KERALA_ROUTING_ENVELOPE,
+      coverage: keralaCoverage,
+      authority: KERALA_STATE_AUTHORITY,
+      routing_source: "osm_kerala_state_boundary",
+      name: "Kerala",
+      relation_id: 2018151,
+      region_id: "kerala-state",
+      pack_id: "in-kl-routing",
+    });
+
+  const uttarPradeshRouteFromGeocode = (_geo, lat, lng, gpsAccuracy) =>
+    pinnedStateRoute(lat, lng, gpsAccuracy, {
+      envelope: UTTAR_PRADESH_ROUTING_ENVELOPE,
+      coverage: uttarPradeshCoverage,
+      authority: UTTAR_PRADESH_STATE_AUTHORITY,
+      routing_source: "osm_uttar_pradesh_state_boundary",
+      name: "Uttar Pradesh",
+      relation_id: 1942587,
+      region_id: "uttar-pradesh-state",
+      pack_id: "in-up-routing",
+    });
+
+  const chhattisgarhRouteFromGeocode = (_geo, lat, lng, gpsAccuracy) =>
+    pinnedStateRoute(lat, lng, gpsAccuracy, {
+      envelope: CHHATTISGARH_ROUTING_ENVELOPE,
+      coverage: chhattisgarhCoverage,
+      authority: CHHATTISGARH_STATE_AUTHORITY,
+      routing_source: "osm_chhattisgarh_state_boundary",
+      name: "Chhattisgarh",
+      relation_id: 1972004,
+      region_id: "chhattisgarh-state",
+      pack_id: "in-cg-routing",
+    });
+
+  const rajasthanRouteFromGeocode = (_geo, lat, lng, gpsAccuracy) =>
+    pinnedStateRoute(lat, lng, gpsAccuracy, {
+      envelope: RAJASTHAN_ROUTING_ENVELOPE,
+      coverage: rajasthanCoverage,
+      authority: RAJASTHAN_STATE_AUTHORITY,
+      routing_source: "osm_rajasthan_state_boundary",
+      name: "Rajasthan",
+      relation_id: 1942920,
+      region_id: "rajasthan-state",
+      pack_id: "in-rj-routing",
+    });
+
+  const goaRouteFromGeocode = (_geo, lat, lng, gpsAccuracy) =>
+    pinnedStateRoute(lat, lng, gpsAccuracy, {
+      envelope: GOA_ROUTING_ENVELOPE,
+      coverage: goaCoverage,
+      authority: GOA_STATE_AUTHORITY,
+      routing_source: "osm_goa_state_boundary",
+      name: "Goa",
+      relation_id: 11251493,
+      region_id: "goa-state",
+      pack_id: "in-ga-routing",
+    });
+
+  const madhyaPradeshRouteFromGeocode = (_geo, lat, lng, gpsAccuracy) =>
+    pinnedStateRoute(lat, lng, gpsAccuracy, {
+      envelope: MADHYA_PRADESH_ROUTING_ENVELOPE,
+      coverage: madhyaPradeshCoverage,
+      authority: MADHYA_PRADESH_STATE_AUTHORITY,
+      routing_source: "osm_madhya_pradesh_state_boundary",
+      name: "Madhya Pradesh",
+      relation_id: 1950071,
+      region_id: "madhya-pradesh-state",
+      pack_id: "in-mp-routing",
+    });
+
+  const biharRouteFromGeocode = (_geo, lat, lng, gpsAccuracy) =>
+    pinnedStateRoute(lat, lng, gpsAccuracy, {
+      envelope: BIHAR_ROUTING_ENVELOPE,
+      coverage: biharCoverage,
+      authority: BIHAR_STATE_AUTHORITY,
+      routing_source: "osm_bihar_state_boundary",
+      name: "Bihar",
+      relation_id: 1958982,
+      region_id: "bihar-state",
+      pack_id: "in-br-routing",
+    });
+
+  const odishaRouteFromGeocode = (_geo, lat, lng, gpsAccuracy) =>
+    pinnedStateRoute(lat, lng, gpsAccuracy, {
+      envelope: ODISHA_ROUTING_ENVELOPE,
+      coverage: odishaCoverage,
+      authority: ODISHA_STATE_AUTHORITY,
+      routing_source: "osm_odisha_state_boundary",
+      name: "Odisha",
+      relation_id: 1984022,
+      region_id: "odisha-state",
+      pack_id: "in-od-routing",
+    });
+
+  const remainingStateCoverage = (packId) => {
+    const config = REMAINING_STATE_ROUTE_CONFIGS[packId];
+    return config ? pinnedStateCoverage(packId, config.authority_id,
+      config.relation_id, config.geometry_sha256) : Promise.resolve(null);
+  };
+
+  async function remainingStateRouteFromGeocode(_geo, lat, lng, gpsAccuracy) {
+    let deferredFailure = null;
+    for (const [packId, config] of Object.entries(REMAINING_STATE_ROUTE_CONFIGS)) {
+      if (!pointInEnvelope(lat, lng, config.envelope)) continue;
+      const route = await pinnedStateRoute(lat, lng, gpsAccuracy, {
+        ...config,
+        pack_id: packId,
+        coverage: () => remainingStateCoverage(packId),
+      });
+      if (!route) continue;
+      if (route.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredFailure) deferredFailure = route;
+        continue;
+      }
+      return route;
+    }
+    return deferredFailure;
+  }
+
+  let _majorCityCoverage = null, _majorCityCoveragePromise = null;
+  async function majorCityCoverage() {
+    if (_majorCityCoverage) return _majorCityCoverage;
+    if (_majorCityCoveragePromise) return _majorCityCoveragePromise;
+    _majorCityCoveragePromise = (async () => {
+      try {
+        const pack = await loadStatePack("in-top50-routing");
+        const payload = pack && pack.payload;
+        if (payload && payload.version === 1 && Array.isArray(payload.regions)
+            && payload.regions.length === 35) _majorCityCoverage = payload;
+      } catch (e) { /* fail closed and allow a later retry */ }
+      return _majorCityCoverage;
+    })();
+    const result = await _majorCityCoveragePromise;
+    _majorCityCoveragePromise = null;
+    return result;
+  }
+
+  async function majorCityRouteFromGeocode(geo, lat, lng, gpsAccuracy) {
+    if (!inMajorCityCandidateEnvelope(lat, lng)) return null;
+    const coverage = await majorCityCoverage();
+    if (!coverage) return unroutedRoute("jurisdiction_unavailable");
+    const candidates = coverage.regions.filter((region) =>
+      pointInEnvelope(lat, lng, region.envelope));
+    if (!candidates.length) return null;
+    const matches = candidates.map((region) => ({ region, match: structuredPlaceMatch(geo, region) }))
+      .filter((item) => !!item.match);
+    // A stale or missing geocoder response cannot select a portal. Let exact polygon
+    // routes and the final statewide check continue rather than letting a search box
+    // masquerade as a municipal boundary.
+    if (!matches.length) return null;
+    if (!Number.isFinite(gpsAccuracy) || gpsAccuracy < 0 || gpsAccuracy > 30
+        || matches.length > 1
+        || !accuracyCircleWithinEnvelope(lat, lng, gpsAccuracy, matches[0].region.envelope)) {
+      return unroutedRoute("location_uncertain");
+    }
+    const selected = matches[0];
+    const authority = OFFICIAL_AUTHORITY_INDEX.get(selected.region.authority_id);
+    if (!authority) return unroutedRoute("jurisdiction_unavailable");
+    return authorityRoute(authority, {
+      routing_source: selected.region.routing_source,
+      match_field: "structured_place",
+      match_value: `${selected.match.field}: ${selected.match.value}`,
+      region: selected.region.id,
+      pack_id: "in-top50-routing",
+    });
+  }
+
+  function gpsAccuracyEnvelope(lat, lng, accuracy) {
+    // ArcGIS treats a zero-area envelope as empty. One metre is a conservative numeric
+    // floor when Android reports zero, while real fixes keep their full stated accuracy.
+    const radius = Math.max(1, Number(accuracy));
+    const latitudeRadius = radius / 111320;
+    const longitudeRadius = radius
+      / (111320 * Math.max(0.1, Math.cos(lat * Math.PI / 180)));
+    return {
+      xmin: lng - longitudeRadius,
+      ymin: lat - latitudeRadius,
+      xmax: lng + longitudeRadius,
+      ymax: lat + latitudeRadius,
+      spatialReference: { wkid: 4326 },
+    };
+  }
+
+  function accuracyCircleWithinEnvelope(lat, lng, accuracy, envelope) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)
+        || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 30
+        || !validMunicipalEnvelope(envelope)) return false;
+    const circle = gpsAccuracyEnvelope(lat, lng, accuracy);
+    return circle.xmin >= envelope.min_lng && circle.xmax <= envelope.max_lng
+      && circle.ymin >= envelope.min_lat && circle.ymax <= envelope.max_lat;
+  }
+
+  async function officialArcGisCount(query, geometry) {
+    // The TGRAC service does not advertise browser CORS. CapacitorHttp patches fetch in
+    // the Android shell, so native requests work without weakening the public web app.
+    if (!NATIVE) return null;
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = setTimeout(() => controller && controller.abort(), 12000);
+    try {
+      const url = new URL(query.query_url);
+      url.searchParams.set("where", query.query_where);
+      url.searchParams.set("geometry", JSON.stringify(geometry));
+      url.searchParams.set("geometryType", query.query_geometry_type);
+      url.searchParams.set("inSR", String(query.query_in_sr));
+      url.searchParams.set("spatialRel", query.query_spatial_rel);
+      url.searchParams.set("returnCountOnly", "true");
+      url.searchParams.set("f", "json");
+      const response = await fetch(url.toString(), {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      if (!response.ok) return null;
+      const body = await response.json();
+      return exactObjectKeys(body, ["count"])
+        && Number.isInteger(body.count) && body.count >= 0 && body.count <= 1000
+        ? body.count : null;
+    } catch (e) {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function officialPointRegionMatch(region, lat, lng, accuracy) {
+    if (!pointInEnvelope(lat, lng, region.envelope)) return { kind: "outside" };
+    if (!Number.isFinite(accuracy) || accuracy < 0 || accuracy > 30) {
+      return { kind: "uncertain" };
+    }
+    const geometry = gpsAccuracyEnvelope(lat, lng, accuracy);
+    const queries = [
+      officialArcGisCount(region, geometry),
+      ...region.exclusions.map((exclusion) => officialArcGisCount(exclusion, geometry)),
+    ];
+    const [coverageCount, ...exclusionCounts] = await Promise.all(queries);
+    if (coverageCount === null || exclusionCounts.some((count) => count === null)) {
+      return { kind: "unavailable" };
+    }
+    if (coverageCount === 0) return { kind: "outside" };
+    if (coverageCount !== 1) return { kind: "unavailable" };
+    if (exclusionCounts.some((count) => count > 0)) return { kind: "excluded" };
+    return { kind: "match" };
+  }
+
+  async function municipalCityRouteFromGeocode(packId, geo, lat, lng, gpsAccuracy) {
+    const config = MUNICIPAL_CITY_CONFIGS[packId];
+    if (!config || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    // A geocoder label is never allowed to make a distant city pack relevant. This is
+    // especially important when Android returns a stale address for a fresh GPS fix.
+    const relevant = pointInEnvelope(lat, lng, config.envelope);
+    if (!relevant) return null;
+    const coverage = await municipalCityCoverage(packId);
+    if (!coverage) return unroutedRoute("jurisdiction_unavailable");
+
+    const enforceGpsAccuracy = gpsAccuracy !== undefined;
+    if (enforceGpsAccuracy
+        && (!Number.isFinite(gpsAccuracy) || gpsAccuracy < 0 || gpsAccuracy > 30)) {
+      return unroutedRoute("location_uncertain");
+    }
+
+    const matches = [];
+    let touchesBoundary = false;
+    for (const region of coverage.regions) {
+      if (region.routing_mode === "official_point_query") {
+        const result = await officialPointRegionMatch(region, lat, lng, gpsAccuracy);
+        if (result.kind === "uncertain") return unroutedRoute("location_uncertain");
+        if (result.kind === "unavailable") return unroutedRoute("jurisdiction_unavailable");
+        if (result.kind === "excluded") return unroutedRoute("outside_area");
+        if (result.kind === "match") {
+          matches.push({
+            region,
+            match_field: "official_accuracy_envelope",
+            match_value: region.match_value,
+          });
+        }
+        continue;
+      }
+      let excluded = false;
+      for (const exclusion of region.exclusions) {
+        if (Number.isFinite(gpsAccuracy)
+            && geometryBoundaryDistanceMeters(lng, lat, envelopeGeometry(exclusion.bbox)) <= gpsAccuracy) {
+          touchesBoundary = true;
+        }
+        if (pointInEnvelope(lat, lng, exclusion.bbox)) excluded = true;
+      }
+      if (excluded) continue;
+      if (region.routing_mode === "boundary") {
+        if (Number.isFinite(gpsAccuracy)
+            && geometryBoundaryDistanceMeters(lng, lat, region.geometry) <= gpsAccuracy) {
+          touchesBoundary = true;
+        }
+        if (pointInGeometry(lng, lat, region.geometry)) {
+          matches.push({ region, match_field: "boundary", match_value: region.match_value });
+        }
+      } else if (region.routing_mode === "structured_geocode"
+          && pointInEnvelope(lat, lng, region.envelope)) {
+        const structured = structuredPlaceMatch(geo, region);
+        if (structured) {
+          matches.push({
+            region,
+            match_field: "structured_place",
+            match_value: `${structured.field}: ${structured.value}`,
+          });
+        }
+      }
+    }
+    if (touchesBoundary || matches.length > 1) return unroutedRoute("location_uncertain");
+    if (!matches.length) return unroutedRoute("outside_area");
+    const match = matches[0];
+    const authority = OFFICIAL_AUTHORITY_INDEX.get(match.region.authority_id);
+    if (!authority) return unroutedRoute("jurisdiction_unavailable");
+    return authorityRoute(authority, {
+      routing_source: match.region.routing_source,
+      match_field: match.match_field,
+      match_value: match.match_value,
+      region: match.region.id,
+      pack_id: packId,
+    });
+  }
+
+  function matchedMmrAuthorities(geo) {
+    if (!isMaharashtraGeocode(geo)) return [];
+    const fields = ["city", "town", "municipality", "city_district"];
+    const found = new Map();
+    for (const field of fields) {
+      const value = normaliseAuthorityValue(geo[field]);
+      const authority = MMR_ALIAS_INDEX.get(value);
+      if (authority && !found.has(authority.id)) found.set(authority.id, { authority, field, value: geo[field] });
+    }
+    return [...found.values()];
+  }
+
+  function containingMmrAuthorities(coverage, lng, lat) {
+    const boundaries = coverage && coverage.regions && coverage.regions.mmr
+      && coverage.regions.mmr.authority_boundaries;
+    if (!boundaries) return [];
+    const matches = [];
+    for (const [id, boundary] of Object.entries(boundaries)) {
+      if (!pointInGeometry(lng, lat, boundary.geometry)) continue;
+      const authority = OFFICIAL_AUTHORITY_INDEX.get(id);
+      if (authority) matches.push({ authority, boundary });
+    }
+    return matches;
+  }
+
+  function bmcWardFromBoundary(boundary, lng, lat, gpsAccuracy) {
+    if (!boundary || !Array.isArray(boundary.wards)) return null;
+    const matches = boundary.wards.filter((ward) => pointInGeometry(lng, lat, ward.geometry));
+    if (matches.length !== 1) return null;
+    if (Number.isFinite(gpsAccuracy)
+        && geometryBoundaryDistanceMeters(lng, lat, matches[0].geometry) <= gpsAccuracy) {
+      return null;
+    }
+    return matches[0].code;
+  }
+
+  function unroutedRoute(reason, bodyName = null) {
+    return { routed: false, unrouted_reason: reason, authority_name: bodyName };
+  }
+
+  function authorityRoute(authority, options = {}) {
+    const email = authority.officer_email || null;
+    const handoff = !email;
+    const inferredPackId = authority.id && authority.id.startsWith("mh-") ? "in-mh-routing"
+      : authority.id && authority.id.startsWith("wb-") ? "in-wb-routing"
+        : authority.id === "dl-pwd-sewa" ? "in-dl-routing" : null;
+    return {
+      routed: true,
+      officer_name: email ? `Civic complaint desk, ${authority.name}`
+        : `${authority.handoff_name}, ${authority.name}`,
+      officer_email: email,
+      authority_id: authority.id,
+      authority_name: authority.name,
+      authority_registry_version: AUTHORITY_REGISTRY_VERSION,
+      delivery_channel: handoff ? "official_handoff" : "email",
+      ward_code: options.ward_code || null,
+      routing_source: options.routing_source || "openstreetmap_structured",
+      routing_match_field: options.match_field || null,
+      routing_match_value: options.match_value || null,
+      region: options.region || "mmr",
+      ownership_unverified: true,
+      handoff_name: authority.handoff_name || null,
+      handoff_url: authority.handoff_url || null,
+      handoff_package: authority.handoff_package || null,
+      alternate_handoff_name: authority.alternate_handoff_name || null,
+      alternate_handoff_url: authority.alternate_handoff_url || null,
+      whatsapp_url: authority.whatsapp_url || null,
+      helpline: authority.helpline || null,
+      requires_official_reference: handoff,
+      tender_eligible: false,
+      ...statePackProvenance(options.pack_id || inferredPackId),
+    };
+  }
+
+  function routeForIssue(route, issueType) {
+    const issue = normaliseIssueType(issueType);
+    if (!route || !route.routed) return route ? { ...route, issue_type: issue } : route;
+    // Contract matching is meaningful only for detected road damage. A civic report must
+    // never inherit a road tender merely because it shares the same municipal route.
+    const base = {
+      ...(issue === "road_damage" ? separateRoadResponsibility(route) : route),
+      issue_type: issue,
+      tender_eligible: issue === "road_damage" ? !!route.tender_eligible : false,
+    };
+    let override = null;
+    if (issue !== "road_damage") override = CIVIC_HANDOFF_OVERRIDES[route.authority_id] || null;
+    if (issue !== "road_damage"
+        && BENGALURU_AUTHORITY_NAMES.has(normaliseAuthorityValue(route.authority_name))) {
+      override = BENGALURU_HANDOFF;
+    }
+    // Every Maharashtra civic issue without a reviewed category-specific route has a
+    // neutral statewide grievance handoff. This avoids pretending that a pothole-only
+    // or bare municipal URL accepts garbage and manhole complaints while retaining any
+    // polygon-selected local body only as context.
+    if (issue !== "road_damage" && !override
+        && /^mh-/.test(String(route.authority_id || ""))) {
+      const stateRoute = CIVIC_HANDOFF_OVERRIDES["mh-statewide-unverified"];
+      override = route.authority_id === "mh-mmr-unverified"
+        ? CIVIC_HANDOFF_OVERRIDES["mh-mmr-unverified"]
+        : { ...stateRoute, authority_name: base.authority_name };
+    }
+    if (!override) {
+      if (issue === "road_damage" || GENERAL_CIVIC_AUTHORITY_IDS.has(route.authority_id)) {
+        return base;
+      }
+      return {
+        ...unroutedRoute("unsupported_issue_type", base.authority_name),
+        issue_type: issue,
+      };
+    }
+    const authorityName = override.authority_name || base.authority_name;
+    return {
+      ...base,
+      ...override,
+      issue_type: issue,
+      authority_name: authorityName,
+      officer_name: `${override.handoff_name}, ${authorityName}`,
+      officer_email: null,
+      delivery_channel: "official_handoff",
+      requires_official_reference: true,
+      tender_eligible: false,
+    };
+  }
+
+  async function maharashtraRouteFromGeocode(geo, lat, lng, gpsAccuracy) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    const relevant = inMaharashtraRoutingEnvelope(lat, lng);
+    if (!relevant) return null;
+    const coverage = await maharashtraCoverage();
+    if (!coverage) {
+      return unroutedRoute("jurisdiction_unavailable");
+    }
+    const inState = pointInGeometry(lng, lat, coverage.regions.maharashtra.geometry);
+    const inPmc = pointInGeometry(lng, lat, coverage.regions.pmc.geometry);
+    const inMmr = pointInGeometry(lng, lat, coverage.regions.mmr.geometry);
+    const enforceGpsAccuracy = gpsAccuracy !== undefined;
+    if (enforceGpsAccuracy
+        && (!Number.isFinite(gpsAccuracy) || gpsAccuracy < 0 || gpsAccuracy > 30)) {
+      return (inState || inPmc || inMmr) ? unroutedRoute("location_uncertain") : null;
+    }
+    if (Number.isFinite(gpsAccuracy)) {
+      const stateEdgeDistance = geometryBoundaryDistanceMeters(
+        lng, lat, coverage.regions.maharashtra.geometry);
+      const pmcEdgeDistance = geometryBoundaryDistanceMeters(
+        lng, lat, coverage.regions.pmc.geometry);
+      const mmrEdgeDistance = geometryBoundaryDistanceMeters(
+        lng, lat, coverage.regions.mmr.geometry);
+      if (stateEdgeDistance <= gpsAccuracy
+          || pmcEdgeDistance <= gpsAccuracy || mmrEdgeDistance <= gpsAccuracy) {
+        return unroutedRoute("location_uncertain");
+      }
+    }
+    if (!inState) return null;
+    if (inPmc) {
+      return authorityRoute(PMC_AUTHORITY, {
+        routing_source: "pmc_official_gis", match_field: "boundary",
+        match_value: "PMC_Boundary", region: "pune",
+      });
+    }
+    if (inMmr) {
+      if (Number.isFinite(gpsAccuracy)) {
+        const boundaries = Object.values(coverage.regions.mmr.authority_boundaries || {});
+        if (boundaries.some((boundary) =>
+          geometryBoundaryDistanceMeters(lng, lat, boundary.geometry) <= gpsAccuracy)) {
+          return unroutedRoute("location_uncertain");
+        }
+      }
+      const contained = containingMmrAuthorities(coverage, lng, lat);
+      if (contained.length === 1) {
+        const match = contained[0];
+        const ward = match.authority.id === "mh-bmc"
+          ? bmcWardFromBoundary(match.boundary, lng, lat, gpsAccuracy) : null;
+        const relationIds = Array.isArray(match.boundary.source_relation_ids)
+          ? match.boundary.source_relation_ids.join(", ") : "";
+        return authorityRoute(match.authority, {
+          ward_code: ward, routing_source: "osm_ulb_boundary",
+          match_field: "boundary",
+          match_value: `${match.boundary.source_name || match.authority.name}${relationIds ? ` (OSM ${relationIds})` : ""}`,
+          region: "mmr",
+        });
+      }
+      // Rural MMR, an overlap, and the eight councils without a mapped administrative
+      // polygon all go to a neutral state portal. A nearby/postal town name is only a
+      // clue; it never selects a recipient by itself.
+      const clues = matchedMmrAuthorities(geo);
+      return authorityRoute(MMR_FALLBACK_AUTHORITY, {
+        routing_source: "mmr_boundary_fallback",
+        match_field: contained.length > 1 ? "overlapping_boundaries"
+          : clues.length ? "unverified_place_clue" : "boundary",
+        match_value: contained.length > 1
+          ? contained.map((x) => x.authority.name).join(" / ")
+          : clues.length ? clues.map((x) => x.authority.name).join(" / ") : "MMR",
+        region: "mmr",
+      });
+    }
+    return authorityRoute(MAHARASHTRA_STATE_AUTHORITY, {
+      routing_source: "osm_maharashtra_state_boundary",
+      match_field: "boundary",
+      match_value: "Maharashtra (OpenStreetMap relation 1950884)",
+      region: "maharashtra",
+    });
   }
 
   // Asks the state which body contains this point. Returns null when the point is
@@ -869,8 +5318,32 @@
     return { kind: "outside_state" };
   }
 
-  // Resolves the officer to address, or [null, null] with a reason. Every path that
-  // cannot name a real body returns nothing rather than a plausible-looking guess.
+  // Garbage and manhole complaints belong to the containing civic body regardless of
+  // the road class beside them. Querying the highway layer for those categories would
+  // wrongly send a waste pile on an NH service road to Rajmargyatra—or refuse it.
+  async function kgisCivicJurisdiction(lat, lng) {
+    const town = await retryQuery(
+      KGIS_TOWN_URL, lat, lng, "KGISTownName,Town_Type,KGISTownCode,LGD_TownCode");
+    if (!town) return { kind: "jurisdiction_unavailable" };
+    const t = featuresOf(await readJson(town));
+    if (t === null) return { kind: "jurisdiction_unavailable" };
+    if (t.length) {
+      const a = t[0].attributes || {};
+      return { kind: "town", name: a.KGISTownName || null,
+               type: (a.Town_Type || "").trim().toUpperCase(),
+               lgd: a.LGD_TownCode ? String(a.LGD_TownCode) : "" };
+    }
+    const gp = await retryQuery(KGIS_GP_URL, lat, lng, "KGISGPName");
+    if (!gp) return { kind: "jurisdiction_unavailable" };
+    const g = featuresOf(await readJson(gp));
+    if (g === null) return { kind: "jurisdiction_unavailable" };
+    const name = g.length && (g[0].attributes || {}).KGISGPName;
+    if (name && String(name).trim()) return { kind: "rural", name: String(name).trim() };
+    return { kind: "outside_state" };
+  }
+
+  // Resolves one explicit route object. Every path that cannot name a real body returns
+  // an unrouted object rather than a plausible-looking guess or a fragile tuple.
   // One GIS answer per location, shared by contract lookup and officer routing. Both
   // need it, and asking twice would double the latency of the one network call on the
   // critical path.
@@ -900,18 +5373,242 @@
 
   async function routeOfficer(address, lat, lng, authoritativeJurisdiction = null) {
     if (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)) {
-      return [null, null, "no_location"];
+      return routeForIssue(unroutedRoute("no_location"), issueType);
+    }
+    // RTSP supplies decoder-delivery time, not the dashcam sensor's capture instant.
+    // Native dashcam evidence therefore sends an explicit unknown accuracy until that
+    // exact camera/phone pair is latency-calibrated. Never turn such coordinates into an
+    // authority, officer or tender claim; phone-camera and manual flows keep their normal
+    // finite-accuracy route.
+    if (gpsAccuracy !== undefined && (gpsAccuracy === null || !Number.isFinite(gpsAccuracy)
+        || gpsAccuracy < 0 || gpsAccuracy > 30)) {
+      return routeForIssue(unroutedRoute("location_uncertain"), issueType);
     }
 
-    // If the state cannot tell us what this road is, we do not name anyone. The highway
-    // check lives inside kgisJurisdiction, so any path that routes without it can address
-    // a Commissioner for a carriageway NHAI owns: with the GIS blocked, NH48 at
-    // Nelamangala produced a send-ready draft to comm@bbmp.gov.in, because it sits inside
-    // the old Bengaluru bounding box that the fallback trusted.
-    //
-    // Nothing is lost by refusing. Detection itself needs the network, so there is no
-    // offline report to route; this path only fires when OpenAI is reachable and the
-    // state GIS is not, and in that case the road's owner is genuinely unknown.
+    const geo = geoOrAddress && typeof geoOrAddress === "object" ? geoOrAddress : null;
+    const geocodeStateCode = stateCodeForGeocode(geo);
+    const exactContractStateP = issueType === "road_damage" && geocodeStateCode
+      ? optionalCatalogResult(
+          exactPinnedContractStateCode(geocodeStateCode, lat, lng, gpsAccuracy))
+      : Promise.resolve(null);
+    // Road class outranks the containing city. Without this first check, a pothole on an
+    // NH passing through Delhi, Kolkata, Chennai, Hyderabad, Ahmedabad, MMR or Pune can
+    // be addressed to the municipal body even though the highway has another maintainer.
+    const highway = issueType === "road_damage"
+      ? await nationalHighwayRoute(lat, lng, gpsAccuracy, heading, speed) : null;
+    if (highway) {
+      const contractStateCode = await exactContractStateP;
+      return routeForIssue({
+        ...highway,
+        contract_state_code: contractStateCode,
+        // A pack is loaded only when an official project source has records for this
+        // jurisdiction. Eligibility means "candidate search allowed", never that this
+        // point has already been assigned to a contract.
+        tender_eligible: !!contractStateCode,
+      }, issueType);
+    }
+
+    // Coarse download envelopes overlap neighbouring jurisdictions. Preserve a pack
+    // failure as the eventual answer, but keep evaluating independent exact polygons.
+    // In particular, Delhi's prefilter contains Noida and Ghaziabad in Uttar Pradesh.
+    let deferredJurisdictionFailure = null;
+    const delhi = await delhiRouteFromGeocode(geo, lat, lng, gpsAccuracy);
+    if (delhi && delhi.unrouted_reason !== "outside_area") {
+      if (delhi.unrouted_reason === "jurisdiction_unavailable") {
+        deferredJurisdictionFailure = delhi;
+      } else {
+        return routeForIssue(delhi, issueType);
+      }
+    }
+
+    const kolkata = await kolkataRouteFromGeocode(geo, lat, lng, gpsAccuracy);
+    if (kolkata && kolkata.unrouted_reason !== "outside_area") {
+      return routeForIssue(kolkata, issueType);
+    }
+
+    // A missing pack inside a coarse prefilter is not proof that the point belongs to
+    // that jurisdiction. Remember the transient failure, but let independent exact
+    // routes continue. This is especially important near Tamil Nadu: its download
+    // envelope also contains Bengaluru and Kochi.
+    for (const packId of ["in-tn-routing", "in-tg-routing", "in-gj-routing"]) {
+      const municipal = await municipalCityRouteFromGeocode(packId, geo, lat, lng, gpsAccuracy);
+      if (municipal && municipal.unrouted_reason !== "outside_area") {
+        if (municipal.unrouted_reason === "jurisdiction_unavailable") {
+          if (!deferredJurisdictionFailure) deferredJurisdictionFailure = municipal;
+          continue;
+        }
+        return routeForIssue(municipal, issueType);
+      }
+    }
+
+    // My Cure remains the exact route inside verified Hyderabad CURE coverage.
+    // Everywhere else in the exact Telangana state polygon—including a CURE service
+    // failure or Cantonment exclusion—may use the neutral statewide Prajavani route.
+    const telangana = await telanganaRouteFromGeocode(geo, lat, lng, gpsAccuracy);
+    if (telangana) {
+      if (telangana.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = telangana;
+      } else {
+        return routeForIssue(telangana, issueType);
+      }
+    }
+
+    // GCC's exact municipal polygon above keeps precedence inside Chennai. Everywhere
+    // else in the exact Tamil Nadu state polygon uses the neutral statewide channel.
+    const tamilNadu = await tamilNaduRouteFromGeocode(geo, lat, lng, gpsAccuracy);
+    if (tamilNadu) {
+      if (tamilNadu.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = tamilNadu;
+      } else {
+        return routeForIssue(tamilNadu, issueType);
+      }
+    }
+
+    const andhraPradesh = await andhraPradeshRouteFromGeocode(
+      geo, lat, lng, gpsAccuracy);
+    if (andhraPradesh) {
+      if (andhraPradesh.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = andhraPradesh;
+      } else {
+        return routeForIssue(andhraPradesh, issueType);
+      }
+    }
+
+    const maharashtra = await maharashtraRouteFromGeocode(geo, lat, lng, gpsAccuracy);
+    if (maharashtra) {
+      // Maharashtra's coarse download envelope overlaps northern Karnataka. A missing
+      // Maharashtra pack is not evidence that a Kalaburagi-area point belongs there;
+      // preserve the failure but allow Karnataka's independent exact polygon to decide.
+      if (maharashtra.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = maharashtra;
+      } else {
+        return routeForIssue(maharashtra, issueType);
+      }
+    }
+
+    const punjab = await punjabRouteFromGeocode(geo, lat, lng, gpsAccuracy);
+    if (punjab) {
+      // Punjab's coarse download envelope reaches into northern Rajasthan. A failed
+      // Punjab pack must not turn that overlap into evidence that a Rajasthan point
+      // is unroutable; retain the failure while the exact state polygons continue.
+      if (punjab.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = punjab;
+      } else {
+        return routeForIssue(punjab, issueType);
+      }
+    }
+
+    // The old top-50 pack names seven Kerala cities from geocoder text. The exact state
+    // polygon is stronger evidence and now covers every Kerala location, so it gets the
+    // vote first while the old pack remains available only for saved-report compatibility.
+    const kerala = await keralaRouteFromGeocode(geo, lat, lng, gpsAccuracy);
+    if (kerala) {
+      if (kerala.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = kerala;
+      } else {
+        return routeForIssue(kerala, issueType);
+      }
+    }
+
+    // Exact state polygons supersede the old city-name routes in the immutable top-50
+    // compatibility pack. Delhi and every earlier reviewed state/city route keep their
+    // first refusal, even where the coarse Uttar Pradesh or Chhattisgarh envelopes overlap.
+    const uttarPradesh = await uttarPradeshRouteFromGeocode(
+      geo, lat, lng, gpsAccuracy);
+    if (uttarPradesh) {
+      if (uttarPradesh.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = uttarPradesh;
+      } else {
+        return routeForIssue(uttarPradesh, issueType);
+      }
+    }
+
+    const chhattisgarh = await chhattisgarhRouteFromGeocode(
+      geo, lat, lng, gpsAccuracy);
+    if (chhattisgarh) {
+      if (chhattisgarh.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = chhattisgarh;
+      } else {
+        return routeForIssue(chhattisgarh, issueType);
+      }
+    }
+
+    const rajasthan = await rajasthanRouteFromGeocode(geo, lat, lng, gpsAccuracy);
+    if (rajasthan) {
+      if (rajasthan.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = rajasthan;
+      } else {
+        return routeForIssue(rajasthan, issueType);
+      }
+    }
+
+    // These exact state polygons sit inside coarse download envelopes that overlap
+    // several already-supported neighbours. A failed download is deferred so another
+    // independently verified polygon can still win; coordinates never route from the
+    // envelope or a reverse-geocoder state label alone.
+    for (const statewideRoute of [
+      goaRouteFromGeocode, madhyaPradeshRouteFromGeocode,
+      biharRouteFromGeocode, odishaRouteFromGeocode,
+    ]) {
+      const state = await statewideRoute(geo, lat, lng, gpsAccuracy);
+      if (!state) continue;
+      if (state.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = state;
+      } else {
+        return routeForIssue(state, issueType);
+      }
+    }
+
+    const majorCity = await majorCityRouteFromGeocode(geo, lat, lng, gpsAccuracy);
+    if (majorCity) {
+      // The immutable compatibility pack still contains older city-only state routes so
+      // saved reports can be revalidated. A missing current statewide pack must never
+      // make a new report silently fall back to those stale channels; retain the
+      // transient failure so the user can retry safely.
+      const supersededCityRoute = majorCity.authority_id === "in-ap-puramithra"
+        || majorCity.authority_id === "in-tn-cm-helpline"
+        || majorCity.authority_id === "in-kl-ksmart"
+        || majorCity.authority_id === "in-up-jansunwai"
+        || majorCity.authority_id === "in-cg-nidaan"
+        || majorCity.authority_id === "in-rj-sampark"
+        || majorCity.authority_id === "in-mp-cm-helpline"
+        || majorCity.authority_id === "in-br-lok-shikayat";
+      if (deferredJurisdictionFailure && supersededCityRoute) {
+        return routeForIssue(deferredJurisdictionFailure, issueType);
+      }
+      return routeForIssue(majorCity, issueType);
+    }
+
+    // Every State and Union Territory now has an exact checksum-pinned outer boundary.
+    // Existing exact municipal routes and reviewed city-specific handoffs above retain
+    // precedence; these additions fill every remaining coordinate conservatively.
+    const remainingState = await remainingStateRouteFromGeocode(
+      geo, lat, lng, gpsAccuracy);
+    if (remainingState) {
+      if (remainingState.unrouted_reason === "jurisdiction_unavailable") {
+        if (!deferredJurisdictionFailure) deferredJurisdictionFailure = remainingState;
+      } else {
+        return routeForIssue(remainingState, issueType);
+      }
+    }
+
+    // Karnataka's polygon decides whether a neutral state fallback is permitted. KGIS
+    // may still select a more specific reviewed urban body, but neither the old coarse
+    // rectangle nor a reverse-geocoder label can establish state membership.
+    const karnatakaState = await karnatakaStateRouteFromGeocode(
+      geo, lat, lng, gpsAccuracy);
+    if (!karnatakaState) {
+      return routeForIssue(
+        deferredJurisdictionFailure || unroutedRoute("outside_area"), issueType);
+    }
+    if (karnatakaState.unrouted_reason === "location_uncertain") {
+      return routeForIssue(karnatakaState, issueType);
+    }
+    const karnatakaFallback = karnatakaState.routed ? karnatakaState : null;
+
+    // The nationwide NH geometry has already had first refusal. KGIS can now improve a
+    // Karnataka match to a verified urban body; any ambiguous rural/owner result stays
+    // with Janaspandana and is explicitly marked ownership-unverified.
     let where;
     try {
       where = authoritativeJurisdiction
@@ -929,9 +5626,72 @@
 
     const registry = await bodies();
     const entry = where.lgd && registry[where.lgd];
-    if (!entry || !entry.email) return [null, null, "no_address_for_body", where.name];
+    if (!entry || !entry.email) return routeForIssue(karnatakaFallback
+      || unroutedRoute("no_address_for_body", where.name), issueType);
     const title = entry.officer || OFFICER_TITLES[entry.type || where.type] || "Chief Officer";
-    return [`${title}, ${entry.name}${entry.short ? ` (${entry.short})` : ""}`, entry.email, null];
+    const exactKarnataka = routeForIssue({
+      routed: true,
+      officer_name: `${title}, ${entry.name}${entry.short ? ` (${entry.short})` : ""}`,
+      officer_email: entry.email,
+      authority_id: `ka-lgd-${where.lgd}`,
+      authority_name: entry.name,
+      authority_registry_version: AUTHORITY_REGISTRY_VERSION,
+      delivery_channel: "email",
+      ward_code: null,
+      routing_source: "kgis",
+      routing_match_field: "lgd",
+      routing_match_value: where.lgd,
+      region: "karnataka",
+      // KGIS proves the containing urban body, not which agency maintains this segment.
+      ownership_unverified: true,
+      requires_official_reference: false,
+      tender_eligible: true,
+      ...statePackProvenance("in-ka-routing"),
+    }, issueType);
+    if (issueType !== "road_damage" && !exactKarnataka.routed) {
+      return routeForIssue(karnatakaFallback || exactKarnataka, issueType);
+    }
+    return exactKarnataka;
+  }
+
+  async function routeOfficer(geoOrAddress, lat, lng, gpsAccuracy, heading, speed,
+                              requestedIssueType) {
+    const route = await routeOfficerCore(
+      geoOrAddress, lat, lng, gpsAccuracy, heading, speed, requestedIssueType);
+    const issueType = normaliseIssueType(requestedIssueType);
+    const stateCode = stateCodeForGeocode(
+      geoOrAddress && typeof geoOrAddress === "object" ? geoOrAddress : null);
+    const contractStateCode = trustedContractStateCode(route, stateCode);
+    // A State/UT routing pack is stronger jurisdiction evidence than reverse geocoding
+    // near a border. The geocoder may key nationwide/NH routes, but a State pack must
+    // agree exactly; disagreement disables contract lookup instead of crossing borders.
+    if (!route || !route.routed || issueType !== "road_damage") return route;
+    const updated = { ...route, contract_state_code: contractStateCode };
+    if (!contractStateCode && route.region === "national-highway") {
+      updated.tender_eligible = false;
+    }
+    return updated;
+  }
+
+  function trustedContractStateCode(route, geocodeStateCode) {
+    if (!route || route.routed !== true) return null;
+    const geocodedState = /^[A-Z]{2}$/.test(String(geocodeStateCode || ""))
+      ? String(geocodeStateCode) : null;
+    const packState = String(route.routing_pack_state_code || "");
+    if (["IN", "NH"].includes(packState)) {
+      if (route.region === "national-highway") {
+        return geocodedState && route.contract_state_code === geocodedState
+          ? geocodedState : null;
+      }
+      return geocodedState;
+    }
+    if (/^[A-Z]{2}$/.test(packState)) {
+      // A checksum-pinned State/UT polygon is jurisdiction evidence in its own right.
+      // Reverse geocoding is only a cross-check: an outage must not disable the local
+      // State catalog, while a conflicting State label still fails closed.
+      return !geocodedState || packState === geocodedState ? packState : null;
+    }
+    return null;
   }
 
   function unroutedComplaintMessage(reason) {
@@ -1035,7 +5795,7 @@
     }
     // A manual photo is an explicit user action. Do not silently swallow it based on
     // approximate phone GPS; automatic Drive/VOD observations are the duplicate source.
-    if (candidate.capture_source === "manual") return null;
+    if (isManualCaptureSource(candidate.capture_source)) return null;
     if (!compatibleDamage(candidate, prior) || sizeConflict(candidate, prior)) return null;
     const positioned = finiteCoord(candidate.lat) && finiteCoord(candidate.lng)
       && finiteCoord(prior.lat) && finiteCoord(prior.lng);
@@ -1071,6 +5831,51 @@
 
   const sameRoadEvent = (candidate, prior) => !!roadEventMatch(candidate, prior);
 
+  function repairTargetMatch(observation, prior) {
+    if (!observation || observation.capture_source !== "drive_live" || observation.debug_capture
+        || !prior || normaliseIssueType(prior.issue_type) !== "road_damage"
+        || !acceptedReport(prior) || prior.debug_capture || prior.dedupe_eligible === false
+        || !prior.photo || !finiteCoord(observation.lat) || !finiteCoord(observation.lng)
+        || !finiteCoord(prior.lat) || !finiteCoord(prior.lng)
+        || !Number.isFinite(observation.gps_accuracy) || observation.gps_accuracy < 0
+        || observation.gps_accuracy > REPAIR_MAX_ACCURACY_M
+        || !Number.isFinite(prior.gps_accuracy) || prior.gps_accuracy < 0
+        || prior.gps_accuracy > REPAIR_MAX_ACCURACY_M) return null;
+    // A repair is a later physical observation, never a reinterpretation of the
+    // original frame. Missing clocks and equal/older timestamps therefore fail closed.
+    const observedAt = observation.observed_at;
+    const damageObservedAt = eventTime(prior);
+    if (!Number.isFinite(observedAt) || !Number.isFinite(damageObservedAt)
+        || observedAt <= damageObservedAt) return null;
+    const driveId = observation.drive_id == null ? null : String(observation.drive_id);
+    if (!driveId) return null;
+    const priorDrives = new Set(Array.isArray(prior.sighting_drive_ids)
+      ? prior.sighting_drive_ids.map(String) : []);
+    if ((prior.drive_id != null && String(prior.drive_id) === driveId) || priorDrives.has(driveId)) {
+      return null;
+    }
+    const distance = distMeters(observation.lat, observation.lng, prior.lat, prior.lng);
+    let radius = REPAIR_RADIUS_M;
+    const headingsKnown = Number.isFinite(observation.heading) && Number.isFinite(prior.heading);
+    if (headingsKnown) {
+      if (headingDifference(observation.heading, prior.heading)
+          > REPAIR_MAX_HEADING_DIFFERENCE_DEG) return null;
+    } else {
+      radius = REPAIR_MISSING_HEADING_RADIUS_M;
+    }
+    return distance <= radius ? { distance } : null;
+  }
+
+  function findRepairCandidateFromReports(observation, reports) {
+    const matches = [];
+    for (const prior of reports || []) {
+      const match = repairTargetMatch(observation, prior);
+      if (match) matches.push({ prior, distance: match.distance });
+      if (matches.length > 1) return null;
+    }
+    return matches.length === 1 ? matches[0].prior : null;
+  }
+
   function findDuplicateReport(candidate, reports) {
     for (let i = reports.length - 1; i >= 0; i--) {
       if (sameRoadEvent(candidate, reports[i])) return reports[i];
@@ -1080,16 +5885,145 @@
 
   // ---------- tenders ----------
   let _tenders = null;
-  // Parsed once per app session, which matters far more now the file is 9.5 MB: the
-  // bundled data cannot change while the app runs, so one parse is correct.
-  // As with the registry: a failed read is not cached, or one slow start would silently
-  // stop every complaint naming a contract for the rest of the session.
+  // A road name in a tender can be only the address of a drain, footpath, light or
+  // building. This fail-closed classifier mirrors tools/tender_scope.py so even an old
+  // cached pack can never offer those rows to the model or complaint writer.
+  const ROAD_WORK_ACTIONS = new Set(["asphalt", "asphalting", "construct", "construction",
+    "develop", "development", "improve", "improvement", "improvements", "maintain",
+    "maintenance", "patching", "recarpet", "recarpeting", "reconstruct", "reconstruction",
+    "rehabilitate", "rehabilitation", "renew", "renewal", "repair", "repairs", "resurface",
+    "resurfacing", "restore", "restoration", "strengthen", "strengthening", "tarring",
+    "upgrade", "upgradation", "widen", "widening", "formation"]);
+  const ROAD_NOUNS = new Set(["road", "roads", "carriageway", "carriageways"]);
+  const NON_CARRIAGEWAY_ASSETS = new Set(["arch", "arches", "barricade", "barricades",
+    "bhavan", "bhavana", "borewell", "bridge", "bridges", "building", "buildings", "burial",
+    "bus", "cable", "cables", "cattle", "cd", "camera", "cameras", "cctv", "center",
+    "centre", "chamber", "chambers", "cistern", "college", "collage", "complex", "compound",
+    "court", "courts", "culvert", "culverts", "deck", "dog", "dogsheltar", "drain", "drainage", "drains",
+    "electrical", "fence", "fencing", "footpath", "footpaths", "garden", "facility",
+    "facilities", "floor", "floors", "gantry", "gateway", "gateways", "graveyard", "hall",
+    "helipad", "helipads", "hospital", "house", "houses",
+    "kerb", "kerbs", "curb", "curbs", "lake", "lawn", "lawns", "light", "lighting", "lights", "machinehole",
+    "machineholes", "manhole", "manholes", "mast", "masts", "median", "mh", "mhc",
+    "network", "nursery", "park", "parking", "path", "paths", "pedestrian", "pipeline", "pipelines", "pipe", "pipes",
+    "playground", "plaza", "pole", "poles", "pound", "pumphouse", "pump", "quarters", "roof", "roofs",
+    "room", "rooms", "runway", "runways", "school", "sewer", "sewerage", "shed", "shelter", "shishuvihara",
+    "sidewalk", "sidewalks", "sign", "signage", "signboard", "signboards", "slab", "sorting",
+    "stand", "temple", "toilet", "toilets", "track", "tracks", "transformer", "transformers", "tree", "trees",
+    "ugd", "unit", "urinal", "urinals", "utility", "utilities", "valve", "valves",
+    "vending", "walkway", "walkways", "wall", "walls", "water"]);
+  const NON_SURFACE_ROAD_MODIFIERS = new Set(["divider", "dividers", "furniture", "light",
+    "lighting", "lights", "marking", "markings", "median", "medians", "shoulder", "shoulders",
+    "sign", "signage", "signboard", "signboards"]);
+  const ROAD_PREFIX_MODIFIERS = new Set(["asphalt", "asphalted", "asphaltic", "bituminous",
+    "bt", "cc", "cement", "concrete", "flexible", "internal", "link", "main", "metalled",
+    "paver", "rigid"]);
+  const LOCATION_PREPOSITIONS = new Set(["across", "along", "at", "behind", "beside", "in",
+    "inside", "near", "on", "opposite", "within"]);
+  const explicitRoadDamageRe = /\b(?:repair(?:ing|s)?|fill(?:ing)?|patch(?:ing)?)\s+(?:of\s+)?(?:pot\s*holes?|potholes?)\b|\b(?:pot\s*holes?|potholes?)\s+(?:repair(?:s|ing)?|fill(?:ing)?|patch(?:ing)?|work|works)\b|\battend(?:ing)?\b.{0,48}\b(?:pot\s*holes?|potholes?)\b|\b(?:road|carriageway)\s+(?:patch(?:ing|work)?|surface\s+repair)\b|\b(?:patch(?:ing|work)?|surface\s+repair)\s+(?:of\s+)?(?:the\s+)?(?:road|carriageway)\b/;
+  const surfaceTreatmentRe = /\b(?:asphalting|re\s+asphalting|black\s*topping|tarring|resurfac(?:e|ing)|re\s+carpet(?:ing)?|recarpet(?:ing)?|recarpetting|dense\s+bituminous\s+macadam|bituminous\s+concrete|wet\s+mix\s+macadam|(?:premix|pre\s*mix)\s+carpet|seal\s+coat)\b/;
+  const nonCarriagewayTreatmentTargetRe = /\b(?:asphalting|re\s+asphalting|black\s*topping|tarring|resurfacing|re\s+carpeting|recarpeting|recarpetting|dense\s+bituminous\s+macadam|bituminous\s+concrete|wet\s+mix\s+macadam|(?:premix|pre\s*mix)\s+carpet|seal\s+coat|(?:pot\s*holes?|potholes?)\s+(?:repair(?:s|ing)?|filling|patching)?)\b(?:\s+work)?\s+(?:(?:of|to|on|at|in|for|with)\s+)?(?:the\s+)?(?:(?!roads?\b|carriageways?\b)[a-z0-9]+\s+){0,3}(?:bridge|court|culvert|drain|floor|footpath|garden|helipad|lawn|parking|path|playground|roof|runway|sidewalk|track|walkway|wall)s?\b/;
+  const materialPavementRe = /\b(?:asphalt(?:ic)?|bituminous|cement\s+concrete|concrete|flexible|rigid)\s+pavement\b/;
+  // Advisory/design/inspection assignments can repeat the full physical road scope
+  // without procuring the works. Keep this in lockstep with tools/tender_scope.py and
+  // apply it before any positive road phrase. EPC/design-and-build is intentionally not
+  // rejected unless the title explicitly describes one of these non-works services.
+  const nonWorksServiceRe = /\bconsult(?:ant|ancy|ants|ing)\b|\b(?:authority|independent)\s+engineer(?:ing)?\b|\bproject\s+management\s+(?:consult(?:ant|ancy|ing)|services?)\b|\b(?:preparation|prepare|preparing|revision|review)\s+of\s+(?:a\s+|the\s+)?(?:detailed\s+project\s+report|dpr)\b|\b(?:detailed\s+project\s+report|dpr)\s+(?:preparation|consultancy|services?)\b|\b(?:feasibility|traffic)\s+(?:study|studies|survey|surveys)\b|\bsurvey\s+(?:and|&)\s+investigation\b|\bthird\s+party\s+(?:inspection|quality\s+(?:audit|monitoring))\b|\b(?:quality\s+control|proof\s+checking)\s+(?:consultancy|services?)\b|\b(?:structural\s+)?design\s+(?:and|&)\s+drawing(?:s)?\b|\btotal\s+station\s+survey\b|\broad\s+inventory\b.*\b(?:survey|condition\s+assessment)\b|\bhiring\s+of\s+(?:labou?r|machinery|plant|equipment)\b|\bsupply(?:ing)?\s+of\b.*\b(?:aggregate|asphalt|bitumen|cold\s+mix|pothole(?:s)?\s+repair\s+material|ready\s+mix|stone\s+dust)\b/;
+  const roadsideVegetationRe = /\broad\s*side\s+(?:monsoon\s+)?plantations?\b|\broadside\s+(?:monsoon\s+)?plantations?\b|\bsocial\s+forestr(?:y|ies)\b|(?:\w*plantation\w*|\w*forestr\w*).*\broad\s+side\w*\b|\broad\s+side\w*\b.*(?:\w*plantation\w*|\w*forestr\w*)/;
+
+  const tenderTokens = (value) => (String(value || "").toLowerCase().match(/[a-z0-9]+/g) || []);
+  const hasAny = (tokens, values) => tokens.some((token) => values.has(token));
+  const mixedRoadScope = (tokens, roadIndex) => {
+    let i = roadIndex - 1;
+    while (i >= 0 && ROAD_PREFIX_MODIFIERS.has(tokens[i])) i--;
+    return i >= 1 && tokens[i] === "and" && NON_CARRIAGEWAY_ASSETS.has(tokens[i - 1]);
+  };
+  const coordinatedRoadNoun = (tokens, roadIndex) => {
+    let i = roadIndex - 1;
+    while (i >= 0 && ROAD_PREFIX_MODIFIERS.has(tokens[i])) i--;
+    return i >= 0 && ["and", "plus", "with"].includes(tokens[i]);
+  };
+  const roadIsNonSurfaceModifier = (tokens, roadIndex) => {
+    const following = tokens.slice(roadIndex + 1, roadIndex + 4);
+    if (!following.length) return false;
+    if (NON_SURFACE_ROAD_MODIFIERS.has(following[0])) return true;
+    for (const token of following) {
+      if (["and", "at", "from", "in", "near", "of", "on", "to", "via"].includes(token)) break;
+      if (NON_CARRIAGEWAY_ASSETS.has(token)) return true;
+    }
+    return following.length >= 2 && following[0] === "side"
+      && ["drain", "drains", "light", "lights", "shoulder", "shoulders"].includes(following[1]);
+  };
+
+  function tenderCoversCarriageway(title, tenderNumber) {
+    void tenderNumber; // category fragments such as /RD/ are not scope evidence.
+    let text = tenderTokens(title).join(" ");
+    if (!text) return false;
+    const subwork = text.split(/\bsw\b/);
+    if (subwork.length > 1 && subwork[subwork.length - 1].trim()) {
+      text = subwork[subwork.length - 1].trim();
+    }
+    if (nonWorksServiceRe.test(text)) return false;
+    if (roadsideVegetationRe.test(text)) return false;
+    const tokens = text.split(" ");
+    const hasNonRoadAsset = hasAny(tokens, NON_CARRIAGEWAY_ASSETS);
+    // Treatment words alone do not identify the asset. Public notices include resurfaced
+    // tennis courts, asphalt garden paths and pothole repairs to footpaths. Do not let
+    // those phrases bypass the object/coordination checks below.
+    if (explicitRoadDamageRe.test(text)
+        && !nonCarriagewayTreatmentTargetRe.test(text)) return true;
+    if (surfaceTreatmentRe.test(text)
+        && !nonCarriagewayTreatmentTargetRe.test(text)) return true;
+    if (materialPavementRe.test(text)
+        && !nonCarriagewayTreatmentTargetRe.test(text)) return true;
+    for (let roadIndex = 0; roadIndex < tokens.length; roadIndex++) {
+      if (!ROAD_NOUNS.has(tokens[roadIndex]) || roadIsNonSurfaceModifier(tokens, roadIndex)) continue;
+      const after = tokens.slice(roadIndex + 1, roadIndex + 4);
+      if (after.length && (ROAD_WORK_ACTIONS.has(after[0]) || ["work", "works"].includes(after[0]))) {
+        const priorAssets = hasAny(tokens.slice(0, roadIndex), NON_CARRIAGEWAY_ASSETS);
+        const governedTail = [];
+        for (const token of tokens.slice(roadIndex + 1, roadIndex + 9)) {
+          if (["at", "from", "near", "on", "to", "via"].includes(token)) break;
+          governedTail.push(token);
+        }
+        const governedAssets = hasAny(governedTail, NON_CARRIAGEWAY_ASSETS);
+        if ((!priorAssets || coordinatedRoadNoun(tokens, roadIndex)) && !governedAssets) return true;
+      }
+      const start = Math.max(0, roadIndex - 12);
+      let actionIndex = null;
+      for (let i = roadIndex - 1; i >= start; i--) {
+        if (ROAD_WORK_ACTIONS.has(tokens[i])) { actionIndex = i; break; }
+      }
+      if (actionIndex !== null) {
+        const gap = tokens.slice(actionIndex + 1, roadIndex);
+        const competing = hasAny(gap, NON_CARRIAGEWAY_ASSETS);
+        const directScope = gap.length <= 3;
+        const actionObjectBefore = hasAny(tokens.slice(Math.max(0, actionIndex - 6), actionIndex),
+          NON_CARRIAGEWAY_ASSETS);
+        const coordinatedAction = actionIndex > 0
+          && ["and", "plus", "with"].includes(tokens[actionIndex - 1]);
+        const isLocation = hasAny(gap, LOCATION_PREPOSITIONS);
+        if (mixedRoadScope(tokens, roadIndex) || (!competing && !isLocation
+            && (!actionObjectBefore || coordinatedAction) && (directScope || !hasNonRoadAsset))) return true;
+      }
+    }
+    const route = tokens.some((token, index) => /^(?:nh|sh|mdr|odr)\d+$/.test(token)
+      || (["nh", "sh", "mdr", "odr"].includes(token) && /^\d+$/.test(tokens[index + 1] || "")));
+    return route && hasAny(tokens, ROAD_WORK_ACTIONS) && !hasNonRoadAsset;
+  }
+
+  // The optional pack contains only rows with a verified civic-body ID: the other 28,706
+  // procurement rows could never enter the matcher. Failure omits contract context but
+  // never blocks a valid road-damage report.
   async function tenders() {
     if (_tenders) return _tenders;
     try {
-      const res = await fetchWithTimeout("tenders.json", {}, 30000);
-      const loaded = await readJson(res);
-      if (Array.isArray(loaded) && loaded.length) { _tenders = loaded; return _tenders; }
+      const pack = await loadStatePack("in-ka-tenders");
+      const loaded = pack && pack.tenders;
+      if (Array.isArray(loaded) && loaded.length) {
+        _tenders = loaded.filter((row) => tenderCoversCarriageway(row.t, row.tn));
+        return _tenders;
+      }
     } catch (e) { /* fall through and retry on the next call */ }
     return [];
   }
@@ -1115,15 +6049,16 @@
     }
     if (!lgd) return [];
     const own = _byBody.get(String(lgd)) || [];
-    // Bengaluru's five corporations replaced BBMP in 2025 and inherited its works, which
-    // the award records still file under BBMP zones. Zone to corporation is not
-    // published, so all five share that legacy pool.
+    // The procurement snapshot still indexes pre-reorganisation BBMP work as BLR. Make
+    // that pool searchable from each successor corporation, but only as candidates: the
+    // shortlist and complaint must not treat this lookup as ownership, segment, award or
+    // DLP evidence. Explicit non-carriageway work has already been removed by tenders().
     const legacy = BLR_BODIES.has(String(lgd)) ? (_byBody.get("BLR") || []) : [];
     return legacy.length ? own.concat(legacy) : own;
   }
 
 
-  // The five corporations that replaced BBMP in 2025 and share its legacy contract pool.
+  // The five corporations that replaced BBMP and may search its legacy candidate pool.
   const BLR_BODIES = new Set(["305850", "305851", "305852", "305853", "305854"]);
 
   const TENDER_STOP = new Set(["road", "roads", "street", "cross", "main", "layout", "bengaluru", "bangalore",
@@ -1154,13 +6089,13 @@
       }
     }
     if (!tokens.size) return [];
-    const pool = await tendersFor(lgd);
+    const pool = (await tendersFor(lgd)).filter((row) => tenderCoversCarriageway(row.t, row.tn));
     if (!pool.length) return [];
 
     // Scored on the work description alone. The location field is the body's own name,
     // identical in every one of its rows, so it cannot tell one of the body's roads from
     // another: including it only added the town's name to every candidate equally.
-    const hays = pool.map((t) => (t.t || "").toLowerCase());
+    const hays = pool.map((t) => new Set(tenderTokens(t.t)));
 
     // The body's own name is not evidence about which of its roads this is, and it turns
     // up in some work titles as well as in every location, so counting alone will not
@@ -1176,7 +6111,7 @@
     const idf = new Map();
     for (const tok of tokens) {
       let df = 0;
-      for (const hay of hays) if (hay.includes(tok)) df++;
+      for (const hay of hays) if (hay.has(tok)) df++;
       // A word in none of this body's contracts is no evidence, and a word in every one
       // of them cannot distinguish one road from another. The "more than half" cut only
       // means something once there are enough contracts to count: a town with three had
@@ -1191,8 +6126,13 @@
     const scored = [];
     for (let i = 0; i < pool.length; i++) {
       let score = 0;
-      for (const [tok, w] of idf) if (hays[i].includes(tok)) score += w;
-      if (score > 0) scored.push({ score, t: pool[i] });
+      const matchTokens = [];
+      for (const [tok, w] of idf) {
+        if (!hays[i].has(tok)) continue;
+        score += w;
+        matchTokens.push(tok);
+      }
+      if (score > 0) scored.push({ score, match_tokens: matchTokens.sort(), t: pool[i] });
     }
     // Deterministic all the way down. Scores tie often, because a locality word may be the
     // only thing that matched and every ward contract for that locality then scores the
@@ -1267,10 +6207,9 @@
       if (usingSharedVision()) return null;
     }
     if (!address || !S.key || !lgd) return null;
-    // Only this body's own contracts are candidates. That is what makes naming one safe:
-    // the officer receiving the letter awarded the work. It also rules out a contract from
-    // a different town whose road name happened to match, and state PWD, panchayat and
-    // irrigation contracts, which a municipal officer has no standing over.
+    // The pool is limited to this indexed body, plus legacy BBMP rows for Bengaluru's
+    // five successor corporations. That blocks cross-city records, but proves neither
+    // road ownership nor that a tender became an awarded contract.
     const ranked = await shortlistFor(address, lgd);
     if (!ranked.length) return null;
     const candidates = ranked.map((x) => x.t);
@@ -1290,10 +6229,27 @@
     // a placeholder sentence read as a person's name in the Kannada draft.
     const contractor = t.c || null;
     return {
-      tender_number: t.tn, contractor, title: t.t, published: t.d, warranty, warranty_code,
-      note: contractor
-        ? `Probable contract: ${t.tn}, ${contractor}, published ${t.d}`
-        : `Probable contract: ${t.tn}, contractor not listed, published ${t.d}`,
+      tender_number: t.tn, contractor, title, published: t.d,
+      organisation: t.loc || "Karnataka procuring body not listed",
+      detail_url: "https://kppp.karnataka.gov.in/",
+      bid_closing: null,
+      bid_opening: null,
+      project_start: null,
+      project_completion: null,
+      agreement_number: null,
+      agreement_date: null,
+      package_reference: null,
+      highway_reference: null,
+      published_chainage: null,
+      lifecycle: "procurement_record",
+      lifecycle_status: "Published procurement record; award/work-order status unverified",
+      match_basis: `Containing civic body ${lgd}; model-selected exact road/locality wording`,
+      source_name: "Karnataka Public Procurement Portal (KPPP) snapshot",
+      source_url: "https://kppp.karnataka.gov.in/",
+      match_confidence: m.confidence,
+      ...contractVerificationFor({ tender_number: t.tn, title }),
+      note: `Unverified research lead (not included in the complaint): ${t.tn} — ${title}`,
+      ...statePackProvenance("in-ka-tenders", "tender"),
     };
   }
 
@@ -1337,33 +6293,98 @@
     return value && (value.decision === "accept" || value.is_pothole) ? "damaged" : "undamaged";
   }
 
-  function draftEmail(a, lat, lng, address, officerName, tender) {
-    const kn = LANG() === "kn";
-    const sizeName = (s) => (kn ? ({ small: "ಸಣ್ಣ", medium: "ಮಧ್ಯಮ", large: "ದೊಡ್ಡ" })[s] || s : s);
-    const size = a.size ? sizeName(a.size) : (kn ? "ಗಾತ್ರ ನಿರ್ಧರಿಸದ" : "unclassified");
-    const road = address ? address.split(",")[0].trim() : null;
-    const type = damageTypeOf(a);
-    const typeNames = kn ? {
-      pothole_cavity: "ರಸ್ತೆ ಗುಂಡಿ", failed_patch: "ವಿಫಲವಾದ ರಸ್ತೆ ದುರಸ್ತಿ",
-      surface_breakup: "ಹಾಳಾದ ರಸ್ತೆ ಮೇಲ್ಮೈ", rut_or_depression: "ರಸ್ತೆ ಕುಸಿತ",
-      other_road_damage: "ರಸ್ತೆ ಹಾನಿ", none: "ರಸ್ತೆ ಹಾನಿ",
-    } : {
-      pothole_cavity: "pothole", failed_patch: "failed road repair",
-      surface_breakup: "broken road surface", rut_or_depression: "road rut or depression",
-      other_road_damage: "road damage", none: "road damage",
+  function complaintFooter(lang, roadDamage = true) {
+    const road = {
+      kn: "Pothole Reporter ಒಂದು ಸ್ವತಂತ್ರ ಆ್ಯಪ್. ಸೂಚಿಸಲಾದ ಸಂಸ್ಥೆ, ವಾರ್ಡ್, ರಸ್ತೆ ಮಾಲೀಕತ್ವ ಮತ್ತು ಯಾವುದೇ ಟೆಂಡರ್ ವಿವರಗಳನ್ನು ದಯವಿಟ್ಟು ಪರಿಶೀಲಿಸಿ.",
+      mr: "Pothole Reporter हे स्वतंत्र अॅप आहे. सुचवलेली संस्था, विभाग, रस्त्याची मालकी आणि कोणतेही निविदा तपशील कृपया पडताळा.",
+      bn: "Pothole Reporter একটি স্বাধীন অ্যাপ। প্রস্তাবিত কর্তৃপক্ষ, ওয়ার্ড, রাস্তার মালিকানা এবং টেন্ডারের তথ্য অনুগ্রহ করে যাচাই করুন।",
+      en: "Pothole Reporter is an independent app. Please verify any suggested authority, ward, road ownership, and tender details.",
     };
-    const typeName = typeNames[type] || typeNames.other_road_damage;
+    const civic = {
+      kn: "Pothole Reporter ಒಂದು ಸ್ವತಂತ್ರ ಆ್ಯಪ್. ಸೂಚಿಸಲಾದ ಸಂಸ್ಥೆ, ನಾಗರಿಕ ವ್ಯಾಪ್ತಿ ಮತ್ತು ದೂರು ವರ್ಗವನ್ನು ದಯವಿಟ್ಟು ಪರಿಶೀಲಿಸಿ.",
+      mr: "Pothole Reporter हे स्वतंत्र अॅप आहे. सुचवलेली संस्था, नागरी कार्यक्षेत्र आणि तक्रारीचा प्रकार कृपया पडताळा.",
+      bn: "Pothole Reporter একটি স্বাধীন অ্যাপ। প্রস্তাবিত কর্তৃপক্ষ, নাগরিক এলাকার দায়িত্ব এবং অভিযোগের ধরন অনুগ্রহ করে যাচাই করুন।",
+      en: "Pothole Reporter is an independent app. Please verify any suggested authority, civic jurisdiction, and complaint category.",
+    };
+    const copy = roadDamage ? road : civic;
+    return copy[lang] || copy.en;
+  }
 
-    let locLines;
-    if (lat != null) {
-      const la = lat.toFixed(6), ln = lng.toFixed(6);
-      locLines = kn
-        ? `ಸ್ಥಳ: ${address || "ಕೆಳಗಿನ ನಿರ್ದೇಶಾಂಕ ನೋಡಿ"}\nನಿರ್ದೇಶಾಂಕಗಳು: ${la}, ${ln}\nನಕ್ಷೆ ಲಿಂಕ್: https://maps.google.com/?q=${la},${ln}`
-        : `Location: ${address || "see coordinates below"}\nCoordinates: ${la}, ${ln}\nMap link: https://maps.google.com/?q=${la},${ln}`;
-    } else {
-      locLines = kn
-        ? "ಸ್ಥಳ: ಸ್ವಯಂಚಾಲಿತವಾಗಿ ನಿರ್ಧರಿಸಲಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಲಗತ್ತಿಸಿದ ಫೋಟೋ ನೋಡಿ."
-        : "Location: could not be determined automatically. Please see the attached photo for landmarks.";
+  function conciseRouteLabel(value) {
+    return String(value || "").replace(/\s*\((?:verify|select)[^)]*\)/ig, "").trim();
+  }
+
+  const COMPLAINT_TEMPLATE_VERSION = 4;
+  const OUTBOUND_CONTRACT_IDENTITY_FIELDS = Object.freeze([
+    "tender_number", "exact_work_name", "organisation_department", "listed_contractor",
+    "publication_date", "tender_project_status", "bid_closing", "bid_opening",
+    "project_start", "likely_completion", "agreement_number", "agreement_date",
+    "package_project_reference", "highway_reference", "published_package_chainage",
+    "road_from", "road_to", "candidate_match_basis", "contract_match_basis",
+    "contract_source_name", "contract_source_url", "official_tender_detail_url",
+    "carriageway_scope", "road_segment_match", "award_work_order_status", "dlp_status",
+    "contract_candidate_status",
+  ]);
+  const NO_VERIFIED_CONTRACT =
+    "No verified exact-road public contract found; tender and contractor omitted.";
+
+  function storedComplaintLanguage(body) {
+    const text = String(body || "");
+    const first = text.trimStart();
+    if (first.startsWith("ಮಾನ್ಯ ")) return "kn";
+    if (first.startsWith("प्रति ")) return "mr";
+    if (first.startsWith("মাননীয় ")) return "bn";
+    if (first.startsWith("Dear ")) return "en";
+    const labelledLine = (labels) => labels.some((label) =>
+      new RegExp(`(?:^|\\n)${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(text));
+    if (labelledLine(["ಸ್ಥಳ:", "ನಿರ್ದೇಶಾಂಕಗಳು:", "ಹಾನಿಯ ಪ್ರಕಾರ:"])) return "kn";
+    if (labelledLine(["ठिकाण:", "निर्देशांक:", "नुकसानीचा प्रकार:"])) return "mr";
+    if (labelledLine(["স্থান:", "স্থানাঙ্ক:", "ক্ষতির ধরন:"])) return "bn";
+    return "en";
+  }
+
+  function complaintBodyWithFooter(body, issueType) {
+    const text = String(body || "").trim();
+    if (!text) return text;
+    const roadDamage = normaliseIssueType(issueType) === "road_damage";
+    const lang = storedComplaintLanguage(text);
+    const footers = ["kn", "mr", "bn", "en"].map((code) => complaintFooter(code, roadDamage));
+    const paragraphs = text.split(/\n{2,}/).map((p) => p.trim())
+      .filter((paragraph) => paragraph && !footers.includes(paragraph));
+    paragraphs.push(complaintFooter(lang, roadDamage));
+    return paragraphs.join("\n\n");
+  }
+
+  // v1.31 and earlier put routing caveats into every complaint paragraph. IndexedDB
+  // survives an app update, so cleaning only the generator would leave existing drafts
+  // unchanged. Migrate only unsent app-template text, paragraph by exact paragraph: this
+  // preserves anything the user added or rewrote and never rewrites a sent complaint.
+  function migrateLegacyComplaintRecord(rec) {
+    if (!rec || !["draft", "queued"].includes(rec.status)
+        || Number(rec.complaint_template_version) >= COMPLAINT_TEMPLATE_VERSION
+        || !String(rec.email_body || "").trim()) return rec;
+
+    const lang = storedComplaintLanguage(rec.email_body);
+    const roadDamage = normaliseIssueType(rec.issue_type) === "road_damage";
+    let paragraphs = String(rec.email_body).split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+    let recognised = false;
+    const replaceExact = (before, after) => {
+      if (!before) return;
+      const index = paragraphs.indexOf(before);
+      if (index < 0) return;
+      recognised = true;
+      paragraphs[index] = after || "";
+    };
+
+    // v3 printed title/locality candidates—and sometimes a third-party contractor name—
+    // into outward copy even while segment, award and DLP were unverified. IndexedDB
+    // survives app upgrades, so remove that entire generated allegation from every unsent
+    // draft. Candidate metadata may remain on the local report for research/audit.
+    const candidateBlock = paragraphs.findIndex((paragraph) =>
+      /^CONTRACT CANDIDATE(?:\n|$)/.test(paragraph));
+    if (candidateBlock >= 0) {
+      paragraphs[candidateBlock] = `CONTRACT VERIFICATION\nStatus: ${NO_VERIFIED_CONTRACT}`;
+      recognised = true;
     }
 
     const subject = kn
@@ -1405,9 +6426,844 @@
       }
     }
 
-    paras.push(kn ? "ನಿಮ್ಮ ಸೇವೆಗೆ ಧನ್ಯವಾದಗಳು." : "Thank you for your service.");
-    paras.push(kn ? `ವಂದನೆಗಳು,\n${S.name}` : `Regards,\n${S.name}`);
-    return [subject, paras.join("\n\n")];
+    if (roadDamage) {
+      const oldRequest = {
+        kn: "ಫೋಟೋ ಲಗತ್ತಿಸಲಾಗಿದೆ. ಈ ರಸ್ತೆ ಹಾನಿ ದ್ವಿಚಕ್ರ ವಾಹನ ಸವಾರರಿಗೆ ಮತ್ತು ಇತರ ರಸ್ತೆ ಬಳಕೆದಾರರಿಗೆ ಅಪಾಯಕಾರಿ. ಇದನ್ನು ಶೀಘ್ರ ಪರಿಶೀಲಿಸಿ ದುರಸ್ತಿ ಮಾಡಬೇಕೆಂದು, ಮತ್ತು ಈ ರಸ್ತೆ ಭಾಗ ನಿರ್ವಹಣಾ ವಾರಂಟಿ ಅಡಿಯಲ್ಲಿದ್ದರೆ ಜವಾಬ್ದಾರ ಗುತ್ತಿಗೆದಾರರಿಗೆ ವರ್ಗಾಯಿಸಬೇಕೆಂದು ವಿನಂತಿಸುತ್ತೇನೆ.",
+        mr: "फोटो जोडला आहे. या नुकसानीमुळे दुचाकीस्वार आणि इतर रस्ता वापरणाऱ्यांना धोका होऊ शकतो. कृपया तपासणी करून लवकरात लवकर दुरुस्ती करावी आणि लागू असल्यास जबाबदार कंत्राटदाराकडे पाठवावे.",
+        bn: "ছবি সংযুক্ত করা হল। রাস্তার এই ক্ষতি বিশেষ করে দু’চাকার যানচালক ও অন্যান্য পথ ব্যবহারকারীর জন্য বিপজ্জনক। অনুগ্রহ করে দ্রুত স্থানটি পরিদর্শন করে মেরামতের ব্যবস্থা করুন।",
+        en: "PFA image. This road damage poses a danger to two wheeler riders and other road users. I request your office to inspect and repair it at the earliest, and to route it to the contractor responsible if this road section is still under a maintenance warranty.",
+      };
+      const newRequest = {
+        kn: "ಫೋಟೋ ಲಗತ್ತಿಸಲಾಗಿದೆ. ಈ ರಸ್ತೆ ಹಾನಿ ದ್ವಿಚಕ್ರ ವಾಹನ ಸವಾರರಿಗೆ ಮತ್ತು ಇತರ ರಸ್ತೆ ಬಳಕೆದಾರರಿಗೆ ಅಪಾಯಕಾರಿ. ಇದನ್ನು ಶೀಘ್ರ ಪರಿಶೀಲಿಸಿ ದುರಸ್ತಿ ಮಾಡಬೇಕೆಂದು ವಿನಂತಿಸುತ್ತೇನೆ.",
+        mr: "फोटो जोडला आहे. या नुकसानीमुळे दुचाकीस्वार आणि इतर रस्ता वापरणाऱ्यांना धोका होऊ शकतो. कृपया तपासणी करून लवकरात लवकर दुरुस्ती करावी.",
+        bn: oldRequest.bn,
+        en: "PFA image. This road damage poses a danger to two-wheeler riders and other road users. I request your office to inspect and repair it at the earliest.",
+      };
+      replaceExact(oldRequest[lang], newRequest[lang]);
+
+      const ward = rec.ward_code;
+      if (ward) {
+        const wardAuthority = rec.authority_id === "wb-kmc" ? "KMC" : "BMC";
+        const oldWard = {
+          kn: `ಸೂಚಿಸಿದ ಬಿಎಂಸಿ ಆಡಳಿತ ವಾರ್ಡ್: ${ward}. ಇದು OpenStreetMap ಆಡಳಿತ ಗಡಿಯಿಂದ ಪಡೆದ ಸೂಚನೆ ಮಾತ್ರ; ಅಧಿಕೃತ BMC ಆ್ಯಪ್‌ನಲ್ಲಿ ಪರಿಶೀಲಿಸಿ.`,
+          mr: `सुचवलेला BMC प्रशासकीय विभाग: ${ward}. हा OpenStreetMap प्रशासकीय सीमेवर आधारित अंदाज आहे; अधिकृत BMC अॅपमध्ये पडताळा करा.`,
+          bn: `প্রস্তাবিত ${wardAuthority} প্রশাসনিক ওয়ার্ড: ${ward}। এটি OpenStreetMap-এর প্রশাসনিক সীমানা থেকে অনুমান করা; সরকারি পরিষেবায় যাচাই করুন।`,
+          en: `Suggested BMC administrative ward: ${ward}. This is inferred from an OpenStreetMap administrative boundary; verify it in the official BMC app.`,
+        };
+        const newWard = {
+          kn: `ಸೂಚಿಸಿದ BMC ಆಡಳಿತ ವಾರ್ಡ್: ${ward}.`,
+          mr: `सुचवलेला BMC प्रशासकीय विभाग: ${ward}.`,
+          bn: `প্রস্তাবিত ${wardAuthority} প্রশাসনিক ওয়ার্ড: ${ward}।`,
+          en: `Suggested BMC administrative ward: ${ward}.`,
+        };
+        replaceExact(oldWard[lang], newWard[lang]);
+      }
+
+      if (rec.authority_id === "in-national-highway") {
+        const highway = rec.highway_ref || "National Highway";
+        const oldHighway = {
+          kn: `ನಕ್ಷೆಯ ಪ್ರಕಾರ ರಸ್ತೆ ಉಲ್ಲೇಖ: ${highway}. ನಿರ್ವಹಣಾ ಸಂಸ್ಥೆಯನ್ನು ಈ ಆ್ಯಪ್ ದೃಢಪಡಿಸಿಲ್ಲ. ಸಾಕ್ಷ್ಯವನ್ನು ಪರಿಶೀಲಿಸಿ ರಾಜಮಾರ್ಗಯಾತ್ರಾ ಅಥವಾ 1033 ಮೂಲಕ ನೀವೇ ದೂರು ದಾಖಲಿಸಿ; ಅಗತ್ಯವಿದ್ದರೆ ಸರಿಯಾದ NHAI, NHIDCL, BRO ಅಥವಾ ರಾಜ್ಯ PWD ಘಟಕಕ್ಕೆ ವರ್ಗಾಯಿಸಲು ಕೇಳಿ.`,
+          mr: `नकाशावरील रस्ता संदर्भ: ${highway}. देखभाल करणारी संस्था या अॅपने पडताळलेली नाही. पुरावा तपासून राजमार्गयात्रा किंवा 1033 द्वारे स्वतः तक्रार नोंदवा आणि आवश्यक असल्यास योग्य NHAI, NHIDCL, BRO किंवा राज्य PWD विभागाकडे पाठवण्याची विनंती करा.`,
+          bn: `মানচিত্রে রাস্তার পরিচয়: ${highway}। রক্ষণাবেক্ষণকারী সংস্থা এই অ্যাপ যাচাই করেনি। প্রমাণ দেখে রাজমার্গযাত্রা বা ১০৩৩-এর মাধ্যমে নিজে অভিযোগ নথিভুক্ত করুন এবং প্রয়োজনে সঠিক NHAI, NHIDCL, BRO বা রাজ্য PWD দপ্তরে পাঠাতে বলুন।`,
+          en: `Mapped road reference: ${highway}. This app has not verified the maintaining agency. Review the evidence and submit it yourself through Rajmargyatra or 1033; ask for transfer to the correct NHAI, NHIDCL, BRO or State PWD unit when necessary.`,
+        };
+        const newHighway = {
+          kn: `ನಕ್ಷೆಯ ಪ್ರಕಾರ ರಸ್ತೆ ಉಲ್ಲೇಖ: ${highway}. ಸೂಚಿಸಿದ ದೂರು ಮಾರ್ಗ: ರಾಜಮಾರ್ಗಯಾತ್ರಾ ಅಥವಾ 1033.`,
+          mr: `नकाशावरील रस्ता संदर्भ: ${highway}. सुचवलेला तक्रार मार्ग: राजमार्गयात्रा किंवा 1033.`,
+          bn: `মানচিত্রে রাস্তার পরিচয়: ${highway}। প্রস্তাবিত অভিযোগের মাধ্যম: রাজমার্গযাত্রা বা ১০৩৩।`,
+          en: `Mapped road reference: ${highway}. Suggested complaint channel: Rajmargyatra or 1033.`,
+        };
+        replaceExact(oldHighway[lang], newHighway[lang]);
+      } else if (rec.authority_id === "wb-statewide-unverified") {
+        const oldWestBengal = {
+          kn: "ಸ್ಥಳವು ಪಿನ್ ಮಾಡಿದ OpenStreetMap ಪಶ್ಚಿಮ ಬಂಗಾಳ ಗಡಿಯೊಳಗೆ ನಕ್ಷೆಗೊಂಡಿದೆ; ಆದರೆ ಜವಾಬ್ದಾರ ಜಿಲ್ಲೆ, ಇಲಾಖೆ ಅಥವಾ ರಸ್ತೆ ಮಾಲೀಕರನ್ನು ಗುರುತಿಸಲಾಗಿಲ್ಲ. ಈ ಸ್ವತಂತ್ರ ಆ್ಯಪ್ ದೂರು ಸಲ್ಲಿಸುವುದಿಲ್ಲ; ಸಾಕ್ಷ್ಯವನ್ನು ಪರಿಶೀಲಿಸಿ West Bengal PGRS ನಲ್ಲಿ ಸರಿಯಾದ ಜಿಲ್ಲೆ ಅಥವಾ ಇಲಾಖೆಯನ್ನು ನೀವೇ ಆಯ್ದು ದೃಢಪಡಿಸಿ.",
+          mr: "हे ठिकाण पिन केलेल्या OpenStreetMap पश्चिम बंगाल सीमेत नकाशित आहे; परंतु जबाबदार जिल्हा, विभाग किंवा रस्त्याचा मालक ओळखलेला नाही. हे स्वतंत्र अॅप तक्रार दाखल करत नाही; पुरावा तपासा आणि West Bengal PGRS मध्ये योग्य जिल्हा किंवा विभाग स्वतः निवडून पडताळा.",
+          bn: "স্থানটি পিন-করা OpenStreetMap পশ্চিমবঙ্গ সীমানার ভিতরে মানচিত্রভুক্ত, কিন্তু দায়িত্বপ্রাপ্ত জেলা, দপ্তর বা রাস্তার মালিক চিহ্নিত করা হয়নি। এই স্বাধীন অ্যাপটি অভিযোগ জমা দেয় না; প্রমাণ যাচাই করে West Bengal PGRS-এ দায়িত্বপ্রাপ্ত জেলা বা দপ্তর নিজে নির্বাচন ও যাচাই করুন এবং অভিযোগ নম্বরটি সংরক্ষণ করুন।",
+          en: "The location is mapped inside the pinned OpenStreetMap West Bengal boundary, but the responsible district, department and road owner have not been identified. This independent app does not submit the grievance; review the evidence, then select and verify the responsible district or department in West Bengal PGRS.",
+        };
+        const newWestBengal = {
+          kn: "ಸೂಚಿಸಿದ ದೂರು ಮಾರ್ಗ: West Bengal PGRS; ಜವಾಬ್ದಾರ ಜಿಲ್ಲೆ ಅಥವಾ ಇಲಾಖೆಯನ್ನು ಗುರುತಿಸಲಾಗಿಲ್ಲ.",
+          mr: "सुचवलेला तक्रार मार्ग: West Bengal PGRS; जबाबदार जिल्हा किंवा विभाग ओळखलेला नाही.",
+          bn: "প্রস্তাবিত অভিযোগের মাধ্যম: West Bengal PGRS; দায়িত্বপ্রাপ্ত জেলা বা দপ্তর চিহ্নিত করা হয়নি।",
+          en: "Suggested complaint channel: West Bengal PGRS; the responsible district or department has not been identified.",
+        };
+        replaceExact(oldWestBengal[lang], newWestBengal[lang]);
+      } else if (rec.ownership_unverified) {
+        const rawAuthority = rec.authority_name || ({ kn: "ಅಧಿಕಾರಿಯನ್ನು ಪರಿಶೀಲಿಸಿ", mr: "संस्था पडताळा",
+          bn: "কর্তৃপক্ষ যাচাই করুন", en: "verify the authority" })[lang];
+        const authority = conciseRouteLabel(rec.authority_name);
+        const oldAuthorityName = lang === "bn" && rec.authority_id === "wb-kmc"
+          ? "কলকাতা পৌরসংস্থা (KMC)" : rawAuthority;
+        const authorityName = lang === "bn" && rec.authority_id === "wb-kmc"
+          ? "কলকাতা পৌরসংস্থা (KMC)" : (authority || rawAuthority);
+        const official = OFFICIAL_HANDOFF_CHANNELS.has(rec.delivery_channel);
+        const oldAuthority = official
+          ? {
+              kn: `ಸೂಚಿಸಿದ ನಾಗರಿಕ ಸಂಸ್ಥೆ: ${rawAuthority}. ಇದು ರಸ್ತೆ ಮಾಲೀಕತ್ವದ ದೃಢೀಕರಣವಲ್ಲ. ಈ ಸ್ವತಂತ್ರ ಆ್ಯಪ್ ದೂರು ಸಲ್ಲಿಸುವುದಿಲ್ಲ; ಸಾಕ್ಷ್ಯವನ್ನು ಪರಿಶೀಲಿಸಿ ಮತ್ತು ${rec.handoff_name || "ಅಧಿಕೃತ ಸೇವೆ"} ಮೂಲಕ ನೀವೇ ಸಲ್ಲಿಸಿ.`,
+              mr: `सुचवलेली नागरी संस्था: ${rawAuthority}. यावरून त्या रस्त्याची मालकी सिद्ध होत नाही. हे स्वतंत्र अॅप तक्रार दाखल करत नाही; पुरावा तपासा आणि ${rec.handoff_name || "अधिकृत सेवेत"} स्वतः नोंदवा.`,
+              bn: `অবস্থানের ভিত্তিতে প্রস্তাবিত পৌর কর্তৃপক্ষ: ${oldAuthorityName}। এতে রাস্তার মালিকানা প্রমাণিত হয় না। এই স্বাধীন অ্যাপটি অভিযোগ জমা দেয় না; প্রমাণ যাচাই করে ${rec.handoff_name || "সরকারি পরিষেবা"}-এ নিজে অভিযোগ নথিভুক্ত করুন এবং অভিযোগ নম্বরটি সংরক্ষণ করুন।`,
+              en: `Suggested civic authority: ${rawAuthority}. This does not prove who owns this road. This independent app does not submit a grievance; review the evidence and finish it yourself in ${rec.handoff_name || "the official service"}.`,
+            }[lang]
+          : {
+              kn: `ಸ್ಥಳದ ಆಧಾರದ ಮೇಲೆ ಸೂಚಿಸಿದ ನಾಗರಿಕ ಸಂಸ್ಥೆ: ${rawAuthority}. ಇದು ರಸ್ತೆ ಮಾಲೀಕತ್ವದ ದೃಢೀಕರಣವಲ್ಲ; ಬೇರೆ ಸಂಸ್ಥೆ ಜವಾಬ್ದಾರಿಯಾಗಿದ್ದರೆ ದಯವಿಟ್ಟು ಈ ದೂರನ್ನು ಆ ಸಂಸ್ಥೆಗೆ ವರ್ಗಾಯಿಸಿ.`,
+              mr: `स्थानावरून सुचवलेली नागरी संस्था: ${rawAuthority}. यावरून रस्त्याची मालकी सिद्ध होत नाही; दुसरी संस्था जबाबदार असल्यास कृपया तक्रार तिच्याकडे पाठवा.`,
+              bn: `অবস্থানের ভিত্তিতে প্রস্তাবিত পৌর কর্তৃপক্ষ: ${oldAuthorityName}। এতে রাস্তার মালিকানা প্রমাণিত হয় না; অন্য কোনও সংস্থা দায়িত্বে থাকলে অভিযোগটি তাদের কাছে পাঠিয়ে দেওয়ার অনুরোধ রইল।`,
+              en: `Suggested civic authority from the location: ${rawAuthority}. This does not prove road ownership; please forward this complaint if another agency owns the road.`,
+            }[lang];
+        const addressedAuthority = official
+          || normaliseAuthorityValue(rec.officer_name) === normaliseAuthorityValue(authorityName);
+        const newAuthority = addressedAuthority ? "" : ({
+          kn: `ಸೂಚಿಸಿದ ನಾಗರಿಕ ಸಂಸ್ಥೆ: ${authorityName || "ತಿಳಿದಿಲ್ಲ"}.`,
+          mr: `सुचवलेली नागरी संस्था: ${authorityName || "माहित नाही"}.`,
+          bn: `প্রস্তাবিত পৌর কর্তৃপক্ষ: ${authorityName || "অজানা"}।`,
+          en: `Suggested civic authority: ${authorityName || "unknown"}.`,
+        })[lang];
+        replaceExact(oldAuthority, newAuthority);
+      }
+
+      const oldTenderRequest = {
+        kn: "ದೋಷ ಹೊಣೆಗಾರಿಕೆ ಅಥವಾ ನಿರ್ವಹಣಾ ಅವಧಿ ಜಾರಿಯಲ್ಲಿದ್ದರೆ, ಸಂಸ್ಥೆಗೆ ಹೆಚ್ಚುವರಿ ವೆಚ್ಚವಿಲ್ಲದೆ ಗುತ್ತಿಗೆದಾರರಿಂದಲೇ ದುರಸ್ತಿ ಮಾಡಿಸಬೇಕೆಂದು ವಿನಂತಿಸುತ್ತೇನೆ. ಇದು ಸಂಭಾವ್ಯ ದಾಖಲೆ ಹೊಂದಾಣಿಕೆ; ದಯವಿಟ್ಟು ಟೆಂಡರ್ ದಾಖಲೆಗಳೊಂದಿಗೆ ಪರಿಶೀಲಿಸಿ.",
+        mr: "दोष दायित्व किंवा देखभाल कालावधी लागू असल्यास महानगरपालिकेला अतिरिक्त खर्च न लावता कंत्राटदाराकडून दुरुस्ती करून घ्यावी. ही संभाव्य नोंद-जुळणी आहे; कृपया मूळ निविदा कागदपत्रांशी पडताळा करा.",
+        bn: "ত্রুটি-দায় বা রক্ষণাবেক্ষণের মেয়াদ চালু থাকলে পৌরসংস্থার অতিরিক্ত ব্যয় ছাড়াই ঠিকাদারের মাধ্যমে মেরামত করানোর অনুরোধ করছি। এটি কেবল সম্ভাব্য নথি-মিল; মূল টেন্ডার নথির সঙ্গে যাচাই করুন।",
+        en: "If the defect liability or maintenance period is in force, I request that the repair be carried out by the contractor at no additional cost to the corporation. This is a probable record match; kindly verify against the tender documents.",
+      };
+      replaceExact(oldTenderRequest[lang], "");
+    } else {
+      const civicRequest = paragraphs.find((paragraph) => ({
+        kn: ["ಲಗತ್ತಿಸಿದ ಚಿತ್ರದಲ್ಲಿ ತೆರೆದ ಅಥವಾ ಹಾನಿಗೊಂಡ ಮ್ಯಾನ್‌ಹೋಲ್ ಇದೆ.", "ಲಗತ್ತಿಸಿದ ಚಿತ್ರದಲ್ಲಿ ಈ ಸ್ಥಳದಲ್ಲಿ ಸಂಗ್ರಹವಾದ ಅಥವಾ ತೆರವುಗೊಳಿಸದ ಕಸ ಇದೆ."],
+        mr: ["जोडलेल्या फोटोमध्ये उघडे किंवा खराब मॅनहोल दिसत आहे.", "जोडलेल्या फोटोमध्ये या ठिकाणी साचलेला किंवा न उचललेला कचरा दिसत आहे."],
+        bn: ["সংযুক্ত ছবিতে একটি খোলা বা ক্ষতিগ্রস্ত ম্যানহোল দেখা যাচ্ছে।", "সংযুক্ত ছবিতে এই স্থানে জমে থাকা বা না-তোলা আবর্জনা দেখা যাচ্ছে।"],
+        en: ["The attached photo shows an open or damaged manhole.", "The attached photo shows accumulated or uncollected garbage at this location."],
+      })[lang].some((start) => paragraph.startsWith(start)));
+      if (civicRequest) recognised = true;
+
+      const importedOld = {
+        kn: "ಈ ಚಿತ್ರವನ್ನು ಬಳಕೆದಾರರು ಆಯ್ಕೆಮಾಡಿ/ಆಮದು ಮಾಡಿದ್ದಾರೆ; ಅದು ಯಾವಾಗ ತೆಗೆದದ್ದು ಎಂಬುದನ್ನು ಆ್ಯಪ್ ಪರಿಶೀಲಿಸಿಲ್ಲ.",
+        mr: "हे छायाचित्र वापरकर्त्याने निवडले/आयात केले आहे; ते केव्हा घेतले याची अॅपने पडताळणी केलेली नाही.",
+        bn: "ছবিটি ব্যবহারকারী বেছে নিয়েছেন/আমদানি করেছেন; এটি কখন তোলা হয়েছিল অ্যাপ তা যাচাই করেনি।",
+        en: "This photo was selected/imported by the user; the app has not verified when it was taken.",
+      };
+      const importedNew = {
+        kn: "ಈ ಚಿತ್ರವನ್ನು ಬಳಕೆದಾರರು ಆಯ್ಕೆಮಾಡಿ/ಆಮದು ಮಾಡಿದ್ದಾರೆ; ಮೂಲ ಸೆರೆಹಿಡಿದ ಸಮಯ ತಿಳಿದಿಲ್ಲ.",
+        mr: "हे छायाचित्र वापरकर्त्याने निवडले/आयात केले आहे; मूळ छायाचित्रणाची वेळ माहित नाही.",
+        bn: "ছবিটি ব্যবহারকারী বেছে নিয়েছেন/আমদানি করেছেন; মূল ছবিটি তোলার সময় অজানা।",
+        en: "This photo was selected/imported by the user; its original capture time is unknown.",
+      };
+      const importedIndex = paragraphs.findIndex((paragraph) => paragraph.startsWith(importedOld[lang]));
+      if (importedIndex >= 0) {
+        recognised = true;
+        paragraphs[importedIndex] = importedNew[lang]
+          + paragraphs[importedIndex].slice(importedOld[lang].length);
+      }
+
+      const authority = conciseRouteLabel(rec.authority_name);
+      if (rec.authority_id === "wb-statewide-unverified") {
+        const oldWestBengal = {
+          kn: "ಸ್ಥಳವು ಪಶ್ಚಿಮ ಬಂಗಾಳದೊಳಗಿದೆ; ಜವಾಬ್ದಾರ ಸಂಸ್ಥೆಯನ್ನು ಗುರುತಿಸಲಾಗಿಲ್ಲ. West Bengal PGRS ನಲ್ಲಿ ಸರಿಯಾದ ಜಿಲ್ಲೆ ಅಥವಾ ಇಲಾಖೆಯನ್ನು ಆಯ್ದು ದೃಢಪಡಿಸಿ.",
+          mr: "ठिकाण पश्चिम बंगालमध्ये आहे; जबाबदार संस्था ओळखलेली नाही. West Bengal PGRS मध्ये योग्य जिल्हा किंवा विभाग निवडून पडताळा.",
+          bn: "স্থানটি পিন-করা OpenStreetMap পশ্চিমবঙ্গ সীমানার মধ্যে; দায়িত্বপ্রাপ্ত সংস্থা চিহ্নিত করা হয়নি। West Bengal PGRS-এ দায়িত্বপ্রাপ্ত জেলা বা দপ্তর নির্বাচন ও যাচাই করুন।",
+          en: "The location is inside the pinned OpenStreetMap West Bengal boundary; the responsible authority has not been identified. Select and verify the responsible district or department in West Bengal PGRS.",
+        };
+        const newWestBengal = {
+          kn: "ಸೂಚಿಸಿದ ದೂರು ಮಾರ್ಗ: West Bengal PGRS; ಜವಾಬ್ದಾರ ಜಿಲ್ಲೆ ಅಥವಾ ಇಲಾಖೆಯನ್ನು ಗುರುತಿಸಲಾಗಿಲ್ಲ.",
+          mr: "सुचवलेला तक्रार मार्ग: West Bengal PGRS; जबाबदार जिल्हा किंवा विभाग ओळखलेला नाही.",
+          bn: "প্রস্তাবিত অভিযোগের মাধ্যম: West Bengal PGRS; দায়িত্বপ্রাপ্ত জেলা বা দপ্তর চিহ্নিত করা হয়নি।",
+          en: "Suggested complaint channel: West Bengal PGRS; the responsible district or department has not been identified.",
+        };
+        replaceExact(oldWestBengal[lang], newWestBengal[lang]);
+      } else if (authority) {
+        const oldAuthority = {
+          kn: `ಸ್ಥಳದ ಆಧಾರದ ಮೇಲೆ ಸೂಚಿಸಿದ ನಾಗರಿಕ ಸಂಸ್ಥೆ: ${rec.authority_name}. ಅಧಿಕೃತ ಸೇವೆಯಲ್ಲಿ ಪರಿಶೀಲಿಸಿ.`,
+          mr: `ठिकाणावरून सुचवलेली नागरी संस्था: ${rec.authority_name}. अधिकृत सेवेत पडताळा करा.`,
+          bn: `অবস্থানের ভিত্তিতে প্রস্তাবিত পৌর কর্তৃপক্ষ: ${rec.authority_name}। সরকারি পরিষেবায় যাচাই করুন।`,
+          en: `Suggested civic authority from the location: ${rec.authority_name}. Please verify it in the official service.`,
+        }[lang];
+        const addressedAuthority = OFFICIAL_HANDOFF_CHANNELS.has(rec.delivery_channel)
+          || normaliseAuthorityValue(rec.officer_name) === normaliseAuthorityValue(authority);
+        const newAuthority = addressedAuthority ? "" : ({
+          kn: `ಸೂಚಿಸಿದ ನಾಗರಿಕ ಸಂಸ್ಥೆ: ${authority}.`, mr: `सुचवलेली नागरी संस्था: ${authority}.`,
+          bn: `প্রস্তাবিত পৌর কর্তৃপক্ষ: ${authority}।`, en: `Suggested civic authority: ${authority}.`,
+        })[lang];
+        replaceExact(oldAuthority, newAuthority);
+      }
+    }
+
+    const safeWhatsapp = String(rec.whatsapp_text || "").split("\n")
+      .filter((line) => !/^Contract:/.test(line));
+    if (safeWhatsapp.length !== String(rec.whatsapp_text || "").split("\n").length) {
+      const footerIndex = safeWhatsapp.findIndex((line) => /Pothole Reporter/.test(line));
+      safeWhatsapp.splice(footerIndex >= 0 ? footerIndex : safeWhatsapp.length, 0,
+        `Contract verification: ${NO_VERIFIED_CONTRACT}`);
+      recognised = true;
+    }
+    const safePortalFields = rec.portal_fields && typeof rec.portal_fields === "object"
+      ? { ...rec.portal_fields } : null;
+    if (safePortalFields) {
+      const hadContractIdentity = OUTBOUND_CONTRACT_IDENTITY_FIELDS.some((field) =>
+        Object.prototype.hasOwnProperty.call(safePortalFields, field));
+      for (const field of OUTBOUND_CONTRACT_IDENTITY_FIELDS) delete safePortalFields[field];
+      safePortalFields.contract_verification_status = NO_VERIFIED_CONTRACT;
+      if (hadContractIdentity) recognised = true;
+    }
+
+    if (!recognised) return rec;
+
+    // Older evidence exports appended a second disclaimer block after the signature.
+    // It is generated metadata, not reporter prose; the current evidence exporter adds
+    // one compact Evidence line when sharing, so retaining this block would duplicate it.
+    const oldEvidenceTruth = [
+      "Prepared by an independent app; no official grievance submission is confirmed.",
+      "Prepared by an independent app; email delivery is not confirmed.",
+      "Locally marked submitted by the user; this app has not independently verified delivery.",
+    ];
+    const oldEvidenceLine = /^(?:Captured|Report created|Selected photo file date) \(IST\):|^Photo provenance:|^GPS accuracy:|^Suggested civic authority:|^Suggested BMC ward:|^Mapped road reference:|^Local event ID:/;
+    paragraphs = paragraphs.map((paragraph) => {
+      if (!oldEvidenceTruth.some((line) => paragraph.includes(line))) return paragraph;
+      return paragraph.split("\n").filter((line) =>
+        !oldEvidenceLine.test(line)
+        && !oldEvidenceTruth.some((truth) => line.includes(truth))).join("\n").trim();
+    }).filter(Boolean);
+
+    const official = OFFICIAL_HANDOFF_CHANNELS.has(rec.delivery_channel);
+    const oldOfficer = rec.officer_name || ({ kn: "ಅಧಿಕಾರಿಗಳೇ", mr: "संबंधित अधिकारी",
+      bn: "সংশ্লিষ্ট আধিকারিক", en: "Sir or Madam" })[lang];
+    const authority = conciseRouteLabel(rec.authority_name);
+    const letterAuthority = lang === "bn" && rec.authority_id === "wb-kmc"
+      ? "কলকাতা পৌরসংস্থা (KMC)" : authority;
+    const newOfficer = official ? letterAuthority : conciseRouteLabel(rec.officer_name);
+    const oldGreeting = ({ kn: `ಮಾನ್ಯ ${oldOfficer} ಅವರಿಗೆ,`, mr: `प्रति ${oldOfficer},`,
+      bn: `মাননীয় ${oldOfficer},`, en: `Dear ${oldOfficer},` })[lang];
+    const newGreeting = ({ kn: `ಮಾನ್ಯ ${newOfficer || "ಅಧಿಕಾರಿಗಳೇ"} ಅವರಿಗೆ,`,
+      mr: `प्रति ${newOfficer || "संबंधित अधिकारी"},`,
+      bn: `মাননীয় ${newOfficer || "সংশ্লিষ্ট আধিকারিক"},`,
+      en: `Dear ${newOfficer || "Sir or Madam"},` })[lang];
+    replaceExact(oldGreeting, newGreeting);
+
+    return {
+      ...rec,
+      email_body: complaintBodyWithFooter(paragraphs.join("\n\n"), rec.issue_type),
+      whatsapp_text: rec.whatsapp_text ? safeWhatsapp.join("\n") : rec.whatsapp_text,
+      portal_fields: safePortalFields || rec.portal_fields,
+      portal_copy_text: safePortalFields
+        ? Object.entries(safePortalFields)
+          .map(([key, value]) => `${key.replace(/_/g, " ")}: ${value}`).join("\n")
+        : rec.portal_copy_text,
+      complaint_template_version: COMPLAINT_TEMPLATE_VERSION,
+    };
+  }
+
+  function normaliseTenderMatch(tender, route = null) {
+    if (!tender || !String(tender.tender_number || "").trim()
+        || !String(tender.title || "").trim()) return null;
+    const karnataka = tender.tender_pack_id === "in-ka-tenders"
+      && tender.tender_pack_state_code === "KA"
+      && route && route.routing_pack_state_code === "KA";
+    const highway = /^in-nh-contracts-[a-z]{2}$/.test(String(tender.tender_pack_id || ""))
+      && route && route.region === "national-highway"
+      && tender.tender_pack_state_code === route.contract_state_code;
+    const roadNotice = /^in-road-notices-[a-z]{2}$/.test(String(tender.tender_pack_id || ""))
+      && route && route.routed === true
+      && (!route.issue_type || route.issue_type === "road_damage")
+      && tender.tender_pack_state_code === route.contract_state_code;
+    const roadAgreement = /^in-road-agreements-[a-z]{2}$/.test(
+      String(tender.tender_pack_id || ""))
+      && route && route.routed === true
+      && (!route.issue_type || route.issue_type === "road_damage")
+      && tender.tender_pack_state_code === route.contract_state_code;
+    const allowedRoute = (roadNotice || roadAgreement)
+      ? canSearchTenderCatalog(route) : route && route.tender_eligible === true;
+    const scopeEligible = roadAgreement
+      ? tender.scope_verified === true : tenderCoversCarriageway(tender.title, tender.tender_number);
+    if (!route || !allowedRoute || (!karnataka && !highway && !roadNotice && !roadAgreement)
+        || !Number.isInteger(tender.tender_pack_version)
+        || !/^[0-9a-f]{64}$/.test(String(tender.tender_pack_sha256 || ""))
+        || !scopeEligible) return null;
+    const compact = roadAgreement ? {
+      candidate_status: "candidate",
+      scope_status: tender.scope_status || "official_road_record",
+      scope_verified: true,
+      segment_status: tender.segment_status || "unverified_title_match_no_geometry",
+      segment_verified: false,
+      award_status: "unverified_contractor_assignment",
+      award_verified: false,
+      dlp_status: "unverified_no_maintenance_dates",
+      dlp_verified: false,
+    } : contractVerificationFor(tender);
+    return {
+      ...tender,
+      tender_number: String(tender.tender_number).trim(),
+      reference_label: tender.reference_label || "Tender number",
+      title: String(tender.title).replace(/\s+/g, " ").trim(),
+      source_name: tender.source_name || (karnataka
+        ? "Karnataka Public Procurement Portal (KPPP) snapshot"
+        : roadNotice ? "Official State/UT e-Procurement portal"
+          : roadAgreement ? "PMGSY dashboard road tender/agreement details"
+            : "Official highway project source"),
+      source_url: tender.source_url || (karnataka ? "https://kppp.karnataka.gov.in/" : null),
+      ...compact,
+      segment_status: tender.segment_verified === true ? "verified" : (tender.segment_status || "unverified"),
+      segment_verified: tender.segment_verified === true,
+      award_status: tender.award_verified === true && tender.contractor
+        ? (tender.award_status || "verified_by_source_record") : "unverified",
+      award_verified: tender.award_verified === true && !!tender.contractor,
+      dlp_status: tender.dlp_verified === true ? (tender.dlp_status || "verified") : "unverified",
+      dlp_verified: tender.dlp_verified === true,
+    };
+  }
+
+  function officialIndianPublicRecordUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      const host = url.hostname.toLowerCase();
+      return url.protocol === "https:"
+        && (host === "gov.in" || host.endsWith(".gov.in")
+          || host === "nic.in" || host.endsWith(".nic.in"));
+    } catch (_) { return false; }
+  }
+
+  // A title/locality candidate is useful research, but is not an allegation of legal
+  // responsibility. Outbound copy may name a contractor only when independent official
+  // evidence closes every link from this GPS point to an active obligation.
+  function verifiedContractForComplaint(tender, route = null, capturedAt = null) {
+    const match = normaliseTenderMatch(tender, route);
+    if (!match || match.scope_verified !== true || match.segment_verified !== true
+        || match.award_verified !== true || match.dlp_verified !== true
+        || match.responsibility_active_verified !== true || match.unambiguous !== true
+        || !String(match.contractor || "").trim()
+        || !officialIndianPublicRecordUrl(match.source_url)
+        || !Number.isInteger(match.tender_pack_version)
+        || !/^[0-9a-f]{64}$/.test(String(match.tender_pack_sha256 || ""))) return null;
+
+    const separated = separateRoadResponsibility(route);
+    const routeOwnerId = String(separated && separated.road_owner_id || "").trim();
+    const contractOwnerId = String(match.road_owner_id || match.responsible_authority_id || "").trim();
+    const ownerEvidence = separated && separated.road_owner_evidence;
+    if (!routeOwnerId || separated.road_owner_status !== "verified"
+        || contractOwnerId !== routeOwnerId || !ownerEvidence
+        || !officialIndianPublicRecordUrl(ownerEvidence.source_url)) return null;
+
+    const proof = match.verification_evidence;
+    const proofItem = (name) => {
+      const item = proof && proof[name];
+      return !!(item && String(item.reference || item.document_id || "").trim()
+        && officialIndianPublicRecordUrl(item.source_url));
+    };
+    if (!proofItem("segment") || !proofItem("award") || !proofItem("responsibility")) return null;
+
+    const observed = Number(capturedAt);
+    const validFrom = Date.parse(String(match.responsibility_valid_from || ""));
+    const validUntil = Date.parse(String(match.responsibility_valid_until || ""));
+    if (!Number.isFinite(observed) || !Number.isFinite(validFrom) || !Number.isFinite(validUntil)
+        || observed * 1000 < validFrom || observed * 1000 > validUntil) return null;
+    return match;
+  }
+
+  const SURFACE_LABELS = Object.freeze({
+    bituminous_asphalt: "Bituminous / asphalt",
+    cement_concrete: "Cement concrete",
+    mastic_asphalt: "Mastic asphalt",
+    paver_blocks: "Paver blocks",
+    temporary_drivable_surface: "Temporary traffic surface",
+    unpaved_or_nonroad: "Unpaved / non-road",
+    unknown: "Unknown",
+  });
+
+  function complaintRoutingBlock(route) {
+    const separated = separateRoadResponsibility(route);
+    const profile = authorityComplaintProfile(separated);
+    const bda = profile.profile_id === "ka-bengaluru-bda";
+    const intakeName = bda ? profile.authority_name
+      : conciseRouteLabel(separated.intake_authority_name || separated.authority_name);
+    const intakeId = bda ? profile.profile_id
+      : (separated.intake_authority_id || separated.authority_id || null);
+    const geographicName = conciseRouteLabel(separated.geographic_authority_name
+      || separated.authority_name) || "Unknown";
+    const ownerVerified = separated.road_owner_status === "verified";
+    const ownerName = ownerVerified && separated.road_owner_name
+      ? separated.road_owner_name : "Unknown — authority to inspect and transfer if required";
+    const clue = [separated.routing_source,
+      separated.routing_match_field && separated.routing_match_value
+        ? `${separated.routing_match_field}=${separated.routing_match_value}` : null]
+      .filter(Boolean).join("; ") || "Not recorded";
+    return { route: separated, profile, intakeName, intakeId, geographicName,
+      ownerVerified, ownerName, clue };
+  }
+
+  function assertComplaintInvariants(lat, lng, route) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)
+        || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      throw new Error("A road complaint requires valid coordinates.");
+    }
+    if (!route || route.routed !== true || !route.authority_id
+        || !route.authority_name || !route.routing_source) {
+      throw new Error("A road complaint requires a verified intake route.");
+    }
+  }
+
+  function buildComplaintOutputs(a, lat, lng, address, officerName, tender, route = null,
+                                  evidence = {}) {
+    void officerName; // Authority profiles, not honorifics, define the technical output.
+    assertComplaintInvariants(lat, lng, route);
+    const routing = complaintRoutingBlock(route);
+    const tenderMatch = verifiedContractForComplaint(
+      tender, routing.route, Number(evidence.captured_at));
+    const la = Number(lat).toFixed(6), ln = Number(lng).toFixed(6);
+    const coordinates = `${la}, ${ln}`;
+    const mapUrl = `https://maps.google.com/?q=${la},${ln}`;
+    const location = String(address || "Address unavailable; use coordinates").trim();
+    const road = address ? address.split(",")[0].trim() : "the reported location";
+    const size = POTHOLE_SIZES.has(a && a.size) ? a.size : "unknown";
+    const surface = SURFACE_LABELS[a && a.surface_type] || SURFACE_LABELS.unknown;
+    const measurementProvenance = a && a.measurement_provenance === "field_measured"
+      ? "Field measured" : "Visual estimate without a scale reference";
+    const measurementConfidence = a && a.measurement_confidence === "high" ? "High"
+      : a && a.measurement_confidence === "medium" ? "Medium" : "Low";
+    const ward = routing.route.ward_code || "Not identified";
+    const profileCategory = routing.profile.portal_category || "Road / Pothole";
+    const profileChannel = routing.profile.portal_name || routing.route.handoff_name
+      || (routing.route.delivery_channel === "email" ? "Email" : "Official grievance service");
+    const captured = Number.isFinite(evidence.captured_at)
+      ? new Date(evidence.captured_at * 1000).toISOString() : "Not recorded";
+    const gpsAccuracy = Number.isFinite(evidence.gps_accuracy)
+      ? `±${Math.round(evidence.gps_accuracy)} m` : "Not recorded";
+    const photoProvenance = evidence.photo_provenance || "Photo attached from Pothole Reporter";
+
+    const tenderFields = tenderMatch ? {
+      status: "Verified exact-road contract and active responsibility",
+      reference_label: tenderMatch.reference_label || "Tender number",
+      tender_number: tenderMatch.tender_number,
+      exact_work_name: tenderMatch.title,
+      organisation: tenderMatch.organisation || "Not listed",
+      listed_contractor: tenderMatch.contractor || "Not listed",
+      publication_date: tenderMatch.published || "Not listed",
+      lifecycle_status: tenderMatch.lifecycle_status || "Not listed",
+      bid_closing: tenderMatch.bid_closing || "Not listed",
+      bid_opening: tenderMatch.bid_opening || "Not listed",
+      project_start: tenderMatch.project_start || "Not listed",
+      project_completion: tenderMatch.project_completion || "Not listed",
+      agreement_number: tenderMatch.agreement_number || "Not listed",
+      agreement_date: tenderMatch.agreement_date || "Not listed",
+      package_reference: tenderMatch.package_reference || "Not listed",
+      highway_reference: tenderMatch.highway_reference || "Not listed",
+      published_chainage: tenderMatch.published_chainage || "Not listed",
+      road_from: tenderMatch.road_from || "Not listed",
+      road_to: tenderMatch.road_to || "Not listed",
+      match_basis: tenderMatch.match_basis || "Not listed",
+      source_name: tenderMatch.source_name,
+      source_url: tenderMatch.source_url,
+      detail_url: tenderMatch.detail_url || "Not listed",
+      scope: "Verified carriageway work",
+      segment_match: "Verified exact GPS segment",
+      award_status: "Verified official award/work order",
+      dlp_status: "Verified active on capture date",
+    } : null;
+
+    const classificationLines = [
+      "Defect decision: Pothole — YES",
+      `Surface: ${surface}`,
+      `App visual size class: ${size}`,
+      "Physical dimensions (length / width / depth): Unknown / Unknown / Unknown",
+      `Measurement provenance: ${measurementProvenance}`,
+      `Measurement confidence: ${measurementConfidence}`,
+    ];
+    const routingLines = [
+      `Geographic corporation/body: ${routing.geographicName}`,
+      `Complaint intake authority: ${routing.intakeName}`,
+      `Intake profile: ${routing.profile.profile_id}`,
+      `Suggested portal category: ${profileCategory}`,
+      `Suggested ward: ${ward}`,
+      `Road owner/maintainer: ${routing.ownerName}`,
+      `Routing basis: ${routing.clue}`,
+    ];
+    const tenderLines = tenderFields ? [
+      `Status: ${tenderFields.status}`,
+      `${tenderFields.reference_label}: ${tenderFields.tender_number}`,
+      `Exact work name: ${tenderFields.exact_work_name}`,
+      `Organisation / department: ${tenderFields.organisation}`,
+      `Listed contractor: ${tenderFields.listed_contractor}`,
+      `Publication date: ${tenderFields.publication_date}`,
+      !["Not listed", "Not applicable"].includes(tenderFields.lifecycle_status)
+        ? `Tender / project status: ${tenderFields.lifecycle_status}` : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.bid_closing)
+        ? `Bid closing: ${tenderFields.bid_closing}` : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.bid_opening)
+        ? `Bid opening: ${tenderFields.bid_opening}` : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.project_start)
+        ? `Project start: ${tenderFields.project_start}` : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.project_completion)
+        ? `Likely completion: ${tenderFields.project_completion}` : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.agreement_number)
+        ? `Agreement: ${tenderFields.agreement_number}`
+          + (!["Not listed", "Not applicable"].includes(tenderFields.agreement_date)
+            ? ` dated ${tenderFields.agreement_date}` : "") : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.package_reference)
+        ? `Package / project reference: ${tenderFields.package_reference}` : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.highway_reference)
+        ? `Highway reference: ${tenderFields.highway_reference}` : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.published_chainage)
+        ? `Published package chainage (GPS point not verified): ${tenderFields.published_chainage}` : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.road_from)
+        ? `Road from: ${tenderFields.road_from}` : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.road_to)
+        ? `Road to: ${tenderFields.road_to}` : null,
+      !["Not listed", "Not applicable"].includes(tenderFields.match_basis)
+        ? `Candidate match basis: ${tenderFields.match_basis}` : null,
+      `Source: ${tenderFields.source_name}${tenderFields.source_url !== "Not applicable" ? ` — ${tenderFields.source_url}` : ""}`,
+      !["Not listed", "Not applicable"].includes(tenderFields.detail_url)
+        && tenderFields.detail_url !== tenderFields.source_url
+        ? `Official tender detail link (may expire): ${tenderFields.detail_url}` : null,
+      `Carriageway scope: ${tenderFields.scope}`,
+      `Road-segment match: ${tenderFields.segment_match}`,
+      `Award/work-order status: ${tenderFields.award_status}`,
+      `DLP status: ${tenderFields.dlp_status}`,
+    ].filter(Boolean) : [
+      `Status: ${NO_VERIFIED_CONTRACT}`,
+    ];
+    const request = routing.profile.request
+      || "Please register this grievance, inspect and repair the pothole, return the grievance number, and transfer it if another agency maintains the road.";
+    const outputLang = LANG();
+    const addressedAuthority = outputLang === "bn"
+      && routing.route.authority_id === "wb-kmc"
+      ? "কলকাতা পৌরসংস্থা (KMC)" : routing.intakeName;
+    const greeting = outputLang === "kn" ? `ಮಾನ್ಯ ${addressedAuthority} ಅವರಿಗೆ,`
+      : outputLang === "mr" ? `प्रति ${addressedAuthority},`
+        : outputLang === "bn" ? `মাননীয় ${addressedAuthority},`
+          : `Dear ${routing.intakeName},`;
+    const signoff = outputLang === "kn" ? `ವಂದನೆಗಳು,\n${S.name}`
+      : outputLang === "mr" ? `आपला/आपली,\n${S.name}`
+        : outputLang === "bn" ? `বিনীত,\n${S.name}`
+          : `Regards,\n${S.name}`;
+    const independentNote = complaintFooter(outputLang);
+    const subject = outputLang === "kn" ? `ರಸ್ತೆ ಗುಂಡಿ ದೂರು — ${road}`
+      : outputLang === "mr" ? `खड्ड्याची तक्रार — ${road}`
+        : outputLang === "bn" ? `রাস্তার গর্তের অভিযোগ — ${road}`
+          : `Pothole complaint — ${road}`;
+    const emailBody = [
+      greeting,
+      "Please register the following pothole grievance.",
+      `LOCATION\nAddress / landmark: ${location}\nCoordinates: ${coordinates}\nMap: ${mapUrl}\nGPS accuracy: ${gpsAccuracy}\nCaptured: ${captured}\nPhoto: ${photoProvenance}`,
+      `CLASSIFICATION\n${classificationLines.join("\n")}`,
+      `ROUTING\n${routingLines.join("\n")}`,
+      `CONTRACT VERIFICATION\n${tenderLines.join("\n")}`,
+      request,
+      signoff,
+      independentNote,
+    ].join("\n\n");
+    const whatsappText = [
+      `Pothole report: ${location}`,
+      `Coordinates: ${coordinates}`,
+      `Map: ${mapUrl}`,
+      `Classification: Pothole YES; ${surface}; app visual size ${size}; physical measurements unknown (${measurementProvenance.toLowerCase()}, ${measurementConfidence.toLowerCase()} confidence).`,
+      `Routing: geographic body ${routing.geographicName}; intake ${routing.intakeName}; road owner ${routing.ownerVerified ? routing.ownerName : "unverified"}; basis ${routing.clue}.`,
+      tenderFields
+        ? `Contract verification: ${tenderFields.status}; ${tenderFields.reference_label.toLowerCase()} ${tenderFields.tender_number}; work ${tenderFields.exact_work_name}; organisation ${tenderFields.organisation}; contractor ${tenderFields.listed_contractor}; source ${tenderFields.source_name} ${tenderFields.source_url}; DLP ${tenderFields.dlp_status}.`
+        : `Contract verification: ${NO_VERIFIED_CONTRACT}`,
+      "Please inspect, repair, register the grievance and share its reference number.",
+      independentNote,
+    ].join("\n");
+    const portalFields = {
+      title: subject,
+      category: profileCategory,
+      address_landmark: location,
+      coordinates,
+      map_url: mapUrl,
+      gps_accuracy: gpsAccuracy,
+      captured_at: captured,
+      photo_provenance: photoProvenance,
+      defect_decision: "Pothole — YES",
+      surface,
+      app_visual_size_class: size,
+      physical_dimensions: "Unknown (no reference scale)",
+      measurement_provenance: measurementProvenance,
+      measurement_confidence: measurementConfidence,
+      geographic_body: routing.geographicName,
+      intake_authority: routing.intakeName,
+      intake_profile: routing.profile.profile_id,
+      intake_channel: profileChannel,
+      suggested_ward: ward,
+      road_owner_maintainer: routing.ownerName,
+      routing_basis: routing.clue,
+      contract_verification_status: tenderFields ? tenderFields.status : NO_VERIFIED_CONTRACT,
+      ...(tenderFields ? {
+        tender_number: tenderFields.tender_number,
+        exact_work_name: tenderFields.exact_work_name,
+        organisation_department: tenderFields.organisation,
+        listed_contractor: tenderFields.listed_contractor,
+        publication_date: tenderFields.publication_date,
+        tender_project_status: tenderFields.lifecycle_status,
+        bid_closing: tenderFields.bid_closing,
+        bid_opening: tenderFields.bid_opening,
+        project_start: tenderFields.project_start,
+        likely_completion: tenderFields.project_completion,
+        agreement_number: tenderFields.agreement_number,
+        agreement_date: tenderFields.agreement_date,
+        package_project_reference: tenderFields.package_reference,
+        highway_reference: tenderFields.highway_reference,
+        published_package_chainage: tenderFields.published_chainage,
+        road_from: tenderFields.road_from,
+        road_to: tenderFields.road_to,
+        contract_match_basis: tenderFields.match_basis,
+        contract_source_name: tenderFields.source_name,
+        contract_source_url: tenderFields.source_url,
+        official_tender_detail_url: tenderFields.detail_url,
+        carriageway_scope: tenderFields.scope,
+        road_segment_match: tenderFields.segment_match,
+        award_work_order_status: tenderFields.award_status,
+        dlp_status: tenderFields.dlp_status,
+      } : {}),
+      request,
+      independent_app_note: independentNote,
+    };
+    const portalCopyText = Object.entries(portalFields)
+      .map(([key, value]) => `${key.replace(/_/g, " ")}: ${value}`).join("\n");
+    return {
+      email_subject: subject, email_body: emailBody,
+      whatsapp_text: whatsappText, portal_fields: portalFields,
+      portal_copy_text: portalCopyText,
+      complaint_profile_id: routing.profile.profile_id,
+      intake_authority_id: routing.intakeId,
+      intake_authority_name: routing.intakeName,
+      geographic_authority_id: routing.route.geographic_authority_id || routing.route.authority_id,
+      geographic_authority_name: routing.geographicName,
+      road_owner_id: routing.route.road_owner_id || null,
+      road_owner_name: routing.route.road_owner_name || null,
+      road_owner_status: routing.route.road_owner_status,
+      road_owner_evidence: routing.route.road_owner_evidence || null,
+    };
+  }
+
+  function compatibleDraftRoute(route, officerName) {
+    const legacyBmc = !!(route && (route.delivery_channel === "bmc_quickfix"
+      || /brihanmumbai municipal corporation|\bbmc\b/i.test(route.authority_name || "")));
+    return {
+      ...(route || {}),
+      routed: true,
+      authority_id: route && route.authority_id || (legacyBmc ? "mh-bmc" : "legacy-direct-draft"),
+      authority_name: route && route.authority_name || conciseRouteLabel(officerName)
+        || "Concerned road authority",
+      routing_source: route && route.routing_source || (legacyBmc
+        ? "legacy_bmc_record" : "legacy_direct_draft"),
+      delivery_channel: route && route.delivery_channel || "email",
+      tender_eligible: !!(route && route.tender_eligible),
+    };
+  }
+
+  function complaintOutputsForRecord(rec) {
+    if (!rec || normaliseIssueType(rec.issue_type) !== "road_damage") return null;
+    rec = migrateLegacyComplaintRecord(rec);
+    // WhatsApp and portal copy are transfer data, not an archival snapshot. Always
+    // rebuild them from the current route and today's attribution gate so refreshing a
+    // routing pack cannot leave an old authority, ward, tender, or contractor copyable.
+    const route = compatibleDraftRoute({
+      ...rec,
+      routed: true,
+      tender_eligible: !!rec.tender_number,
+    }, rec.officer_name);
+    const tender = rec.tender_number ? {
+      tender_number: rec.tender_number,
+      reference_label: rec.tender_reference_label || "Tender number",
+      title: rec.tender_title,
+      contractor: rec.contractor,
+      published: rec.tender_published,
+      organisation: rec.tender_organisation || null,
+      detail_url: rec.tender_detail_url || null,
+      bid_closing: rec.tender_bid_closing || null,
+      bid_opening: rec.tender_bid_opening || null,
+      project_start: rec.tender_project_start || null,
+      project_completion: rec.tender_project_completion || null,
+      agreement_number: rec.tender_agreement_number || null,
+      agreement_date: rec.tender_agreement_date || null,
+      package_reference: rec.tender_package_reference || null,
+      highway_reference: rec.tender_highway_reference || null,
+      published_chainage: rec.tender_published_chainage || null,
+      road_from: rec.tender_road_from || null,
+      road_to: rec.tender_road_to || null,
+      source_name: rec.tender_source_name,
+      source_url: rec.tender_source_url,
+      lifecycle: rec.tender_lifecycle || null,
+      lifecycle_status: rec.tender_lifecycle_status || null,
+      match_basis: rec.tender_match_basis || null,
+      segment_status: rec.tender_segment_status || null,
+      segment_verified: rec.tender_segment_verified === true,
+      award_status: rec.tender_award_status || null,
+      award_verified: rec.tender_award_verified === true,
+      dlp_status: rec.tender_dlp_status || null,
+      dlp_verified: rec.tender_dlp_verified === true,
+      responsibility_active_verified: rec.tender_responsibility_active_verified === true,
+      responsibility_valid_from: rec.tender_responsibility_valid_from || null,
+      responsibility_valid_until: rec.tender_responsibility_valid_until || null,
+      responsible_authority_id: rec.tender_responsible_authority_id || null,
+      road_owner_id: rec.tender_road_owner_id || null,
+      verification_evidence: rec.tender_verification_evidence || null,
+      unambiguous: rec.tender_unambiguous === true,
+      tender_pack_id: rec.tender_pack_id,
+      tender_pack_version: rec.tender_pack_version,
+      tender_pack_sha256: rec.tender_pack_sha256,
+      tender_pack_state_code: rec.tender_pack_state_code,
+    } : null;
+    const assessment = binaryAssessment({
+      is_pothole: true,
+      looks_like_speed_breaker: false,
+      image_quality: "usable",
+      surface_type: rec.surface_type || "unknown",
+      on_drivable_surface: true,
+      has_localized_cavity: true,
+      has_unambiguous_lower_interior: true,
+      has_broken_edge_or_rim: true,
+      has_depth_or_surface_loss: true,
+      temporal_consistency: rec.temporal_consistency || "single_view",
+      size: POTHOLE_SIZES.has(rec.size) ? rec.size : "medium",
+      description: rec.description || "",
+    }, false, 1);
+    // Legacy v5 rows had no surface field. Preserve their accepted historical status
+    // while labelling the surface/measurement as unknown instead of reclassifying them.
+    if (!assessment.is_pothole) {
+      assessment.is_pothole = true;
+      assessment.reportable = true;
+      assessment.damage_type = "pothole_cavity";
+      assessment.defect_type = "pothole";
+      assessment.size = POTHOLE_SIZES.has(rec.size) ? rec.size : "unknown";
+      assessment.measurement_provenance = "legacy_unknown";
+      assessment.measurement_confidence = "low";
+    }
+    const output = buildComplaintOutputs(assessment, Number(rec.lat), Number(rec.lng),
+      rec.address, rec.officer_name, tender, route, {
+        captured_at: rec.captured_at || rec.created_at,
+        gps_accuracy: Number(rec.gps_accuracy),
+        photo_provenance: rec.capture_source === "manual_import"
+          ? "User-selected/imported photo" : "Pothole Reporter camera evidence",
+      });
+    output.email_subject = rec.email_subject || output.email_subject;
+    output.email_body = rec.email_body || output.email_body;
+    return output;
+  }
+
+  function refreshGeneratedComplaintFields(rec) {
+    if (!rec || normaliseIssueType(rec.issue_type) !== "road_damage") return rec;
+    const savedSubject = rec.email_subject;
+    const savedBody = rec.email_body;
+    rec.email_subject = null;
+    rec.email_body = null;
+    const output = complaintOutputsForRecord(rec);
+    rec.email_subject = rec.email_user_edited === true ? savedSubject : output.email_subject;
+    rec.email_body = rec.email_user_edited === true ? savedBody : output.email_body;
+    rec.whatsapp_text = output.whatsapp_text;
+    rec.portal_fields = output.portal_fields;
+    rec.portal_copy_text = output.portal_copy_text;
+    rec.complaint_profile_id = output.complaint_profile_id;
+    rec.intake_authority_id = output.intake_authority_id;
+    rec.intake_authority_name = output.intake_authority_name;
+    rec.geographic_authority_id = output.geographic_authority_id;
+    rec.geographic_authority_name = output.geographic_authority_name;
+    rec.road_owner_id = output.road_owner_id;
+    rec.road_owner_name = output.road_owner_name;
+    rec.road_owner_status = output.road_owner_status;
+    rec.road_owner_evidence = output.road_owner_evidence;
+    rec.complaint_template_version = COMPLAINT_TEMPLATE_VERSION;
+    return rec;
+  }
+
+  function draftEmail(a, lat, lng, address, officerName, tender, route = null) {
+    const output = buildComplaintOutputs(a, lat, lng, address, officerName, tender,
+      compatibleDraftRoute(route, officerName));
+    return [output.email_subject, output.email_body];
+  }
+
+  function civicIssueName(issueType, lang = "en") {
+    const issue = normaliseIssueType(issueType);
+    const names = {
+      en: { road_damage: "road damage", garbage: "garbage accumulation",
+            open_manhole: "open or damaged manhole" },
+      kn: { road_damage: "ರಸ್ತೆ ಹಾನಿ", garbage: "ಕಸ ಸಂಗ್ರಹ",
+            open_manhole: "ತೆರೆದ ಅಥವಾ ಹಾನಿಗೊಂಡ ಮ್ಯಾನ್‌ಹೋಲ್" },
+      mr: { road_damage: "रस्त्याचे नुकसान", garbage: "साचलेला कचरा",
+            open_manhole: "उघडे किंवा खराब मॅनहोल" },
+      bn: { road_damage: "রাস্তার ক্ষতি", garbage: "জমে থাকা আবর্জনা",
+            open_manhole: "খোলা বা ক্ষতিগ্রস্ত ম্যানহোল" },
+    };
+    return (names[lang] || names.en)[issue];
+  }
+  const issueFileStem = (issueType) => ({
+    road_damage: "road-damage", garbage: "garbage", open_manhole: "open-manhole",
+  })[normaliseIssueType(issueType)];
+
+  function draftCivicComplaint(issueType, lat, lng, address, officerName, route = null,
+                               captureSource = "manual", locationSource = null) {
+    const issue = normaliseIssueType(issueType);
+    if (issue === "road_damage") throw new Error("Road damage must use the verified detector draft.");
+    const lang = LANG();
+    const authority = conciseRouteLabel(route && route.authority_name);
+    const officer = conciseRouteLabel(route && OFFICIAL_HANDOFF_CHANNELS.has(route.delivery_channel)
+      ? authority : officerName);
+    const sender = S.name === "A concerned citizen"
+      ? ({ kn: "ಕಾಳಜಿಯುಳ್ಳ ನಾಗರಿಕ", mr: "एक जागरूक नागरिक", bn: "একজন সচেতন নাগরিক" }[lang]
+          || S.name) : S.name;
+    const issueName = civicIssueName(issue, lang);
+    const road = address ? address.split(",")[0].trim() : null;
+    const coords = lat != null && lng != null
+      ? `${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}` : null;
+    const map = coords ? `https://maps.google.com/?q=${coords.replace(" ", "")}` : null;
+    const subject = lang === "kn"
+      ? `${issueName} ದೂರು${road ? ` — ${road}` : ""}`
+      : lang === "mr"
+        ? `${issueName} तक्रार${road ? ` — ${road}` : ""}`
+        : lang === "bn"
+          ? `${issueName} সংক্রান্ত অভিযোগ${road ? ` — ${road}` : ""}`
+          : `${issue === "open_manhole" ? "Urgent: " : ""}${issueName} complaint${road ? ` near ${road}` : ""}`;
+    const location = lang === "kn"
+      ? `ಸ್ಥಳ: ${address || "ಲಗತ್ತಿಸಿದ ಚಿತ್ರ ನೋಡಿ"}${coords ? `\nನಿರ್ದೇಶಾಂಕಗಳು: ${coords}\nನಕ್ಷೆ: ${map}` : ""}`
+      : lang === "mr"
+        ? `ठिकाण: ${address || "जोडलेला फोटो पहा"}${coords ? `\nनिर्देशांक: ${coords}\nनकाशा: ${map}` : ""}`
+        : lang === "bn"
+          ? `স্থান: ${address || "সংযুক্ত ছবিটি দেখুন"}${coords ? `\nস্থানাঙ্ক: ${coords}\nমানচিত্র: ${map}` : ""}`
+          : `Location: ${address || "please see the attached photo"}${coords ? `\nCoordinates: ${coords}\nMap: ${map}` : ""}`;
+    const request = issue === "open_manhole"
+      ? {
+          en: "The attached photo shows an open or damaged manhole. It is an immediate risk to pedestrians and road users. Please barricade or secure the location urgently, inspect it, and replace or repair the cover.",
+          kn: "ಲಗತ್ತಿಸಿದ ಚಿತ್ರದಲ್ಲಿ ತೆರೆದ ಅಥವಾ ಹಾನಿಗೊಂಡ ಮ್ಯಾನ್‌ಹೋಲ್ ಇದೆ. ಇದು ಪಾದಚಾರಿಗಳು ಮತ್ತು ರಸ್ತೆ ಬಳಕೆದಾರರಿಗೆ ತಕ್ಷಣದ ಅಪಾಯ. ದಯವಿಟ್ಟು ಸ್ಥಳವನ್ನು ತುರ್ತಾಗಿ ಭದ್ರಪಡಿಸಿ, ಪರಿಶೀಲಿಸಿ ಮತ್ತು ಮುಚ್ಚಳವನ್ನು ಬದಲಿಸಿ ಅಥವಾ ದುರಸ್ತಿ ಮಾಡಿ.",
+          mr: "जोडलेल्या फोटोमध्ये उघडे किंवा खराब मॅनहोल दिसत आहे. पादचारी आणि रस्ता वापरणाऱ्यांसाठी हा तातडीचा धोका आहे. कृपया जागा त्वरित सुरक्षित करून तपासणी करा आणि झाकण बदला किंवा दुरुस्त करा.",
+          bn: "সংযুক্ত ছবিতে একটি খোলা বা ক্ষতিগ্রস্ত ম্যানহোল দেখা যাচ্ছে। এটি পথচারী ও রাস্তা ব্যবহারকারীদের জন্য তাৎক্ষণিক বিপদ। অনুগ্রহ করে দ্রুত স্থানটি ঘিরে নিরাপদ করুন, পরিদর্শন করুন এবং ঢাকনাটি বদল বা মেরামত করুন।",
+        }
+      : {
+          en: "The attached photo shows accumulated or uncollected garbage at this location. Please inspect the site, remove the waste, clean the area, and address the cause of repeated dumping if applicable.",
+          kn: "ಲಗತ್ತಿಸಿದ ಚಿತ್ರದಲ್ಲಿ ಈ ಸ್ಥಳದಲ್ಲಿ ಸಂಗ್ರಹವಾದ ಅಥವಾ ತೆರವುಗೊಳಿಸದ ಕಸ ಇದೆ. ದಯವಿಟ್ಟು ಸ್ಥಳವನ್ನು ಪರಿಶೀಲಿಸಿ, ಕಸವನ್ನು ತೆಗೆದು ಸ್ವಚ್ಛಗೊಳಿಸಿ ಮತ್ತು ಅನ್ವಯಿಸಿದರೆ ಮರುಮರು ಕಸ ಹಾಕುವ ಕಾರಣವನ್ನು ಪರಿಹರಿಸಿ.",
+          mr: "जोडलेल्या फोटोमध्ये या ठिकाणी साचलेला किंवा न उचललेला कचरा दिसत आहे. कृपया जागेची पाहणी करून कचरा उचला, परिसर स्वच्छ करा आणि लागू असल्यास वारंवार कचरा टाकण्याचे कारण दूर करा.",
+          bn: "সংযুক্ত ছবিতে এই স্থানে জমে থাকা বা না-তোলা আবর্জনা দেখা যাচ্ছে। অনুগ্রহ করে স্থানটি পরিদর্শন করে বর্জ্য সরান, এলাকা পরিষ্কার করুন এবং প্রযোজ্য হলে বারবার আবর্জনা ফেলার কারণটি সমাধান করুন।",
+        };
+    const greeting = ({ kn: `ಮಾನ್ಯ ${officer || "ಅಧಿಕಾರಿಗಳೇ"} ಅವರಿಗೆ,`,
+      mr: `प्रति ${officer || "संबंधित अधिकारी"},`,
+      bn: `মাননীয় ${officer || "সংশ্লিষ্ট আধিকারিক"},` }[lang]
+      || `Dear ${officer || "Sir or Madam"},`);
+    const close = ({ kn: `ಧನ್ಯವಾದಗಳು.\n\nವಂದನೆಗಳು,\n${sender}`,
+      mr: `धन्यवाद.\n\nआपला/आपली,\n${sender}`,
+      bn: `ধন্যবাদ।\n\nবিনীত,\n${sender}` }[lang]
+      || `Thank you.\n\nRegards,\n${sender}`);
+    const statewideWestBengal = route && route.authority_id === "wb-statewide-unverified";
+    const authorityNote = route && authority
+      ? (statewideWestBengal
+        ? (lang === "kn" ? "ಸೂಚಿಸಿದ ದೂರು ಮಾರ್ಗ: West Bengal PGRS; ಜವಾಬ್ದಾರ ಜಿಲ್ಲೆ ಅಥವಾ ಇಲಾಖೆಯನ್ನು ಗುರುತಿಸಲಾಗಿಲ್ಲ."
+          : lang === "mr" ? "सुचवलेला तक्रार मार्ग: West Bengal PGRS; जबाबदार जिल्हा किंवा विभाग ओळखलेला नाही."
+          : lang === "bn" ? "প্রস্তাবিত অভিযোগের মাধ্যম: West Bengal PGRS; দায়িত্বপ্রাপ্ত জেলা বা দপ্তর চিহ্নিত করা হয়নি।"
+          : "Suggested complaint channel: West Bengal PGRS; the responsible district or department has not been identified.")
+        : normaliseAuthorityValue(officer) === normaliseAuthorityValue(authority) ? null
+        : lang === "kn" ? `ಸೂಚಿಸಿದ ನಾಗರಿಕ ಸಂಸ್ಥೆ: ${authority}.`
+        : lang === "mr" ? `सुचवलेली नागरी संस्था: ${authority}.`
+        : lang === "bn" ? `প্রস্তাবিত পৌর কর্তৃপক্ষ: ${authority}।`
+        : `Suggested civic authority: ${authority}.`)
+      : null;
+    const imported = captureSource === "manual_import";
+    const provenanceNote = imported
+      ? (lang === "kn"
+          ? `ಈ ಚಿತ್ರವನ್ನು ಬಳಕೆದಾರರು ಆಯ್ಕೆಮಾಡಿ/ಆಮದು ಮಾಡಿದ್ದಾರೆ; ಮೂಲ ಸೆರೆಹಿಡಿದ ಸಮಯ ತಿಳಿದಿಲ್ಲ.${locationSource === "current_confirmed_for_import" ? " ಬಳಕೆದಾರರ ದೃಢೀಕರಣದ ನಂತರ ಪ್ರಸ್ತುತ ಸ್ಥಳವನ್ನು ಚಿತ್ರಕ್ಕೆ ಜೋಡಿಸಲಾಗಿದೆ." : " ಚಿತ್ರಕ್ಕೆ ಪ್ರಸ್ತುತ ಸ್ಥಳವನ್ನು ಜೋಡಿಸಲಾಗಿಲ್ಲ."}`
+        : lang === "mr"
+          ? `हे छायाचित्र वापरकर्त्याने निवडले/आयात केले आहे; मूळ छायाचित्रणाची वेळ माहित नाही.${locationSource === "current_confirmed_for_import" ? " वापरकर्त्याच्या पुष्टीनंतर सध्याचे स्थान छायाचित्राशी जोडले आहे." : " छायाचित्राशी सध्याचे स्थान जोडलेले नाही."}`
+        : lang === "bn"
+          ? `ছবিটি ব্যবহারকারী বেছে নিয়েছেন/আমদানি করেছেন; মূল ছবিটি তোলার সময় অজানা।${locationSource === "current_confirmed_for_import" ? " ব্যবহারকারীর নিশ্চিতকরণের পরে বর্তমান অবস্থানটি ছবির সঙ্গে যুক্ত হয়েছে।" : " ছবির সঙ্গে বর্তমান অবস্থান যুক্ত করা হয়নি।"}`
+        : `This photo was selected/imported by the user; its original capture time is unknown.${locationSource === "current_confirmed_for_import" ? " The current location was linked only after the user's confirmation." : " No current location was linked to the photo."}`)
+      : null;
+    return [subject, [greeting, location, request[lang] || request.en, provenanceNote,
+      authorityNote, close, complaintFooter(lang, false)]
+      .filter(Boolean).join("\n\n")];
   }
 
   // ---------- storage (IndexedDB) ----------
@@ -1487,7 +7343,6 @@
           };
         }
       };
-      req.onsuccess = () => { _db = req.result; resolve(_db); };
       req.onerror = () => reject(req.error);
     });
   }
@@ -1512,6 +7367,41 @@
       const died = () => reject(storageError(failure || tx.error));
       tx.onabort = died;
       tx.onerror = died;
+    }));
+  }
+
+  const STORED_DATA_STORES = ["reports", "drives", "footage", "state_packs"];
+
+  // Delete-all is one IndexedDB transaction. Sequential clears can leave a misleading
+  // half-wiped history when a later store aborts (especially under storage pressure).
+  function clearAllStoredRecords() {
+    return idb().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction(STORED_DATA_STORES, "readwrite");
+      let failure = null;
+      for (const name of STORED_DATA_STORES) {
+        const req = tx.objectStore(name).clear();
+        req.onerror = () => { failure = req.error; };
+      }
+      tx.oncomplete = () => resolve();
+      const died = () => reject(storageError(failure || tx.error));
+      tx.onabort = died;
+      tx.onerror = () => {};
+    }));
+  }
+
+  function allStoredRecordsAreEmpty() {
+    return idb().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction(STORED_DATA_STORES, "readonly");
+      let remaining = 0, failure = null;
+      for (const name of STORED_DATA_STORES) {
+        const req = tx.objectStore(name).count();
+        req.onsuccess = () => { remaining += Number(req.result) || 0; };
+        req.onerror = () => { failure = req.error; };
+      }
+      tx.oncomplete = () => failure ? reject(storageError(failure)) : resolve(remaining === 0);
+      const died = () => reject(storageError(failure || tx.error));
+      tx.onabort = died;
+      tx.onerror = () => {};
     }));
   }
 
@@ -1659,6 +7549,16 @@
               sighting_drive_ids: sightingDriveIds,
               seen_count: exactReplay ? (prior.seen_count || 1) : (prior.seen_count || 1) + 1,
               last_seen_at: Math.max(eventTime(prior) || 0, eventTime(rec) || 0),
+              // A fresh accepted detection is direct evidence that the defect remains.
+              // It can clear an AI-suggested repair review, but a previously fixed
+              // canonical is excluded by acceptedReport and therefore becomes a new
+              // recurrence rather than silently rewriting history.
+              condition_status: conditionStatus(prior) === "repair_review" ? "open"
+                : conditionStatus(prior),
+              condition_updated_at: conditionStatus(prior) === "repair_review"
+                ? (eventTime(rec) || Date.now() / 1000) : (prior.condition_updated_at || null),
+              condition_source: conditionStatus(prior) === "repair_review"
+                ? "damage_seen_on_revisit" : (prior.condition_source || null),
             };
             if (centralOutboxRow) {
               updated.central_sync_pending = true;
@@ -2004,9 +7904,25 @@
         if (lum > lightConfig.brightPixelThreshold) clippedBright++;
       }
     }
-    return { mean: count ? total / count : 0,
-             dark: count ? clippedDark / count : 1,
-             bright: count ? clippedBright / count : 0 };
+    const enhanced = luminanceSum < 720000 * sampleCount
+      && brightCount * 100 < 8 * sampleCount;
+    let gainNumerator = 1, gainDenominator = 1;
+    if (enhanced) {
+      gainNumerator = 935000 * sampleCount;
+      gainDenominator = Math.max(luminanceSum, 350000 * sampleCount);
+      if (gainNumerator * 1000 < 1265 * gainDenominator) {
+        gainNumerator = 1265; gainDenominator = 1000;
+      } else if (gainNumerator * 1000 > 1815 * gainDenominator) {
+        gainNumerator = 1815; gainDenominator = 1000;
+      }
+    }
+    return {
+      enhanced, sampleCount, luminanceSum, darkCount, brightCount,
+      gainNumerator, gainDenominator,
+      mean: sampleCount ? luminanceSum / (10000 * sampleCount) : 0,
+      dark: sampleCount ? darkCount / sampleCount : 1,
+      bright: sampleCount ? brightCount / sampleCount : 0,
+    };
   }
 
   async function toDataUrl(blob, maxDim, quality = 0.85, boost = false, band = 1) {
@@ -2033,9 +7949,6 @@
       ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
       ctx.filter = "none";
     }
-    const out = c.toDataURL("image/jpeg", quality);
-    if (bmp.close) bmp.close();
-    return out;
   }
 
   // ---------- pipeline ----------
@@ -2063,6 +7976,23 @@
         release();
       },
     };
+  }
+
+  // VOD replay can keep several detector requests in flight. A 1280px canvas plus its
+  // ImageData is intentionally short-lived, but preparing one burst per request at the
+  // same time can still exhaust a WebView. Serialize only pixel preparation; the lock is
+  // released before network inference so model calls retain their existing concurrency.
+  let driveImagePreparationTail = Promise.resolve();
+  async function withDriveImagePreparation(work) {
+    const wait = driveImagePreparationTail;
+    let release;
+    driveImagePreparationTail = new Promise((resolve) => { release = resolve; });
+    await wait;
+    try {
+      return await work();
+    } finally {
+      release();
+    }
   }
 
   async function createReport(fd, driveMode) {
@@ -2103,8 +8033,9 @@
     // Measured on a real device: a 2000px frame is ~1.1 MB of base64 and every request
     // is marshalled across the JS-to-native bridge, which made a live detection call
     // take 13.5s median and stuttered the preview. The live pass therefore runs on a
-    // smaller frame; the recorded footage keeps full quality, so a pothole missed live
-    // is still recoverable by re-analysing the video. Single shots stay at full size:
+    // smaller frame. Native Drive retains sparse 720p evidence frames beside low-resolution
+    // video, so interrupted saved-frame checks can be retried later with nearby temporal
+    // context. Single shots stay at full size:
     // one photo, someone waiting, and no footage behind it.
     // Both capture modes acquire and send exactly one full-frame image.
     let imageInputs, dataUrl;
@@ -2161,8 +8092,36 @@
       throw error;
     }
     if (driveMode && !accepted) {
+      // Ordinary non-detection is only the gate. Fixed requires a separate model call
+      // that sees the saved before photo and the current usable revisit together.
+      if (repairCandidate && clearAbsenceForRepair(a)) {
+        progress(pmsg("repair"));
+        const comparison = await verifyRepairCandidate(repairCandidate, contextDataUrl,
+          fullViews, primaryIndex, detectionModel, detectionDetail).catch(() => null);
+        const provenCondition = repairConditionFor(comparison);
+        if (provenCondition) {
+          if (commitTurn) await commitTurn.wait;
+          const repairResult = await applyRepairObservation(repairCandidate.id, {
+            ...repairObservationBase,
+            ...comparison,
+            // Preserve the full scene so a later reviewer can audit whether the before/after
+            // frames show the same footprint.
+            current_photo_data_url: contextDataUrl,
+            detection_model: detectionModel,
+            image_detail: detectionDetail,
+            prompt_version: REPAIR_PROMPT_VERSION,
+            schema_version: REPAIR_SCHEMA_VERSION,
+          });
+          const applied = !repairResult.ignored ? repairResult.condition_status : null;
+          return { analyzed: true, accepted: false, stored: false, found: false,
+                   duplicate: false, duplicate_of: null, decision, review: false,
+                   repaired: applied === "fixed", repair_review: applied === "repair_review",
+                   repair_target_id: repairCandidate.id, repair_result: repairResult,
+                   ...a, observation: { ...a }, repair_observation: comparison, detector };
+        }
+      }
       return { analyzed: true, accepted: false, stored: false, found: false,
-               duplicate: false, duplicate_of: null, decision, review: decision === "review",
+               duplicate: false, duplicate_of: null, decision, review: false,
                ...a, observation: { ...a }, detector };
     }
 
@@ -2239,15 +8198,58 @@
       size: a.size,
       decision,
       description: a.description, email_subject: subject, email_body: body,
-      status: accepted ? (covered ? "draft" : "unrouted") : (decision === "review" ? "review" : "rejected"),
-      detection_model: detectionModel, image_detail: detectionDetail, prompt_version: PROMPT_VERSION,
+      whatsapp_text: complaint ? complaint.whatsapp_text : null,
+      portal_fields: complaint ? complaint.portal_fields : null,
+      portal_copy_text: complaint ? complaint.portal_copy_text : null,
+      complaint_profile_id: complaint ? complaint.complaint_profile_id : null,
+      complaint_template_version: body ? COMPLAINT_TEMPLATE_VERSION : null,
+      status: accepted ? (covered ? "draft" : "unrouted") : "rejected",
+      condition_status: "open", condition_updated_at: null, condition_source: null,
+      detection_model: detectionModel, image_detail: detectionDetail, prompt_version: promptVersion,
       schema_version: SCHEMA_VERSION, evidence_count: imageInputs.length,
       // Distinguishes "we know where this is and do not cover it" from "we never got a
       // fix", which are the same status but very different things to tell someone.
-      unrouted_reason: accepted && !covered ? (unroutedReason || "outside_area") : null,
-      unrouted_body: accepted && !covered ? (bodyName || null) : null,
-      officer_name: officerName, officer_email: officerEmail,
+      unrouted_reason: accepted && !covered ? (route.unrouted_reason || "outside_area") : null,
+      unrouted_body: accepted && !covered ? (route.authority_name || null) : null,
+      officer_name: covered ? (route.officer_name || null) : null,
+      officer_email: covered ? (route.officer_email || null) : null,
+      authority_id: covered ? (route.authority_id || null) : null,
+      authority_name: covered ? (route.authority_name || null) : null,
+      authority_registry_version: covered ? (route.authority_registry_version || null) : null,
+      delivery_channel: covered ? (route.delivery_channel || "email") : null,
+      ward_code: covered ? (route.ward_code || null) : null,
+      routing_source: covered ? (route.routing_source || null) : null,
+      routing_match_field: covered ? (route.routing_match_field || null) : null,
+      routing_match_value: covered ? (route.routing_match_value || null) : null,
+      highway_ref: covered ? (route.highway_ref || null) : null,
+      contract_state_code: covered ? (route.contract_state_code || null) : null,
+      routing_pack_id: covered ? (route.routing_pack_id || null) : null,
+      routing_pack_version: covered ? (route.routing_pack_version || null) : null,
+      routing_pack_sha256: covered ? (route.routing_pack_sha256 || null) : null,
+      routing_pack_state_code: covered ? (route.routing_pack_state_code || null) : null,
+      region: covered ? (route.region || null) : null,
+      ownership_unverified: covered ? !!route.ownership_unverified : null,
+      geographic_authority_id: complaint ? complaint.geographic_authority_id : null,
+      geographic_authority_name: complaint ? complaint.geographic_authority_name : null,
+      intake_authority_id: complaint ? complaint.intake_authority_id : null,
+      intake_authority_name: complaint ? complaint.intake_authority_name : null,
+      road_owner_id: complaint ? complaint.road_owner_id : null,
+      road_owner_name: complaint ? complaint.road_owner_name : null,
+      road_owner_status: complaint ? complaint.road_owner_status : null,
+      road_owner_evidence: complaint ? complaint.road_owner_evidence : null,
+      handoff_name: covered ? (route.handoff_name || null) : null,
+      handoff_url: covered ? (route.handoff_url || null) : null,
+      handoff_package: covered ? (route.handoff_package || null) : null,
+      alternate_handoff_name: covered ? (route.alternate_handoff_name || null) : null,
+      alternate_handoff_url: covered ? (route.alternate_handoff_url || null) : null,
+      whatsapp_url: covered ? (route.whatsapp_url || null) : null,
+      helpline: covered ? (route.helpline || null) : null,
+      requires_official_reference: covered ? !!route.requires_official_reference : false,
+      official_grievance_id: null,
+      submitted_at: null,
       tender_number: tender ? tender.tender_number : null,
+      tender_reference_label: tender ? (tender.reference_label || "Tender number") : null,
+      tender_title: tender ? tender.title : null,
       contractor: tender ? tender.contractor : null,
       tender_note: tender ? tender.note : null,
       tender_title: tender ? tender.title : null,
@@ -2286,7 +8288,7 @@
         captured_at: Number.isFinite(capturedAtRaw) ? capturedAtRaw / 1000 : null,
         gps_accuracy: Number.isFinite(gpsAccuracyRaw) ? gpsAccuracyRaw : null,
         speed_mps: Number.isFinite(speedRaw) ? speedRaw : null,
-        heading: Number.isFinite(headingRaw) ? ((headingRaw % 360) + 360) % 360 : null,
+        heading: normalizedHeading,
         source_event_key: sourceEventKey,
       })] : [],
       sighting_drive_ids: accepted && driveId != null ? [String(driveId)] : [],
@@ -2603,8 +8605,8 @@
         subject: prepared.subject,
         body: prepared.body,
         // Full capture where we kept one; the working copy is only a fallback.
-        attachments: [{ type: "base64", name: "road-damage.jpg",
-                        path: await photoToBase64(rec.photo_full || rec.photo) }],
+        attachments: [{ type: "base64", name: `${issueFileStem(current.issue_type)}.jpg`,
+                        path: attachment }],
       });
     } else {
       console.log("[harness] would open native compose to:", prepared.to);
@@ -2679,12 +8681,16 @@
   // Exports only what a human actually labelled: a model verdict is not ground truth,
   // and a benchmark built from the detector's own opinions cannot measure the detector.
   async function exportDataset() {
-    const labelled = (await allReports()).filter((r) => r.human_label);
+    const labelled = (await allReports()).filter((r) =>
+      normaliseIssueType(r.issue_type) === "road_damage" && r.human_label);
     if (!labelled.length) throw new Error("Nothing labelled yet. Open Review frames and tag some first.");
+    if (labelled.some((report) => !fullFramePhoto(report))) {
+      throw new Error("A labelled legacy row has no provable full-frame image; remove its label or recapture it before export.");
+    }
     const files = [], index = [];
     for (const r of labelled) {
       const name = `images/frame-${r.id}.jpg`;
-      files.push({ name, data: b64ToBytes(await photoToBase64(r.photo)) });
+      files.push({ name, data: b64ToBytes(await photoToBase64(fullFramePhoto(r))) });
       index.push({
         path: name,
         label: r.human_label,
@@ -2756,7 +8762,46 @@
       // thumbnail, so shipping it here cost about a megabyte per report on every return
       // to the home screen, and the cost grew with every pothole ever reported. The only
       // reader of it is the email attachment, which loads the record by id anyway.
-      return (await allReports()).sort((a, b) => b.id - a.id).map(listDict);
+      const reports = (await allReports()).sort((a, b) => b.id - a.id);
+      return (await migrateLegacyComplaintDrafts(reports)).map(listDict);
+    }
+    if (path === "/api/repair-targets" && method === "GET") {
+      return { target_ids: await getRepairTargetIds() };
+    }
+    if (path === "/api/repair-targets" && method === "POST") {
+      const body = JSON.parse((opts && opts.body) || "{}");
+      return { targets: await getRepairTargetBatch(body.ids) };
+    }
+    if (path === "/api/native-repair" && method === "POST") {
+      const raw = JSON.parse(opts.body || "{}");
+      const finiteNumber = (value) => value !== null && value !== "" && Number.isFinite(Number(value))
+        ? Number(value) : null;
+      const observation = {
+        source_event_key: raw.source_event_key,
+        observed_at: finiteNumber(raw.observed_at),
+        drive_id: raw.drive_id == null ? null : String(raw.drive_id),
+        capture_source: "drive_live",
+        debug_capture: false,
+        lat: finiteNumber(raw.lat),
+        lng: finiteNumber(raw.lng),
+        gps_accuracy: finiteNumber(raw.gps_accuracy),
+        speed_mps: finiteNumber(raw.speed_mps),
+        heading: finiteNumber(raw.heading),
+        current_photo_data_url: raw.current_photo_data_url,
+        current_condition: raw.current_condition,
+        assessment: raw.assessment,
+        image_quality: raw.image_quality,
+        same_location_visible: raw.same_location_visible === true,
+        completed_repair_visible: raw.completed_repair_visible === true,
+        description: raw.description,
+        detection_model: raw.detection_model,
+        image_detail: raw.image_detail,
+        prompt_version: raw.prompt_version,
+        // Provenance is an internal native result contract, not user input to coerce.
+        // applyRepairObservation validates these exact values and never fills them in.
+        schema_version: raw.schema_version,
+      };
+      return applyRepairObservation(raw.target_report_id, observation);
     }
     if (path === "/api/reports" && method === "DELETE") {
       await op("readwrite", (s) => s.clear());
@@ -2877,25 +8922,70 @@
       prior.analysis_checked = Math.max(0, stats.checked | 0);
       prior.analysis_found = Math.max(0, stats.found | 0);
       prior.analysis_already = Math.max(0, stats.already | 0, incomingIds.length);
+      prior.analysis_planned = Math.max(0, stats.planned | 0);
+      prior.analysis_extracted = Math.max(0, stats.extracted | 0);
+      prior.analysis_failed = Math.max(0, stats.failed | 0);
+      prior.analysis_skipped = Math.max(0, stats.skipped | 0);
+      prior.analysis_unreadable_clips = Math.max(0, stats.unreadable_clips | 0);
+      prior.analysis_complete = stats.complete === true;
       prior.analysis_at = Date.now() / 1000;
       await putDrive(prior);
       return { ok: true };
     }
     if (path === "/api/export" && method === "POST") return exportDataset();
-    if ((m = path.match(/^\/api\/reports\/(\d+)\/label$/)) && method === "POST") {
+    if ((m = path.match(/^\/api\/reports\/(\d+)\/evidence$/)) && method === "GET") {
       const rec = await getReport(m[1]);
       if (!rec) throw new Error("Report not found.");
+      return evidenceForReport(rec);
+    }
+    if ((m = path.match(/^\/api\/reports\/(\d+)\/handoff$/)) && method === "GET") {
+      const rec = await getReport(m[1]);
+      if (!rec) throw new Error("Report not found.");
+      return refreshAndPersistOfficialHandoff(rec);
+    }
+    if ((m = path.match(/^\/api\/reports\/(\d+)\/retry-routing$/)) && method === "POST") {
+      const rec = await getReport(m[1]);
+      if (!rec) throw new Error("Report not found.");
+      return retryCivicRouting(rec);
+    }
+    if ((m = path.match(/^\/api\/reports\/(\d+)\/label$/)) && method === "POST") {
       const want = JSON.parse(opts.body).label;
       if (!["pothole_cavity", "failed_patch", "surface_breakup", "rut_or_depression",
             "other_road_damage", "undamaged", "pothole", "not_pothole", null].includes(want)) {
         throw new Error("Bad label.");
       }
-      rec.human_label = want;
-      await putReport(rec);
-      return toDict(rec);
+      return mutateReportAtomically(m[1], (rec) => { rec.human_label = want; });
+    }
+    if ((m = path.match(/^\/api\/reports\/(\d+)\/condition$/)) && method === "POST") {
+      const requested = String(JSON.parse(opts.body || "{}").condition_status || "");
+      return mutateReportAtomically(m[1], (rec) => {
+        if (requested === "fixed") {
+          if (conditionStatus(rec) !== "repair_review"
+              || rec.repair_current_condition !== "repaired"
+              || rec.repair_same_location_visible !== true
+              || rec.repair_completed_visible !== true
+              || rec.repair_image_quality !== "usable" || !rec.repair_photo) {
+            throw new Error("This revisit does not contain enough before-and-after evidence to mark the pothole fixed.");
+          }
+          rec.condition_status = "fixed";
+          rec.condition_updated_at = Date.now() / 1000;
+          rec.condition_source = "user_confirmed_revisit";
+        } else if (requested === "open") {
+          if (conditionStatus(rec) === "open") return;
+          rec.condition_status = "open";
+          rec.condition_updated_at = Date.now() / 1000;
+          rec.condition_source = "user_reopened";
+        } else {
+          throw new Error("Condition must be fixed or open.");
+        }
+      });
     }
     if (path === "/api/report" && method === "POST") return createReport(opts.body, false);
+    if (path === "/api/civic-report" && method === "POST") return createCivicReport(opts.body);
     if (path === "/api/frame" && method === "POST") return createReport(opts.body, true);
+    if (path === "/api/native-report" && method === "POST") {
+      return importNativeReport(JSON.parse(opts.body || "{}"));
+    }
     if ((m = path.match(/^\/api\/reports\/(\d+)\/send$/)) && method === "POST") {
       const rec = await getReport(m[1]);
       if (!rec) throw new Error("Report not found.");
@@ -2921,12 +9011,20 @@
       const rec = await getReport(m[1]);
       if (!rec) throw new Error("Report not found.");
       if (method === "PATCH") {
-        if (rec.status !== "draft" && rec.status !== "queued") throw new Error("Only drafts can be edited.");
         const upd = JSON.parse(opts.body);
-        rec.email_subject = upd.email_subject;
-        rec.email_body = upd.email_body;
-        await putReport(rec);
-        return toDict(rec);
+        return mutateReportAtomically(rec.id, (current) => {
+          if (conditionStatus(current) === "fixed") throw new Error("Fixed reports cannot be edited for sending.");
+          if (current.status !== "draft" && current.status !== "queued") throw new Error("Only drafts can be edited.");
+          const subject = String(upd.email_subject || "");
+          const body = complaintBodyWithFooter(upd.email_body, current.issue_type);
+          if (subject !== String(current.email_subject || "")
+              || body !== String(current.email_body || "")) {
+            current.email_user_edited = true;
+          }
+          current.email_subject = subject;
+          current.email_body = body;
+          current.complaint_template_version = COMPLAINT_TEMPLATE_VERSION;
+        });
       }
       if (method === "DELETE") {
         await deleteReportAndCentralOutbox(rec.id);
@@ -2939,10 +9037,16 @@
   // Native hardware back button routes through window.handleAppBack (defined by the UI).
   if (NATIVE) {
     try {
-      const App = Capacitor.Plugins.App;
+      let App = Capacitor.registerPlugin ? Capacitor.registerPlugin("App") : null;
+      if (!App || !App.addListener) App = Capacitor.Plugins && Capacitor.Plugins.App;
       if (App && App.addListener) {
         App.addListener("backButton", () => {
           if (!(window.handleAppBack && window.handleAppBack())) App.exitApp();
+        });
+        App.addListener("appStateChange", (state) => {
+          if (window.handleNativeAppStateChange) {
+            window.handleNativeAppStateChange(!!(state && state.isActive));
+          }
         });
       }
     } catch (e) {}
@@ -2951,6 +9055,10 @@
   // Pure helpers, exposed for tests. These are references, not copies: a test exercises
   // exactly the code that runs in production. Nothing here holds state or a secret.
   const __pure = { inCoverage, peekVerdict, peekReject, rejectedVerdict, decisionFor,
+                   binaryAssessment, temporarySurfaceNeedsConfirmation,
+                   temporarySurfaceVoteEligible, temporarySurfaceVoteNeedsAnother,
+                   confirmedTemporaryAssessment,
+                   nativeDetectorContract,
                    damageTypeOf, assessmentOf, normaliseModel, normaliseDetail,
                    buildDetectionRequest, effectiveVisionProvider,
                    ASSESS_SCHEMA, DETECT_PROMPT, PROMPT_VERSION,

@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """Camera/location permissions must stay behind the versioned data disclosure."""
+import os
 import sys
 
 from playwright.sync_api import sync_playwright
 
 
-APP = "http://localhost:8765/"
+APP = os.environ.get("POTHOLE_TEST_APP", "http://localhost:8765/")
 
 INIT_NATIVE_PROBE = r"""
 (() => {
@@ -120,7 +121,10 @@ with sync_playwright() as playwright:
     if disclosed["events"] or disclosed["fileClicks"]:
         failures.append(f"capture: work started before disclosure acceptance: {disclosed}")
     disclosure = disclosed["disclosure"].lower()
-    if not all(term in disclosure for term in ("camera", "location", "openai", "government")):
+    if not all(term in disclosure for term in (
+        "camera", "location", "background", "not visible", "recording",
+        "openai", "government", "github pages", "state", "ip"
+    )):
         failures.append("capture: visible disclosure omits a core data-use/government fact")
     if not disclosed["privacyHref"].startswith("https://"):
         failures.append("capture: visible disclosure has no HTTPS privacy-policy link")
@@ -153,7 +157,8 @@ with sync_playwright() as playwright:
         failures.append(f"capture: accepted action did not resume exactly once: {accepted}")
 
     # The accepted version skips the disclosure but still goes through Android's idempotent
-    # permission checks before opening the file picker.
+    # permission checks before opening the file picker. Photo is a one-tap pothole flow;
+    # there is no issue/category screen between the button and the camera.
     page.locator("#captureBtn").click()
     wait_for_event(page, "camera", 2)
     repeated = snapshot(page)
