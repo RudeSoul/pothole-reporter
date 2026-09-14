@@ -7961,34 +7961,37 @@
 
   async function toDataUrl(blob, maxDim, quality = 0.85, boost = false, band = 1) {
     const bmp = await createImageBitmap(blob, { imageOrientation: "from-image" });
-    const sx = 0, sw = bmp.width;
-    const sh = Math.max(1, Math.round(bmp.height * band));
-    const sy = bmp.height - sh;
-    const scale = Math.min(1, maxDim / Math.max(sw, sh));
-    const c = document.createElement("canvas");
-    c.width = Math.round(sw * scale);
-    c.height = Math.round(sh * scale);
-    const ctx = c.getContext("2d");
-    ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
-    // Enhancement follows the pixels, not the wall clock. Fixed evening hours boosted
-    // bright street-lit frames and amplified noise. Preserve the original evidence copy;
-    // this is only the small image used for detection.
-    const light = boost ? averageLuminance(ctx, c.width, c.height) : null;
-    const lightConfig = IMAGING_CONFIG.adaptiveLuminance;
-    if (boost && light.mean < lightConfig.meanThreshold
-        && light.bright < lightConfig.brightFractionThreshold) {
-      const lift = Math.min(lightConfig.maximumLift, Math.max(lightConfig.minimumLift,
-        lightConfig.targetMean / Math.max(lightConfig.meanFloor, light.mean)));
-      ctx.filter = `brightness(${lift.toFixed(2)}) contrast(${lightConfig.contrast})`;
+    let c = null;
+    try {
+      const sx = 0, sw = bmp.width;
+      const sh = Math.max(1, Math.round(bmp.height * band));
+      const sy = bmp.height - sh;
+      const scale = Math.min(1, maxDim / Math.max(sw, sh));
+      c = document.createElement("canvas");
+      c.width = Math.round(sw * scale);
+      c.height = Math.round(sh * scale);
+      const ctx = c.getContext("2d");
       ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
-      ctx.filter = "none";
+      // Enhancement follows the pixels, not the wall clock. Fixed evening hours boosted
+      // bright street-lit frames and amplified noise. Preserve the original evidence copy;
+      // this is only the small image used for detection.
+      const light = boost ? averageLuminance(ctx, c.width, c.height) : null;
+      const lightConfig = IMAGING_CONFIG.adaptiveLuminance;
+      if (boost && light.mean < lightConfig.meanThreshold
+          && light.bright < lightConfig.brightFractionThreshold) {
+        const lift = Math.min(lightConfig.maximumLift, Math.max(lightConfig.minimumLift,
+          lightConfig.targetMean / Math.max(lightConfig.meanFloor, light.mean)));
+        ctx.filter = `brightness(${lift.toFixed(2)}) contrast(${lightConfig.contrast})`;
+        ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
+        ctx.filter = "none";
+      }
+      // Return the compressed frame to the detector. Closing the decoded bitmap and
+      // releasing the canvas backing store on every path prevents Drive memory buildup.
+      return c.toDataURL("image/jpeg", quality);
+    } finally {
+      if (typeof bmp.close === "function") bmp.close();
+      if (c) { c.width = 0; c.height = 0; }
     }
-    // Return the compressed frame to the detector. Closing the decoded bitmap here
-    // releases native memory immediately; leaving it live across concurrent requests
-    // was a common source of WebView pressure during Drive Mode.
-    const dataUrl = c.toDataURL("image/jpeg", quality);
-    if (typeof bmp.close === "function") bmp.close();
-    return dataUrl;
   }
 
   // ---------- pipeline ----------
