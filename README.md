@@ -28,6 +28,10 @@ emails. National, state and district highways, and rural roads are excluded.
   is available.
 - Sends accepted sighting metadata to the central service, deduplicates nearby reports,
   and shows canonical road-damage locations on a shared map.
+- Exposes the read-only public map directly at `#public-map`, without an account, API
+  key, or camera/location permission. Every marker shows its canonical pothole number
+  and the number of complaint-linked app reports grouped at that location; reporter
+  names, contact details, photos, installation IDs, and request IDs are not published.
 - Provides one complaint action: **Email complaint**. One tap opens a pre-addressed,
   editable email draft with the road photo, location, damage details, and—only when
   matched—the probable tender number.
@@ -108,6 +112,8 @@ geocoding, and road classification.
   observations, and aggregate metrics. Request counts are retained as daily aggregates;
   request IDs appear in operational logs.
 - Active installations are an impact proxy, not a count of unique people.
+- Public complaint-report counts are accepted app reports, not proof that the user
+  pressed Send in their email app; the app cannot observe or verify email delivery.
 - Reports, photos, labels, and footage remain stored locally. Complaint content and
   attachments are handed to your email app only when you open a draft.
 - See the [privacy policy](https://coding-parrot.github.io/pothole-reporter/privacy.html)
@@ -148,13 +154,20 @@ Run the complete test suite with:
 ./tests/run-all.sh
 ```
 
-Run and deploy the central service separately using the commands and required secrets
-in [`server/README.md`](server/README.md). The checked-in Wrangler file contains
-deployment-specific placeholder IDs; the service is not deployable until those are
-replaced and a shared detector is configured. Tender resolution uses model adjudication
-when the server has `OPENAI_API_KEY`; without it, the server uses its conservative
-deterministic location-and-scope matcher. Shared image detection still requires either
-the server OpenAI provider or a deployed/configured YOLO provider.
+The production central service is the AWS HTTP API in
+[`infra/aws-central`](infra/aws-central). It records request IDs and aggregate usage,
+deduplicates potholes by location, resolves tenders server-side, and exposes the
+allowlisted read-only `/v1/map` and `/v1/impact` endpoints. Deploy it from the repository
+root with `AWS_REGION=ap-south-1 infra/aws-central/deploy.sh` after installing the AWS
+CLI and authenticating. The script creates the Lambda, HTTP API, DynamoDB tables,
+CloudWatch log group, and a Secrets Manager secret without putting a provider key in
+source or Lambda environment variables. Set the secret to
+`{"openai_api_key":"..."}` to enable shared vision; the service falls back to the
+configured YOLO gateway when OpenAI credits are exhausted. The native API endpoint
+printed by CloudFormation is the only shared-service URL the app needs.
+
+The legacy Cloudflare Worker under `server/` remains available for local compatibility,
+but it is not the production central endpoint.
 
 The server supports the requested `openai_then_http_yolo` chain, but it remains
 disabled until an evaluated model and AWS endpoint exist. No model binary is checked

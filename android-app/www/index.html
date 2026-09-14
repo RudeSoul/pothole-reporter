@@ -13,6 +13,7 @@
   :root { --bg:#111214; --card:#1c1d21; --line:#2a2b30; --accent:#ff7a1a; --ok:#3ecf6f; --bad:#ff5d5d; --mut:#9a9ba1; }
   body { background:var(--bg); color:#f2f2f4; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
          padding: calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 24px); max-width:520px; margin:0 auto; }
+  body.public-map-view { max-width:1080px; }
   h1 { font-size:22px; margin:4px 0 2px; }
   .sub { color:var(--mut); font-size:13px; margin-bottom:14px; }
   .banner { background:#3a2b12; border:1px solid #7a5416; color:#ffd9a8; padding:10px 12px; border-radius:10px; font-size:13px; margin-bottom:12px; display:none; }
@@ -80,7 +81,7 @@
 
   <div id="home">
     <button class="primary" id="captureBtn">&#128247; &nbsp;Report road damage</button>
-    <button class="ghost" id="dashBtn" style="width:100%;margin-bottom:14px">&#128506;&#65039; &nbsp;Your contribution</button>
+    <button class="ghost" id="dashBtn" style="width:100%;margin-bottom:14px">&#128506;&#65039; &nbsp;Public pothole map</button>
     <button class="primary" id="driveBtn" style="background:#26272c;color:#f2f2f4;margin-top:-8px">&#128663; &nbsp;Drive mode</button>
     <input type="file" id="fileInput" accept="image/*" capture="environment" class="hidden">
     <div class="card" id="videoImportCard">
@@ -128,19 +129,24 @@
   </div>
 
   <div id="dash" class="hidden">
-    <div class="card">
-      <div class="verdict" id="dashTitle">Your contribution</div>
-      <div class="meta" id="dashRange"></div>
-      <div id="dashStats" class="row" style="flex-wrap:wrap;gap:8px;margin-top:12px"></div>
-    </div>
-    <div class="card hidden" id="communityCard">
-      <div class="verdict" id="communityTitle">Community impact</div>
-      <div class="meta" id="communityNote"></div>
+    <div class="card" id="communityCard">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div style="min-width:0">
+          <div class="verdict" id="communityTitle">Public pothole map</div>
+          <div class="meta" id="communityNote">Loading public map and complaint counts...</div>
+        </div>
+        <button class="ghost" id="dashRefresh" style="flex:none;padding:9px 12px">Refresh</button>
+      </div>
       <div id="communityStats" class="row" style="flex-wrap:wrap;gap:8px;margin-top:12px"></div>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
       <div id="map" style="height:46vh;background:#0c0d0f"></div>
       <div class="meta" id="mapNote" style="padding:8px 12px"></div>
+    </div>
+    <div class="card">
+      <div class="verdict" id="dashTitle">Your contribution</div>
+      <div class="meta" id="dashRange"></div>
+      <div id="dashStats" class="row" style="flex-wrap:wrap;gap:8px;margin-top:12px"></div>
     </div>
     <div class="card" id="dashBreak"></div>
     <div class="btn-row"><button class="ghost" id="dashBack">Back</button></div>
@@ -370,19 +376,27 @@ const I18N = {
     no_address_help: "Road damage was confirmed and the responsible local body identified, but the app holds no official email for it and will not guess one. The photo and location are saved; the address can be added to the directory.",
     no_location_help: "Road damage was confirmed, but without a GPS fix the app cannot tell which corporation is responsible, so it will not address a complaint. The photo is saved.",
     review_btn: "Review and label frames", export_btn: "Export labelled dataset",
-    dash_btn: "&#128506;&#65039; &nbsp;Your contribution", dash_title: "Your contribution",
+    dash_btn: "&#128506;&#65039; &nbsp;Public pothole map", dash_title: "Your contribution",
     dash_range: "{days} of reporting · first on {first}",
     dash_empty: "No road damage reported yet. Your map fills up as you drive.",
     day_one: "1 day", day_many: "{n} days",
     stat_found: "damage events found", stat_reported: "email drafts opened", stat_frames: "events checked",
     stat_drives: "drives", stat_footage: "MB of footage", stat_km: "km of road covered",
     by_type: "By damage type", by_size: "By size", by_area: "By corporation",
-    map_pins: "{n} shared potholes pinned",
+    map_pins: "{n} deduplicated potholes · {reports} complaint reports",
     map_local_pins: "Shared map unavailable · showing {n} saved on this device",
-    community_title: "Community impact",
-    community_note: "Aggregate activity reported through the project service.",
+    map_empty: "No reported potholes are available on the public map yet.",
+    public_map_unavailable: "The public map is temporarily unavailable. No local or private data is being shown in its place.",
+    public_map_refresh: "Refresh",
+    public_map_privacy: "Accepted app reports are grouped by nearby location. Counts and canonical pothole numbers are public; names, contact details, photos, installation IDs and request IDs are never shown. The app opens email drafts but cannot verify that an email was sent.",
+    impact_period: "Aggregate counts for {from} to {to}.",
+    pothole_ref: "Pothole #{id}",
+    complaint_one: "1 complaint report", complaint_many: "{n} complaint reports",
+    first_reported: "First reported {date}", last_reported: "Last reported {date}",
+    community_title: "Public pothole map",
+    community_note: "Loading public map and complaint counts...",
     stat_installations: "active installations", stat_requests: "server requests",
-    stat_observations: "observations", stat_mapped: "mapped potholes",
+    stat_observations: "complaint reports", stat_mapped: "deduplicated potholes",
     map_offline: "Map tiles need a connection. Points are still plotted below.",
     zoom_hint: "Pinch to zoom · drag to pan · double tap to reset",
     rec_suffix: "· recording {mb} MB", rec_failed: "· not recording",
@@ -555,19 +569,27 @@ const I18N = {
     no_address_help: "ಗುಂಡಿ ದೃಢಪಟ್ಟಿದೆ ಮತ್ತು ಜವಾಬ್ದಾರ ಸಂಸ್ಥೆ ಗುರುತಿಸಲಾಗಿದೆ, ಆದರೆ ಅದರ ಅಧಿಕೃತ ಇಮೇಲ್ ಆ್ಯಪ್‌ನಲ್ಲಿ ಇಲ್ಲ, ಮತ್ತು ಊಹಿಸುವುದಿಲ್ಲ. ಫೋಟೋ ಉಳಿಸಲಾಗಿದೆ.",
     no_location_help: "ಗುಂಡಿ ದೃಢಪಟ್ಟಿದೆ, ಆದರೆ GPS ಇಲ್ಲದೆ ಯಾವ ಪಾಲಿಕೆ ಜವಾಬ್ದಾರಿ ಎಂದು ತಿಳಿಯದು, ಆದ್ದರಿಂದ ದೂರು ಸಿದ್ಧಪಡಿಸಿಲ್ಲ. ಫೋಟೋ ಉಳಿಸಲಾಗಿದೆ.",
     review_btn: "ಫ್ರೇಮ್‌ಗಳನ್ನು ಪರಿಶೀಲಿಸಿ ಮತ್ತು ಗುರುತಿಸಿ", export_btn: "ಗುರುತಿಸಿದ ಡೇಟಾಸೆಟ್ ರಫ್ತು ಮಾಡಿ",
-    dash_btn: "&#128506;&#65039; &nbsp;ನಿಮ್ಮ ಕೊಡುಗೆ", dash_title: "ನಿಮ್ಮ ಕೊಡುಗೆ",
+    dash_btn: "&#128506;&#65039; &nbsp;ಸಾರ್ವಜನಿಕ ರಸ್ತೆ ಗುಂಡಿ ನಕ್ಷೆ", dash_title: "ನಿಮ್ಮ ಕೊಡುಗೆ",
     dash_range: "{days} ವರದಿ · ಮೊದಲನೆಯದು {first}",
     dash_empty: "ಇನ್ನೂ ಗುಂಡಿಗಳ ವರದಿ ಇಲ್ಲ. ಡ್ರೈವ್ ಮಾಡಿದಂತೆ ನಕ್ಷೆ ತುಂಬುತ್ತದೆ.",
     day_one: "1 ದಿನ", day_many: "{n} ದಿನಗಳು",
     stat_found: "ಗುಂಡಿಗಳು ಪತ್ತೆ", stat_reported: "ತೆರೆದ ಇಮೇಲ್ ಕರಡುಗಳು", stat_frames: "ಫ್ರೇಮ್ ಪರಿಶೀಲನೆ",
     stat_drives: "ಡ್ರೈವ್‌ಗಳು", stat_footage: "MB ವಿಡಿಯೋ", stat_km: "ಕಿಮೀ ರಸ್ತೆ",
     by_type: "ಹಾನಿಯ ಪ್ರಕಾರ", by_size: "ಗಾತ್ರದ ಪ್ರಕಾರ", by_area: "ಪಾಲಿಕೆ ಪ್ರಕಾರ",
-    map_pins: "ಹಂಚಿದ ನಕ್ಷೆಯಲ್ಲಿ {n} ಗುಂಡಿಗಳು",
+    map_pins: "{n} ನಕಲು ತೆಗೆದ ರಸ್ತೆ ಗುಂಡಿಗಳು · {reports} ದೂರು ವರದಿಗಳು",
     map_local_pins: "ಹಂಚಿದ ನಕ್ಷೆ ಸಿಗಲಿಲ್ಲ · ಈ ಸಾಧನದ {n} ತೋರಿಸಲಾಗುತ್ತಿದೆ",
-    community_title: "ಸಮುದಾಯದ ಪರಿಣಾಮ",
-    community_note: "ಯೋಜನೆಯ ಸೇವೆಯ ಮೂಲಕ ವರದಿಯಾದ ಒಟ್ಟು ಚಟುವಟಿಕೆ.",
+    map_empty: "ಸಾರ್ವಜನಿಕ ನಕ್ಷೆಯಲ್ಲಿ ಇನ್ನೂ ವರದಿಯಾದ ರಸ್ತೆ ಗುಂಡಿಗಳಿಲ್ಲ.",
+    public_map_unavailable: "ಸಾರ್ವಜನಿಕ ನಕ್ಷೆ ತಾತ್ಕಾಲಿಕವಾಗಿ ಲಭ್ಯವಿಲ್ಲ. ಅದರ ಬದಲು ಸ್ಥಳೀಯ ಅಥವಾ ಖಾಸಗಿ ಡೇಟಾವನ್ನು ತೋರಿಸಲಾಗುವುದಿಲ್ಲ.",
+    public_map_refresh: "ಮತ್ತೆ ಲೋಡ್ ಮಾಡಿ",
+    public_map_privacy: "ಸ್ವೀಕರಿಸಿದ ಆ್ಯಪ್ ವರದಿಗಳನ್ನು ಹತ್ತಿರದ ಸ್ಥಳದ ಆಧಾರದಲ್ಲಿ ಒಟ್ಟುಗೂಡಿಸಲಾಗಿದೆ. ಎಣಿಕೆಗಳು ಮತ್ತು ರಸ್ತೆ ಗುಂಡಿ ಸಂಖ್ಯೆಗಳು ಸಾರ್ವಜನಿಕ; ಹೆಸರು, ಸಂಪರ್ಕ ವಿವರ, ಫೋಟೋ, ಸ್ಥಾಪನೆ ID ಮತ್ತು ವಿನಂತಿ ID ತೋರಿಸಲಾಗುವುದಿಲ್ಲ. ಆ್ಯಪ್ ಇಮೇಲ್ ಕರಡು ತೆರೆಯುತ್ತದೆ, ಆದರೆ ಇಮೇಲ್ ಕಳುಹಿಸಲಾಗಿದೆ ಎಂದು ದೃಢಪಡಿಸಲು ಸಾಧ್ಯವಿಲ್ಲ.",
+    impact_period: "{from} ರಿಂದ {to} ರವರೆಗಿನ ಒಟ್ಟು ಎಣಿಕೆಗಳು.",
+    pothole_ref: "ರಸ್ತೆ ಗುಂಡಿ #{id}",
+    complaint_one: "1 ದೂರು ವರದಿ", complaint_many: "{n} ದೂರು ವರದಿಗಳು",
+    first_reported: "ಮೊದಲ ವರದಿ {date}", last_reported: "ಕೊನೆಯ ವರದಿ {date}",
+    community_title: "ಸಾರ್ವಜನಿಕ ರಸ್ತೆ ಗುಂಡಿ ನಕ್ಷೆ",
+    community_note: "ಸಾರ್ವಜನಿಕ ನಕ್ಷೆ ಮತ್ತು ದೂರು ಎಣಿಕೆಗಳನ್ನು ಲೋಡ್ ಮಾಡಲಾಗುತ್ತಿದೆ...",
     stat_installations: "ಸಕ್ರಿಯ ಸ್ಥಾಪನೆಗಳು", stat_requests: "ಸೇವೆಯ ವಿನಂತಿಗಳು",
-    stat_observations: "ವೀಕ್ಷಣೆಗಳು", stat_mapped: "ನಕ್ಷೆಯಲ್ಲಿರುವ ಗುಂಡಿಗಳು",
+    stat_observations: "ದೂರು ವರದಿಗಳು", stat_mapped: "ನಕಲು ತೆಗೆದ ರಸ್ತೆ ಗುಂಡಿಗಳು",
     map_offline: "ನಕ್ಷೆಗೆ ಇಂಟರ್ನೆಟ್ ಬೇಕು. ಬಿಂದುಗಳು ಕೆಳಗೆ ತೋರಿಸಲಾಗಿದೆ.",
     zoom_hint: "ಜೂಮ್‌ಗೆ ಪಿಂಚ್ · ಸರಿಸಲು ಎಳೆಯಿರಿ · ಮರುಹೊಂದಿಸಲು ಡಬಲ್ ಟ್ಯಾಪ್",
     rec_suffix: "· {mb} MB ರೆಕಾರ್ಡ್", rec_failed: "· ರೆಕಾರ್ಡ್ ಆಗುತ್ತಿಲ್ಲ",
@@ -701,6 +723,7 @@ function show(screen) {
   // A route change must never leave the fixed photo modal intercepting the new screen.
   const viewer = $("viewer");
   if (viewer) viewer.classList.add("hidden");
+  document.body.classList.toggle("public-map-view", screen === "dash");
   for (const s of ["home", "progress", "detail", "drive", "settings", "review", "dash", "dataConsent"]) {
     $(s).classList.toggle("hidden", s !== screen);
   }
@@ -766,6 +789,7 @@ function applyLang() {
   $("dashBtn").innerHTML = t("dash_btn");
   $("communityTitle").textContent = t("community_title");
   $("communityNote").textContent = t("community_note");
+  $("dashRefresh").textContent = t("public_map_refresh");
   $("reviewBtn").textContent = t("review_btn");
   $("exportBtn").textContent = t("export_btn");
   $("lblPothole").textContent = t("lbl_pothole");
@@ -1640,7 +1664,11 @@ async function startDrive() {
   if (drive || driveStarting || driveFinalizing || window._nativeDriveActive || importedVideoJob) return;
   driveStarting = true;
   if (!(await ensureDataConsent())) { driveStarting = false; return; }
-  if (!(await ensureVisionAvailable())) { driveStarting = false; return; }
+  // Start the short vision preflight before asking Android for the camera. On a cold
+  // launch these used to run serially, so a health round-trip plus the permission bridge
+  // made the live feed feel stuck for several seconds. They are independent; keep the
+  // same fail-closed check, but overlap their latency.
+  const visionReady = ensureVisionAvailable();
   const video = $("driveVideo");
   video.style.display = "";
   video.srcObject = null;
@@ -1661,7 +1689,10 @@ async function startDrive() {
   if (nativeDrive) {
     try {
       await installNativeDriveListener(Capacitor.Plugins.DriveMode);
-      await requestNativeCapturePermissions();
+      const [, visionAvailable] = await Promise.all([
+        requestNativeCapturePermissions(), visionReady,
+      ]);
+      if (!visionAvailable) { driveStarting = false; show("home"); return; }
       const provider = visionProvider();
       const key = (localStorage.getItem("openai_key") || "").trim();
       const model = selectedLlmModel(localStorage.getItem("detection_model"));
@@ -1692,7 +1723,11 @@ async function startDrive() {
 
   // The live feed needs only camera permission. Ask for location after playback has
   // started so a slow Android permission bridge cannot sit in front of the preview.
-  await requestNativeCameraPermission();
+  const [cameraPermission, visionAvailable] = await Promise.all([
+    requestNativeCameraPermission(), visionReady,
+  ]);
+  if (!visionAvailable) { await cameraPermission; driveStarting = false; show("home"); return; }
+  await cameraPermission;
   if (drive || driveFinalizing) { driveStarting = false; return; }
   StandaloneAPI.prewarm();
   let stream;
@@ -2061,8 +2096,13 @@ $("captureBtn").onclick = async () => {
     return;
   }
   if (!(await ensureDataConsent())) return;
-  if (!(await ensureVisionAvailable())) return;
-  await requestNativeCameraPermission();
+  // Warm the service check and the camera permission together. The previous serial
+  // order added both waits to the time before the camera picker appeared.
+  const [cameraPermission, visionAvailable] = await Promise.all([
+    requestNativeCameraPermission(), ensureVisionAvailable(),
+  ]);
+  if (!visionAvailable) { await cameraPermission; return; }
+  await cameraPermission;
   StandaloneAPI.prewarm();
   // With permission already granted, acquire GPS while the external camera is open.
   // Returning from capture normally has a ready fix instead of starting an 8 s wait.
@@ -3809,10 +3849,74 @@ async function analyseFootage(driveId, driveRec) {
 // when they cannot load the points are still plotted on a plain scatter.
 let mapObj = null;
 
+const PUBLIC_MAP_DAMAGE_TYPES = new Set([
+  "pothole_cavity", "failed_patch", "surface_breakup", "rut_or_depression",
+  "other_road_damage",
+]);
+const PUBLIC_MAP_SIZES = new Set(["small", "medium", "large"]);
+const publicCount = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : 0;
+};
+
+// Treat the public API as untrusted input and retain only the explicitly public map
+// contract. Do not spread properties: a future server field containing an installation
+// ID, reporter name, contact detail, request ID, or photo must not silently enter this
+// UI or a marker popup.
+function publicMapPin(feature) {
+  const coordinates = feature && feature.geometry && feature.geometry.type === "Point"
+    ? feature.geometry.coordinates : null;
+  const properties = feature && feature.properties;
+  const lng = Array.isArray(coordinates) ? Number(coordinates[0]) : NaN;
+  const lat = Array.isArray(coordinates) ? Number(coordinates[1]) : NaN;
+  const id = properties ? Number(properties.id) : NaN;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)
+      || lat < -90 || lat > 90 || lng < -180 || lng > 180
+      || !Number.isSafeInteger(id) || id < 1) return null;
+  const damage = PUBLIC_MAP_DAMAGE_TYPES.has(properties.damage_type)
+    ? properties.damage_type : "other_road_damage";
+  const size = PUBLIC_MAP_SIZES.has(properties.size) ? properties.size : null;
+  const seenCount = publicCount(properties.seen_count);
+  // `seen_count` is the current service contract. Prefer a dedicated complaint count
+  // if a later compatible service adds one, but never infer email delivery: the app can
+  // only know that it prepared a complaint-linked report.
+  const complaintCount = Object.prototype.hasOwnProperty.call(properties, "complaint_count")
+    ? publicCount(properties.complaint_count) : seenCount;
+  const firstSeen = Number(properties.first_seen_at);
+  const lastSeen = Number(properties.last_seen_at);
+  return {
+    id, lat, lng, damage_type: damage, size,
+    complaint_count: complaintCount,
+    first_seen_at: Number.isFinite(firstSeen) && firstSeen >= 0 ? firstSeen : null,
+    last_seen_at: Number.isFinite(lastSeen) && lastSeen >= 0 ? lastSeen : null,
+    town: typeof properties.town === "string" ? properties.town.trim().slice(0, 120) : "",
+    verification: properties.verification === "server_verified_shared"
+      ? "server_verified_shared" : "client_attested",
+    _shared: true,
+  };
+}
+
+const complaintCountText = (n) => n === 1
+  ? t("complaint_one") : t("complaint_many", { n });
+
+function publicMapDate(value) {
+  if (!Number.isFinite(value)) return "";
+  const milliseconds = value < 10_000_000_000 ? value * 1000 : value;
+  const date = new Date(milliseconds);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
+}
+
 async function openDash() {
-  if (!(await ensureDataConsent())) return;
+  // This screen is deliberately public and read-only. Camera/location consent belongs
+  // to capture, not to viewing already-aggregated map and impact data.
+  show("dash");
+  $("communityTitle").textContent = t("community_title");
+  $("communityNote").textContent = t("community_note");
+  $("communityStats").innerHTML = "";
+  $("dashRefresh").disabled = true;
   const [reports, drives, footage, sharedMap, impact] = await Promise.all([
-    api("/api/reports"), api("/api/drives").catch(() => []), api("/api/footage").catch(() => []),
+    api("/api/reports").catch(() => []), api("/api/drives").catch(() => []),
+    api("/api/footage").catch(() => []),
     api("/api/map").catch(() => null), api("/api/impact").catch(() => null),
   ]);
   const FOUND = ["draft", "queued", "sent", "unrouted", "duplicate"];
@@ -3829,32 +3933,47 @@ async function openDash() {
   $("dashRange").innerHTML = holes.length ? t("dash_range", { days: dayTxt, first }) : t("dash_empty");
 
   const tile = (n, label) => `<div class="card" style="flex:1 1 30%;min-width:96px;margin:0;text-align:center">
-      <div class="verdict" style="font-size:22px;margin:0">${n}</div>
-      <div class="meta">${label}</div></div>`;
+      <div class="verdict" style="font-size:22px;margin:0">${escapeHtml(n)}</div>
+      <div class="meta">${escapeHtml(label)}</div></div>`;
   $("dashStats").innerHTML =
     tile(holes.length, t("stat_found")) + tile(emailDrafts, t("stat_reported")) +
     tile(frames, t("stat_frames")) + tile(drives.length, t("stat_drives")) +
     tile(km.toFixed(1), t("stat_km")) + tile(mb.toFixed(0), t("stat_footage"));
 
+  const hasSharedMap = sharedMap && Array.isArray(sharedMap.features);
+  const sharedPins = hasSharedMap
+    ? sharedMap.features.map(publicMapPin).filter(Boolean) : [];
+  const visibleComplaintReports = sharedPins.reduce(
+    (sum, pin) => sum + pin.complaint_count, 0);
+
   const community = $("communityCard");
+  community.classList.remove("hidden");
   if (impact && impact.potholes && impact.observations) {
-    community.classList.remove("hidden");
     $("communityStats").innerHTML =
-      tile(impact.active_installations || 0, t("stat_installations"))
-      + tile(impact.requests_total || 0, t("stat_requests"))
-      + tile(impact.observations.total || 0, t("stat_observations"))
-      + tile(impact.potholes.total || 0, t("stat_mapped"));
+      tile(publicCount(impact.active_installations), t("stat_installations"))
+      + tile(publicCount(impact.requests_total), t("stat_requests"))
+      + tile(publicCount(impact.observations.total), t("stat_observations"))
+      + tile(publicCount(impact.potholes.total), t("stat_mapped"));
+    const period = impact.period && impact.period.from && impact.period.to
+      ? " " + t("impact_period", {
+          from: String(impact.period.from).slice(0, 10),
+          to: String(impact.period.to).slice(0, 10),
+        }) : "";
+    $("communityNote").textContent = t("public_map_privacy") + period;
   } else {
-    community.classList.add("hidden");
-    $("communityStats").innerHTML = "";
+    $("communityStats").innerHTML =
+      tile(visibleComplaintReports, t("stat_observations"))
+      + tile(sharedPins.length, t("stat_mapped"));
+    $("communityNote").textContent = t("public_map_privacy")
+      + (hasSharedMap ? "" : " " + t("public_map_unavailable"));
   }
 
   const bars = (title, counts) => {
     const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]);
     const max = Math.max(1, ...rows.map((r) => r[1]));
-    return `<div class="meta" style="font-weight:600;color:#f2f2f4;margin-bottom:6px">${title}</div>` +
+    return `<div class="meta" style="font-weight:600;color:#f2f2f4;margin-bottom:6px">${escapeHtml(title)}</div>` +
       (rows.length ? rows.map(([k, v]) => `<div style="margin:6px 0">
-          <div class="meta" style="display:flex;justify-content:space-between"><span>${k}</span><span>${v}</span></div>
+          <div class="meta" style="display:flex;justify-content:space-between"><span>${escapeHtml(k)}</span><span>${escapeHtml(v)}</span></div>
           <div style="height:6px;background:#26272c;border-radius:6px;overflow:hidden">
             <div style="height:6px;width:${(v / max * 100).toFixed(0)}%;background:var(--accent)"></div></div>
         </div>`).join("") : `<div class="meta">&mdash;</div>`);
@@ -3869,18 +3988,8 @@ async function openDash() {
   $("dashBreak").innerHTML = bars(t("by_type"), byType) + `<div style="height:14px"></div>`
     + bars(t("by_size"), bySize) + `<div style="height:14px"></div>` + bars(t("by_area"), byArea);
 
-  show("dash");
-  const hasSharedMap = sharedMap && Array.isArray(sharedMap.features);
-  const sharedPins = hasSharedMap ? sharedMap.features.map((feature) => {
-    const coordinates = feature && feature.geometry && feature.geometry.coordinates;
-    const properties = feature && feature.properties || {};
-    return Array.isArray(coordinates) && coordinates.length >= 2
-      && Number.isFinite(Number(coordinates[0])) && Number.isFinite(Number(coordinates[1]))
-      ? { ...properties, id: properties.id || null, lng: Number(coordinates[0]),
-          lat: Number(coordinates[1]), _shared: true } : null;
-  }).filter(Boolean) : [];
-  drawMap(hasSharedMap ? sharedPins : holes.filter((r) => r.lat != null && r.lng != null),
-    hasSharedMap);
+  drawMap(sharedPins, true, !hasSharedMap);
+  $("dashRefresh").disabled = false;
 }
 
 function trackKm(track) {
@@ -3893,13 +4002,20 @@ function trackKm(track) {
 
 const mapColor = () => "#ff7a1a";
 
-function drawMap(pins, shared = false) {
+function drawMap(pins, shared = false, unavailable = false) {
   const host = $("map");
-  $("mapNote").textContent = (shared
-    ? t("map_pins", { n: pins.length }) : t("map_local_pins", { n: pins.length }));
+  const complaintReports = pins.reduce(
+    (sum, pin) => sum + publicCount(pin.complaint_count || pin.seen_count), 0);
+  $("mapNote").textContent = unavailable ? t("public_map_unavailable") : (shared
+    ? t("map_pins", { n: pins.length, reports: complaintReports })
+    : t("map_local_pins", { n: pins.length }));
   if (mapObj) { mapObj.remove(); mapObj = null; }
   host.innerHTML = "";
-  if (!pins.length) return;
+  if (!pins.length) {
+    host.innerHTML = `<div class="empty" style="padding:56px 18px">${escapeHtml(
+      unavailable ? t("public_map_unavailable") : t("map_empty"))}</div>`;
+    return;
+  }
   if (typeof L === "undefined") return scatter(host, pins, shared);
   try {
     mapObj = L.map(host, { attributionControl: true });
@@ -3907,12 +4023,19 @@ function drawMap(pins, shared = false) {
       { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" }).addTo(mapObj);
     const group = L.featureGroup(pins.map((r) => {
       const color = mapColor(r);
-      const m = L.circleMarker([r.lat, r.lng], { radius: 7, color, weight: 2,
+      const markerRadius = r._shared
+        ? Math.min(12, 6 + Math.log2(Math.max(1, r.complaint_count))) : 7;
+      const m = L.circleMarker([r.lat, r.lng], { radius: markerRadius, color, weight: 2,
         fillColor: color, fillOpacity: .75 });
       if (r._shared) {
-        m.bindPopup(`<strong>${escapeHtml(tDamage(r))}</strong>`
+        const first = publicMapDate(r.first_seen_at);
+        const last = publicMapDate(r.last_seen_at);
+        m.bindPopup(`<strong>${escapeHtml(t("pothole_ref", { id: r.id }))}</strong>`
+          + `<br>${escapeHtml(tDamage(r))}`
           + `${r.town ? `<br>${escapeHtml(r.town)}` : ""}`
-          + `${r.seen_count ? `<br>${escapeHtml(t("seen_count", { n: r.seen_count }))}` : ""}`);
+          + `<br><b>${escapeHtml(complaintCountText(r.complaint_count))}</b>`
+          + `${first ? `<br>${escapeHtml(t("first_reported", { date: first }))}` : ""}`
+          + `${last ? `<br>${escapeHtml(t("last_reported", { date: last }))}` : ""}`);
       } else {
         m.on("click", () => openDetail(r, pins));
       }
@@ -3938,12 +4061,21 @@ function scatter(host, pins, shared = false) {
       ${pins.map((p) => `<circle cx="${x(p.lng).toFixed(1)}" cy="${y(p.lat).toFixed(1)}" r="5"
          fill="${mapColor(p)}" fill-opacity="0.8" stroke="${mapColor(p)}"></circle>`).join("")}
     </svg>`;
-  $("mapNote").textContent = (shared ? t("map_pins", { n: pins.length })
+  const complaintReports = pins.reduce(
+    (sum, pin) => sum + publicCount(pin.complaint_count || pin.seen_count), 0);
+  $("mapNote").textContent = (shared
+    ? t("map_pins", { n: pins.length, reports: complaintReports })
     : t("map_local_pins", { n: pins.length })) + " · " + t("map_offline");
 }
 
 $("dashBtn").onclick = openDash;
-$("dashBack").onclick = () => { show("home"); loadReports(); };
+$("dashRefresh").onclick = () => { void openDash(); };
+$("dashBack").onclick = () => {
+  if (location.hash === "#public-map") {
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  show("home"); loadReports();
+};
 
 $("reviewBtn").onclick = startReview;
 $("reviewPhoto").onclick = () => { if (reviewQueue[0]) openViewer(reviewQueue[0]); };
@@ -4186,6 +4318,12 @@ void initNativeVideoImports();
 (async () => {
   // Service health is remote in shared mode; it must not hold local history hostage.
   await Promise.all([loadHealth(), loadReports()]);
+  // A website can link straight to the read-only public map. This path intentionally
+  // needs neither an API key nor capture/location consent.
+  if (location.hash === "#public-map") {
+    await openDash();
+    return;
+  }
   const m = location.hash.match(/^#report-(\d+)$/);
   if (m) {
     const r = (loadReports.latest || []).find((x) => x.id == m[1]);

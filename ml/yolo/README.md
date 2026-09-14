@@ -232,9 +232,33 @@ ml/yolo/.venv/bin/python ml/yolo/evaluate.py score-test \
 The enforced gate requires at least 90% box recall, at least 90% positive-image recall,
 and at most 5% false-positive negative images at IoU 0.5. These floors cannot be
 weakened by CLI flags and are not a claim that the unavailable model has met them.
-Receipts also record the full image-level confusion matrix, precision, recall, F1, and
-specificity, plus box-level precision, recall, and F1; an all-negative detector cannot
-pass the positive-recall gates.
+Receipts record the full image-level confusion matrix, precision, recall, F1, and
+specificity, plus box-level precision, recall, and F1 at the frozen deployment
+threshold; an all-negative detector cannot pass the positive-recall gates.
+
+Each validation and test metric receipt also seals a threshold-independent `coco`
+section. `map_50` is single-class COCO-style AP at IoU 0.50 and `map_50_95` is its mean
+over IoU 0.50, 0.55, ..., 0.95. The implementation uses the COCO 101-point interpolated
+precision curve, all object areas, at most 100 detections per image, and the sealed
+prediction candidate floor of 0.01. Because there is only one class (`pothole`), AP and
+mAP are numerically the same at each IoU setting. These ranking metrics use all sealed
+candidates and do not change when the deployment threshold changes.
+
+The `confidence_intervals_95` section reports deterministic percentile cluster-bootstrap
+intervals for box/image precision, recall and F1, image specificity and false-positive
+rate, `map_50`, and `map_50_95`. It performs 2,000 resamples of complete
+`leakage_group` clusters, not individual frames, so adjacent frames from one drive are
+never treated as independent observations. The prediction schema binds every row's
+group to the sealed dataset. If fewer than two groups are present, or group provenance
+is absent, the receipt explicitly records that intervals are unavailable instead of
+inventing them. Validation intervals describe the already-selected validation operating
+point; the sealed test intervals are the appropriate uncertainty summary for a release.
+
+Do not quote any of these metrics as the model's accuracy until a real trained weight has
+been scored on the release-ready, human-boxed, sealed test split. This repository still
+contains neither that model artifact nor the required labelled data, so it currently has
+no defensible YOLO accuracy number.
+
 Candidate generation and
 threshold selection use 0.01 as the minimum, matching the Terraform and Lambda
 configuration contract; a lower selected threshold cannot be released.

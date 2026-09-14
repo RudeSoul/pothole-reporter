@@ -1,0 +1,4 @@
+node_modules/
+central-lambda.zip
+*.plan
+*.tfstate*

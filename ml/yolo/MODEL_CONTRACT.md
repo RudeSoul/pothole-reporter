@@ -19,6 +19,9 @@ The detector bundle contains `model.onnx`, `model-manifest.json`, and
   validation-threshold, sealed-test, runtime-module, and parity hash agrees;
 - both validation and test accuracy gates passed and are recomputed from the exact
   sealed prediction rows during release;
+- the sealed validation and test reports include fixed-threshold box/image confusion
+  metrics, COCO-style 101-point `map_50` and `map_50_95`, and 95% percentile intervals
+  from 2,000 complete-`leakage_group` bootstrap resamples;
 - parity ran on Linux CPython 3.12 with the target Lambda architecture and CPU
   execution provider, using the exact pinned NumPy, ONNX Runtime, Pillow, and Lambda
   base-image versions;
@@ -38,6 +41,14 @@ maximum-detection limit, and final five-field verdict. It requires one-to-one de
 agreement with sealed `.pt` predictions: matched IoU at least 0.98, absolute confidence
 drift at most 0.03, no unmatched detections, and `damaged`/`undamaged` agreement with
 human truth for every acceptable image.
+
+COCO-style AP is calculated from all stored candidates at the fixed 0.01 candidate
+floor and a maximum of 100 detections per image. `map_50_95` averages IoUs 0.50 through
+0.95 in steps of 0.05. It is independent of the selected deployment threshold, unlike
+the reported box/image precision, recall, and F1. A confidence interval is unavailable
+rather than fabricated when fewer than two independent leakage groups exist. No metric
+in a manifest is an accuracy claim unless it is backed by the sealed held-out prediction
+and evaluation receipts; the repository currently has no trained release artifact.
 
 There is no coordinate or vertical-position suppression. A real cavity remains a
 positive when it is at the road edge, and the ground-truth policy covers asphalt,

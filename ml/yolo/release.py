@@ -143,6 +143,8 @@ def verify_prediction_split_coverage(
             raise PipelineError(f"{split} prediction truth differs for {item_id}")
         if row.get("capture_mode") != record.get("capture_mode"):
             raise PipelineError(f"{split} prediction capture mode differs for {item_id}")
+        if row.get("leakage_group") != record.get("leakage_group"):
+            raise PipelineError(f"{split} prediction leakage group differs for {item_id}")
 
 
 def build_model_manifest(
@@ -437,15 +439,15 @@ def command_release(args: argparse.Namespace) -> None:
     training = _load_receipt(Path(args.training_receipt),
                              "pothole-yolo-training-receipt-v1", "receipt_sha256")
     threshold = _load_receipt(Path(args.threshold_receipt),
-                              "pothole-yolo-threshold-v1", "threshold_receipt_sha256")
+                              "pothole-yolo-threshold-v2", "threshold_receipt_sha256")
     evaluation = _load_receipt(Path(args.test_evaluation),
-                               "pothole-yolo-test-evaluation-v1",
+                               "pothole-yolo-test-evaluation-v2",
                                "evaluation_receipt_sha256")
     validation_predictions = _load_receipt(
-        Path(args.validation_predictions), "pothole-yolo-predictions-v1",
+        Path(args.validation_predictions), "pothole-yolo-predictions-v2",
         "prediction_sha256")
     test_predictions = _load_receipt(Path(args.test_predictions),
-                                     "pothole-yolo-predictions-v1",
+                                     "pothole-yolo-predictions-v2",
                                      "prediction_sha256")
     if test_predictions.get("split") != "test":
         raise PipelineError("runtime parity requires sealed test predictions")

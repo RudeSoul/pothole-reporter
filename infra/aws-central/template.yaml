@@ -1,0 +1,263 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Pothole Reporter central API (HTTP API, Lambda, DynamoDB and Secrets Manager).
+
+Parameters:
+  ProjectPrefix:
+    Type: String
+    Default: pothole-reporter-central
+    AllowedPattern: '^[a-z][a-z0-9-]{2,40}$'
+  CodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing the deployment zip.
+  CodeS3Key:
+    Type: String
+    Description: S3 key containing the deployment zip.
+  DedupeRadiusMetres:
+    Type: Number
+    Default: 30
+  DailyVisionCap:
+    Type: Number
+    Default: 200
+  GlobalVisionMinuteCap:
+    Type: Number
+    Default: 120
+  GlobalVisionDailyCap:
+    Type: Number
+    Default: 5000
+  MonthlyVisionCap:
+    Type: Number
+    Default: 50000
+  ReservedConcurrency:
+    Type: Number
+    Default: 4
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+
+Resources:
+  DetectorSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${ProjectPrefix}/detector'
+      Description: Shared detector credentials. Set openai_api_key after deployment; never put keys in Lambda environment variables.
+      KmsKeyId: alias/aws/secretsmanager
+
+  InstallationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectPrefix}-installations'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: id, AttributeType: S}]
+      KeySchema: [{AttributeName: id, KeyType: HASH}]
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true}
+  ControlTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectPrefix}-control'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: id, AttributeType: S}]
+      KeySchema: [{AttributeName: id, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+      SSESpecification: {SSEEnabled: true}
+  UsageTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectPrefix}-usage'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: id, AttributeType: S}]
+      KeySchema: [{AttributeName: id, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+      SSESpecification: {SSEEnabled: true}
+  LocationLocksTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectPrefix}-location-locks'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: cell, AttributeType: S}]
+      KeySchema: [{AttributeName: cell, KeyType: HASH}]
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+      SSESpecification: {SSEEnabled: true}
+  PotholesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectPrefix}-potholes'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: id, AttributeType: N}]
+      KeySchema: [{AttributeName: id, KeyType: HASH}]
+      SSESpecification: {SSEEnabled: true}
+  SpatialTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectPrefix}-spatial'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: cell, AttributeType: S}
+        - {AttributeName: pothole_id, AttributeType: N}
+      KeySchema:
+        - {AttributeName: cell, KeyType: HASH}
+        - {AttributeName: pothole_id, KeyType: RANGE}
+      SSESpecification: {SSEEnabled: true}
+  RecordsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectPrefix}-records'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+      SSESpecification: {SSEEnabled: true}
+  TendersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectPrefix}-tenders'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: lgd, AttributeType: S}
+        - {AttributeName: tender_number, AttributeType: S}
+      KeySchema:
+        - {AttributeName: lgd, KeyType: HASH}
+        - {AttributeName: tender_number, KeyType: RANGE}
+      SSESpecification: {SSEEnabled: true}
+  MetricsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${ProjectPrefix}-metrics'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: id, AttributeType: S}]
+      KeySchema: [{AttributeName: id, KeyType: HASH}]
+      SSESpecification: {SSEEnabled: true}
+
+  LambdaLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectPrefix}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectPrefix}-lambda'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: central-runtime-least-privilege
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: WriteLogs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub '${LambdaLogs.Arn}:*'
+              - Sid: ReadWriteCentralTables
+                Effect: Allow
+                Action: [dynamodb:BatchGetItem, dynamodb:DeleteItem, dynamodb:DescribeTable, dynamodb:GetItem, dynamodb:PutItem, dynamodb:Query, dynamodb:TransactWriteItems, dynamodb:UpdateItem]
+                Resource:
+                  - !GetAtt InstallationsTable.Arn
+                  - !GetAtt ControlTable.Arn
+                  - !GetAtt UsageTable.Arn
+                  - !GetAtt LocationLocksTable.Arn
+                  - !GetAtt PotholesTable.Arn
+                  - !GetAtt SpatialTable.Arn
+                  - !GetAtt RecordsTable.Arn
+                  - !GetAtt TendersTable.Arn
+                  - !GetAtt MetricsTable.Arn
+              - Sid: ReadDetectorSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DetectorSecret
+
+  CentralFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaLogs
+    Properties:
+      FunctionName: !Ref ProjectPrefix
+      Description: Signed central pothole observations, public deduped map, tender resolution and shared vision.
+      Runtime: nodejs22.x
+      Handler: infra/aws-central/service/handler.handler
+      Role: !GetAtt LambdaRole.Arn
+      MemorySize: 1024
+      Timeout: 29
+      ReservedConcurrentExecutions: !Ref ReservedConcurrency
+      Architectures: [arm64]
+      Code:
+        S3Bucket: !Ref CodeS3Bucket
+        S3Key: !Ref CodeS3Key
+      Environment:
+        Variables:
+          INSTALLATIONS_TABLE: !Ref InstallationsTable
+          CONTROL_TABLE: !Ref ControlTable
+          USAGE_TABLE: !Ref UsageTable
+          LOCATION_LOCKS_TABLE: !Ref LocationLocksTable
+          POTHOLES_TABLE: !Ref PotholesTable
+          SPATIAL_TABLE: !Ref SpatialTable
+          RECORDS_TABLE: !Ref RecordsTable
+          TENDERS_TABLE: !Ref TendersTable
+          METRICS_TABLE: !Ref MetricsTable
+          SHARED_SECRET_ARN: !Ref DetectorSecret
+          SHARED_DETECTOR_PROVIDER: openai_then_yolo
+          YOLO_MODE: lambda
+          DEDUPE_RADIUS_METRES: !Ref DedupeRadiusMetres
+          DAILY_VISION_CAP: !Ref DailyVisionCap
+          GLOBAL_VISION_MINUTE_CAP: !Ref GlobalVisionMinuteCap
+          GLOBAL_VISION_DAILY_CAP: !Ref GlobalVisionDailyCap
+          MONTHLY_VISION_CAP: !Ref MonthlyVisionCap
+          NODE_OPTIONS: --enable-source-maps
+
+  Api:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Ref ProjectPrefix
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins: ['*']
+        AllowHeaders: [content-type, x-install-id, x-timestamp, x-signature, idempotency-key]
+        AllowMethods: [GET, POST, OPTIONS]
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt CentralFunction.Arn
+      PayloadFormatVersion: '2.0'
+      TimeoutInMillis: 29000
+  ApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: '$default'
+      Target: !Sub 'integrations/${ApiIntegration}'
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref Api
+      StageName: '$default'
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 5
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CentralFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*'
+
+Outputs:
+  ApiUrl:
+    Description: Native AWS API endpoint; use this as the app's shared service URL.
+    Value: !GetAtt Api.ApiEndpoint
+  DetectorSecretArn:
+    Description: Store {"openai_api_key":"..."} here to enable no-key shared vision.
+    Value: !Ref DetectorSecret
+  FunctionName:
+    Value: !Ref CentralFunction

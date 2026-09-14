@@ -391,6 +391,89 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(scored["image"]["false_negative"], 1)
         self.assertEqual(scored["image"]["positive_recall"], 0.0)
 
+    def test_coco_map_is_perfect_for_perfect_ranked_detections(self) -> None:
+        scored = score_rows([
+            {"truth_boxes": [[0.5, 0.5, 0.2, 0.2]], "predictions": [{
+                "box": [0.5, 0.5, 0.2, 0.2], "confidence": 0.8,
+            }]},
+            {"truth_boxes": [], "predictions": []},
+        ], threshold=0.5, include_confidence_intervals=False)
+        self.assertEqual(scored["coco"]["map_50"], 1.0)
+        self.assertEqual(scored["coco"]["map_50_95"], 1.0)
+        self.assertEqual(len(scored["coco"]["ap_by_iou"]), 10)
+        self.assertEqual(scored["coco"]["candidate_confidence_floor"], 0.01)
+
+    def test_coco_map_measures_ranking_and_stricter_localization(self) -> None:
+        ranked = score_rows([
+            {"truth_boxes": [], "predictions": [{
+                "box": [0.1, 0.1, 0.1, 0.1], "confidence": 0.9,
+            }]},
+            {"truth_boxes": [[0.5, 0.5, 0.2, 0.2]], "predictions": [{
+                "box": [0.5, 0.5, 0.2, 0.2], "confidence": 0.8,
+            }]},
+        ], threshold=0.5, include_confidence_intervals=False)
+        self.assertAlmostEqual(ranked["coco"]["map_50"], 0.5)
+
+        shifted = score_rows([{
+            "truth_boxes": [[0.5, 0.5, 0.2, 0.2]],
+            "predictions": [{"box": [0.55, 0.5, 0.2, 0.2], "confidence": 0.8}],
+        }], threshold=0.5, include_confidence_intervals=False)
+        self.assertEqual(shifted["coco"]["map_50"], 1.0)
+        self.assertLess(shifted["coco"]["map_50_95"], 1.0)
+
+    def test_coco_map_uses_candidates_below_deployment_threshold(self) -> None:
+        scored = score_rows([{
+            "truth_boxes": [[0.5, 0.5, 0.2, 0.2]],
+            "predictions": [{"box": [0.5, 0.5, 0.2, 0.2], "confidence": 0.2}],
+        }], threshold=0.8, include_confidence_intervals=False)
+        self.assertEqual(scored["box"]["recall"], 0.0)
+        self.assertEqual(scored["coco"]["map_50"], 1.0)
+
+    def test_confidence_intervals_resample_complete_leakage_groups(self) -> None:
+        rows = []
+        for group, hit, false_positive in (
+                ("drive-a", True, False),
+                ("drive-b", False, True),
+                ("drive-c", True, False)):
+            rows.extend([
+                {
+                    "leakage_group": group,
+                    "truth_boxes": [[0.5, 0.5, 0.2, 0.2]],
+                    "predictions": ([{
+                        "box": [0.5, 0.5, 0.2, 0.2], "confidence": 0.8,
+                    }] if hit else []),
+                },
+                {
+                    "leakage_group": group,
+                    "truth_boxes": [],
+                    "predictions": ([{
+                        "box": [0.2, 0.2, 0.1, 0.1], "confidence": 0.7,
+                    }] if false_positive else []),
+                },
+            ])
+        scored = score_rows(
+            rows, threshold=0.5, bootstrap_resamples=200, bootstrap_seed=7)
+        uncertainty = scored["confidence_intervals_95"]
+        self.assertTrue(uncertainty["available"])
+        self.assertEqual(uncertainty["group_field"], "leakage_group")
+        self.assertEqual(uncertainty["groups"], 3)
+        self.assertEqual(uncertainty["resamples"], 200)
+        for name in ("box_precision", "box_recall", "box_f1",
+                     "image_precision", "image_recall", "image_f1",
+                     "map_50", "map_50_95"):
+            interval = uncertainty["metrics"][name]
+            self.assertEqual(interval["valid_resamples"], 200)
+            self.assertLessEqual(interval["lower"], interval["upper"])
+
+    def test_confidence_intervals_fail_closed_without_independent_groups(self) -> None:
+        scored = score_rows([{
+            "leakage_group": "one-drive",
+            "truth_boxes": [[0.5, 0.5, 0.2, 0.2]],
+            "predictions": [],
+        }], threshold=0.5)
+        self.assertFalse(scored["confidence_intervals_95"]["available"])
+        self.assertEqual(scored["confidence_intervals_95"]["groups"], 1)
+
     def test_release_recomputes_validation_and_test_metrics_from_rows(self) -> None:
         rows = [
             {"truth_boxes": [[0.5, 0.5, 0.2, 0.2]], "predictions": [
@@ -442,18 +525,29 @@ class PipelineTest(unittest.TestCase):
             verify_evaluation_receipts(
                 validation_predictions=validation, test_predictions=test,
                 threshold=threshold, evaluation=evaluation)
+        evaluation["test_metrics"] = score_rows(rows, selected, 0.5)
+        evaluation["test_metrics"]["coco"]["map_50"] = 0.123
+        with self.assertRaisesRegex(PipelineError, "recomputed predictions"):
+            verify_evaluation_receipts(
+                validation_predictions=validation, test_predictions=test,
+                threshold=threshold, evaluation=evaluation)
 
     def test_release_binds_prediction_rows_to_exact_sealed_split(self) -> None:
         dataset = {"records": [{
             "split": "validation", "source_item_id": "frame-1",
             "image_sha256": "a" * 64, "boxes": [[0.5, 0.5, 0.2, 0.2]],
-            "capture_mode": "manual",
+            "capture_mode": "manual", "leakage_group": "drive-a",
         }]}
         predictions = {"rows": [{
             "source_item_id": "frame-1", "image_sha256": "a" * 64,
             "truth_boxes": [[0.5, 0.5, 0.2, 0.2]], "capture_mode": "manual",
+            "leakage_group": "drive-a",
         }]}
         verify_prediction_split_coverage(predictions, dataset, "validation")
+        predictions["rows"][0]["leakage_group"] = "invented-independent-drive"
+        with self.assertRaisesRegex(PipelineError, "leakage group differs"):
+            verify_prediction_split_coverage(predictions, dataset, "validation")
+        predictions["rows"][0]["leakage_group"] = "drive-a"
         predictions["rows"][0]["truth_boxes"] = []
         with self.assertRaisesRegex(PipelineError, "truth differs"):
             verify_prediction_split_coverage(predictions, dataset, "validation")
