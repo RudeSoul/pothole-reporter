@@ -1422,6 +1422,18 @@ async function getNativeDriveHistory(options = {}) {
 
 async function openReportDetail(r, items) {
   if (!r) return;
+  // Native Drive history contains photo bytes in Room/files, not in the lightweight
+  // listReports() metadata response. Fetch only the one image the person opened;
+  // loading every historical image here made Android History wait on N bridge calls.
+  if (r._native && r.has_photo && !r.photo_url) {
+    try {
+      const plugin = nativeDrivePlugin();
+      if (plugin && typeof plugin.getReportPhoto === "function") {
+        const photo = await plugin.getReportPhoto({ id: r._nativeId });
+        r.photo_url = photo && photo.dataUrl || null;
+      }
+    } catch (_) {}
+  }
   // Complaint filing is email-only. The send path revalidates routing and tender
   // attribution immediately before opening the composer, so the detail view can
   // render without a second legacy handoff request.
@@ -1516,26 +1528,18 @@ async function renderReports() {
         Capacitor.Plugins.DriveMode.listReports().catch(() => ({ reports: [] })),
         Capacitor.Plugins.DriveMode.listDriveSessions().catch(() => ({ sessions: [] })),
       ]);
-      nativeReports = await Promise.all((nr.reports || []).map(async (r) => {
-        let photoUrl = null;
-        if (r.has_photo && typeof Capacitor.Plugins.DriveMode.getReportPhoto === "function") {
-          try {
-            const photo = await Capacitor.Plugins.DriveMode.getReportPhoto({ id: r.id });
-            photoUrl = photo && photo.dataUrl || null;
-          } catch (_) {}
-        }
-        return {
+      nativeReports = (nr.reports || []).map((r) => ({
           ...r,
           _nativeStoredStatus: r.status === "sent" ? "queued" : r.status,
           // Native background preparation used "queued" to mean ready for the UI,
           // not that an email composer had already opened.
           status: r.status === "queued" || r.status === "sent" ? "draft" : r.status,
-          photo_url: photoUrl,
+          // Evidence is hydrated by openReportDetail(), never for the whole list.
+          photo_url: null,
           _native: true,
           _nativeId: r.id,
           id: "native_" + r.id,
-        };
-      }));
+        }));
       nativeSessions = (ns.sessions || []).map((s) => ({
         ...s,
         _native: true,
@@ -1564,9 +1568,10 @@ async function renderReports() {
     const canEmail = StandaloneAPI.__pure.centralReportIsConfirmed(r)
       && !["rejected", "review", "unrouted", "duplicate"].includes(r.status)
       && physicalCondition(r) !== "fixed";
+    const src = safePhotoSrc(photoSrc(r));
     return `
     <div class="card row" data-id="${escapeAttr(r.id)}" style="cursor:pointer">
-      <img class="thumb" src="${safePhotoSrc(photoSrc(r))}" alt="" loading="lazy" decoding="async">
+      <img class="thumb"${src ? ` src="${src}"` : ""} alt="" loading="lazy" decoding="async">
       <div style="min-width:0;flex:1">
         <div>${chip(r.status)} ${damageType(r) ? `<span class="chip" style="background:#26272c;color:#cfcfd4">${tDamage(r)}</span>` : ""} ${r.size ? `<span class="chip" style="background:#26272c;color:#cfcfd4">${tSize(r.size)}</span>` : ""}</div>
         <div class="meta">${escapeHtml(fmtDate(r.created_at))}${r.address ? " · " + escapeHtml(String(r.address).split(",").slice(0, 2).join(", ")) : ""}</div>
@@ -1847,8 +1852,9 @@ let detailList = [], detailIdx = -1;
 
 function photoBlock(r) {
   const many = detailList.length > 1;
+  const src = safePhotoSrc(photoSrc(r));
   return `<div class="photo-wrap">
-      <img class="big-photo" src="${safePhotoSrc(photoSrc(r))}" alt="" data-zoom="${escapeAttr(r.id)}">
+      <img class="big-photo"${src ? ` src="${src}"` : ""} alt="" data-zoom="${escapeAttr(r.id)}">
       ${many ? `<button class="navarrow prev" id="navPrev" ${detailIdx <= 0 ? "disabled" : ""}>&lsaquo;</button>
       <button class="navarrow next" id="navNext" ${detailIdx >= detailList.length - 1 ? "disabled" : ""}>&rsaquo;</button>` : ""}
     </div>`;
@@ -6883,8 +6889,9 @@ nativeInitialRestorePromise = (async () => {
   void loadHealth();
   await loadReports();
   const m = location.hash.match(/^#report-(\d+)$/);
-  if (!drive || m) await loadReports();
-  else loadReports().catch(() => {});
+  // The initial render is already complete. A second immediate call increments the
+  // refresh generation and rebuilds the entire History list for no user-visible gain.
+  // Native sync below performs the only needed follow-up refresh when it has data.
   if (!drive) syncNativeData().then(() => loadReports()).catch(() => {});
   if (m) {
     const r = (loadReports.latest || []).find((x) => x.id == m[1]);
