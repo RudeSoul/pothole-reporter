@@ -14,6 +14,8 @@ HOSTED_DOC_FILES = frozenset({
     "BMC_PILOT.md",
     "CATALOG_REFRESH.md",
     "DEMO.md",
+    "GBA_INTEGRATION.md",
+    "SCALABLE-INTEGRATIONS.md",
     "SOURCES.md",
     "architecture.excalidraw",
     "architecture.png",

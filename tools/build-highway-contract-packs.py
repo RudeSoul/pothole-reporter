@@ -97,6 +97,20 @@ REFERENCE_LABELS = {
     "Official notice fingerprint": "NHIDCL notice",
     "NHIDCL notice": "NHIDCL notice",
 }
+# Older national-highway snapshots used source-specific lifecycle labels.  The
+# runtime pack contract deliberately exposes only two lifecycle classes so the
+# tender matcher does not have to understand every upstream vocabulary.
+LIFECYCLE_ALIASES = {
+    "current_project": "current_project",
+    "implementation": "current_project",
+    "construction": "current_project",
+    "maintenance": "current_project",
+    "awarded": "current_project",
+    "completed": "current_project",
+    "procurement_notice": "procurement_notice",
+    "procurement": "procurement_notice",
+    "procurement_record": "procurement_notice",
+}
 
 
 class BuildError(RuntimeError):
@@ -270,7 +284,7 @@ def _highway_refs(value: Any, field: str) -> list[str]:
     return sorted(refs)
 
 
-def _normalized_record(value: Any, index: int) -> dict[str, Any]:
+def _normalized_record(value: Any, index: int) -> dict[str, Any] | None:
     field = f"contracts[{index}]"
     _expect(isinstance(value, dict) and set(value) == INPUT_RECORD_FIELDS,
             f"{field} fields differ from the normalized-source contract")
@@ -285,10 +299,10 @@ def _normalized_record(value: Any, index: int) -> dict[str, Any]:
                 f"{field} official notice fingerprints must belong to NHIDCL")
 
     agency = value["agency"]
-    lifecycle = value["lifecycle"]
+    lifecycle_source = value["lifecycle"]
+    lifecycle = LIFECYCLE_ALIASES.get(lifecycle_source)
+    _expect(lifecycle is not None, f"{field}.lifecycle is unsupported")
     _expect(agency in {"NHAI", "MoRTH", "NHIDCL"}, f"{field}.agency is unsupported")
-    _expect(lifecycle in {"current_project", "procurement_notice"},
-            f"{field}.lifecycle is unsupported")
     lifecycle_status = _text(
         value["lifecycle_status"], f"{field}.lifecycle_status", 160
     )
@@ -300,10 +314,10 @@ def _normalized_record(value: Any, index: int) -> dict[str, Any]:
         or (("cc issued" in status_text or "pcc issued" in status_text)
             and not ongoing_after_cc)
     )
-    _expect(
-        not (lifecycle == "current_project" and completed_status),
-        f"{field} completed/archived source status cannot be a current project",
-    )
+    # The source snapshot keeps completed projects for auditability, but they
+    # must not enter the active responsibility index used by tender matching.
+    if lifecycle == "current_project" and completed_status:
+        return None
     contractor = _nullable_text(value["contractor"], f"{field}.contractor", 300)
     _expect(type(value["award_verified"]) is bool,
             f"{field}.award_verified must be boolean")
@@ -376,7 +390,11 @@ def _normalized_input(project_root: Path) -> tuple[str, list[dict[str, Any]]]:
     contracts = payload["contracts"]
     _expect(isinstance(contracts, list) and bool(contracts),
             "normalized input contracts must be a non-empty array")
-    normalized = [_normalized_record(item, index) for index, item in enumerate(contracts)]
+    normalized = [
+        record
+        for index, item in enumerate(contracts)
+        if (record := _normalized_record(item, index)) is not None
+    ]
     record_ids = [item["record_id"] for item in normalized]
     _expect(len(set(record_ids)) == len(record_ids),
             "normalized input contains duplicate record_id values")
