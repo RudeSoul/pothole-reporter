@@ -83,8 +83,17 @@ Resources:
     Properties:
       TableName: !Sub '${ProjectPrefix}-potholes'
       BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions: [{AttributeName: id, AttributeType: N}]
+      AttributeDefinitions:
+        - {AttributeName: id, AttributeType: N}
+        - {AttributeName: map_shard, AttributeType: S}
+        - {AttributeName: last_seen_at, AttributeType: N}
       KeySchema: [{AttributeName: id, KeyType: HASH}]
+      GlobalSecondaryIndexes:
+        - IndexName: MapIndex
+          KeySchema:
+            - {AttributeName: map_shard, KeyType: HASH}
+            - {AttributeName: last_seen_at, KeyType: RANGE}
+          Projection: {ProjectionType: ALL}
       SSESpecification: {SSEEnabled: true}
   SpatialTable:
     Type: AWS::DynamoDB::Table
@@ -117,10 +126,10 @@ Resources:
       TableName: !Sub '${ProjectPrefix}-tenders'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - {AttributeName: lgd, AttributeType: S}
+        - {AttributeName: body_lgd, AttributeType: S}
         - {AttributeName: tender_number, AttributeType: S}
       KeySchema:
-        - {AttributeName: lgd, KeyType: HASH}
+        - {AttributeName: body_lgd, KeyType: HASH}
         - {AttributeName: tender_number, KeyType: RANGE}
       SSESpecification: {SSEEnabled: true}
   MetricsTable:
@@ -128,8 +137,12 @@ Resources:
     Properties:
       TableName: !Sub '${ProjectPrefix}-metrics'
       BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions: [{AttributeName: id, AttributeType: S}]
-      KeySchema: [{AttributeName: id, KeyType: HASH}]
+      AttributeDefinitions:
+        - {AttributeName: day, AttributeType: S}
+        - {AttributeName: metric, AttributeType: S}
+      KeySchema:
+        - {AttributeName: day, KeyType: HASH}
+        - {AttributeName: metric, KeyType: RANGE}
       SSESpecification: {SSEEnabled: true}
 
   LambdaLogs:
