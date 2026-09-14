@@ -52,10 +52,10 @@ if (requestedReleaseBuild && releaseStoreFile != null && !releaseStoreFile.isFil
 def releaseSigningReady = missingReleaseValues.isEmpty() && releaseStoreFile != null && releaseStoreFile.isFile()
 
 android {
-    namespace = "dev.aiengg.potholereporter"
+    namespace = "com.gauravsen.potholereporter"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "dev.aiengg.potholereporter"
+        applicationId "com.gauravsen.potholereporter"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 68
@@ -145,7 +145,11 @@ repositories {
 }
 
 dependencies {
+    // Keep the RTSP/exoplayer line on the cached stable artifact used by this
+    // release; the frame inspector/effect modules are available on the newer
+    // line and are binary-compatible for the isolated importer APIs.
     def media3Version = "1.10.1"
+    def media3ImporterVersion = rootProject.ext.media3Version
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutinesVersion"
@@ -202,8 +206,8 @@ dependencies {
 
     // Native, seekable frame extraction from persisted SAF content URIs. This keeps
     // multi-gigabyte dashcam footage out of JavaScript memory and app-private storage.
-    implementation "androidx.media3:media3-inspector-frame:$media3Version"
-    implementation "androidx.media3:media3-effect:$media3Version"
+    implementation "androidx.media3:media3-inspector-frame:$media3ImporterVersion"
+    implementation "androidx.media3:media3-effect:$media3ImporterVersion"
 
     // OkHttp (for SSE streaming to OpenAI)
     implementation "com.squareup.okhttp3:okhttp:$okhttpVersion"
