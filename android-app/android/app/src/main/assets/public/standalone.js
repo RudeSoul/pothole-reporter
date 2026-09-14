@@ -7335,6 +7335,15 @@
         if (!d.objectStoreNames.contains("identity")) {
           d.createObjectStore("identity", { keyPath: "key" });
         }
+        // Routing/tender packs are immutable cache entries. Fresh installs must create
+        // the store together with the v8 schema; upgraded installs that already have v8
+        // but were built from the broken client can still operate without this optional
+        // cache (the readers below fail soft and refetch the signed pack).
+        if (!d.objectStoreNames.contains("state_packs")) {
+          const packs = d.createObjectStore("state_packs", { keyPath: "cache_key" });
+          packs.createIndex("by_last_used", "last_used_at");
+          packs.createIndex("by_state", "state_code");
+        }
         // Only the small central observation body is queued--never a photo, complaint,
         // name, or API key. The observation ID is both its key and the server's stable
         // idempotency key, so reconnecting cannot create a second sighting.
@@ -7377,7 +7386,13 @@
           };
         }
       };
+      req.onsuccess = () => {
+        _db = req.result;
+        _db.onversionchange = () => { _db.close(); _db = null; };
+        resolve(_db);
+      };
       req.onerror = () => reject(req.error);
+      req.onblocked = () => reject(new Error("The local database is busy. Close another Pothole Reporter window and try again."));
     });
   }
   // A write is not done when the request succeeds, it is done when the transaction
@@ -7460,6 +7475,21 @@
   const footageFor = (driveId) => op("readonly", (s) => s.index("by_drive").getAll(String(driveId)), "footage");
   const getFootage = (key) => op("readonly", (s) => s.get(String(key)), "footage");
   const putDrive = (d) => op("readwrite", (s) => s.put(d), "drives");
+
+  // A short-lived v8 build shipped without the optional state_packs store. Do not let
+  // that cache omission wedge History or delete-all; the signed pack loader can simply
+  // fetch again on those installs.
+  async function migrateLegacyComplaintDrafts(records) {
+    const output = [];
+    for (const record of Array.isArray(records) ? records : []) {
+      try {
+        output.push(migrateLegacyComplaintRecord(record) || record);
+      } catch (_) {
+        output.push(record);
+      }
+    }
+    return output;
+  }
 
   // IndexedDB's getAll() clones every Blob in the result. A long drive can therefore
   // exhaust the WebView just by opening History, before analysis has decoded one frame.

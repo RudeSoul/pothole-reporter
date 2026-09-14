@@ -294,6 +294,66 @@
 <script src="standalone.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
+const INITIAL_SETUP_KEY = "initial_setup_complete";
+const PHONE_CAPTURE_SOURCE = "phone_camera";
+const DASHCAM_CAPTURE_SOURCE = "dashcam";
+const CAPTURE_SOURCE_KEY = "drive_capture_source";
+const DASHCAM_RTSP_URL_KEY = "dashcam_rtsp_url";
+const LEGACY_SETTINGS_KEYS = [
+  "openai_key", "sender_name", "detection_model", "image_detail", "debug_mode",
+  "keep_frames", "record_video", "drive_limit_minutes", "app_lang", "data_notice_version",
+  CAPTURE_SOURCE_KEY, DASHCAM_RTSP_URL_KEY,
+];
+const normaliseDriveCaptureSource = (value) => value === DASHCAM_CAPTURE_SOURCE
+  ? DASHCAM_CAPTURE_SOURCE : PHONE_CAPTURE_SOURCE;
+const savedDriveCaptureSource = () => normaliseDriveCaptureSource(
+  localStorage.getItem(CAPTURE_SOURCE_KEY)
+);
+function validateDashcamRtspUrl(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!value || /[\s\\\u0000-\u001f\u007f#]/u.test(value)) return null;
+  // Chrome/WebView's WHATWG URL parser does not consistently recognise RTSP, so parse
+  // only the small absolute-address grammar this feature accepts. Credentials remain
+  // opaque and are never placed in a status message.
+  const match = value.match(/^rtsp:\/\/([^\/?#]+)(?:[\/?][^#]*)?$/i);
+  if (!match) return null;
+  const authority = match[1];
+  const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
+  if (!hostPort) return null;
+  if (hostPort.startsWith("[")) {
+    const ipv6 = hostPort.match(/^\[([0-9a-f:.%_-]+)\](?::([0-9]{1,5}))?$/i);
+    if (!ipv6 || !ipv6[1]) return null;
+    if (ipv6[2] && (Number(ipv6[2]) < 1 || Number(ipv6[2]) > 65535)) return null;
+  } else {
+    const parsedHost = hostPort.match(/^([a-z0-9._-]+)(?::([0-9]{1,5}))?$/i);
+    if (!parsedHost || !parsedHost[1] || parsedHost[1].startsWith(".") ||
+        parsedHost[1].endsWith(".") || (parsedHost[2] &&
+          (Number(parsedHost[2]) < 1 || Number(parsedHost[2]) > 65535))) {
+      return null;
+    }
+  }
+  return value;
+}
+function savedDriveCaptureConfig() {
+  const captureSource = savedDriveCaptureSource();
+  return {
+    captureSource,
+    dashcamRtspUrl: captureSource === DASHCAM_CAPTURE_SOURCE
+      ? String(localStorage.getItem(DASHCAM_RTSP_URL_KEY) || "").trim() : "",
+  };
+}
+function needsInitialSettings() {
+  if (localStorage.getItem(INITIAL_SETUP_KEY) === "1") return false;
+  // Existing installs already saved at least one setting. Migrate them silently so an
+  // update never turns the new-install screen into an upgrade roadblock.
+  if (LEGACY_SETTINGS_KEYS.some((key) => localStorage.getItem(key) !== null)) {
+    localStorage.setItem(INITIAL_SETUP_KEY, "1");
+    return false;
+  }
+  return true;
+}
+let initialSettingsRequired = needsInitialSettings();
+let initialSettingsActive = false;
 const LLM_UI_CONFIG = window.PotholeLlmContract.config.models;
 const LLM_UI_MODELS = new Set(LLM_UI_CONFIG.allowedModels);
 const LLM_UI_DETAILS = new Set(LLM_UI_CONFIG.allowedImageDetails);
@@ -1289,11 +1349,16 @@ function applyLang() {
   $("settingsNote").textContent = t("settings_note");
   $("independentNote").textContent = t("independent_note");
   $("privacyTitle").textContent = t("privacy_title");
+  // Some languages intentionally fold the permission/source paragraphs into their
+  // longer privacy text. Never render a missing translation key literally (the old
+  // fallback made a fresh Android install show "privacy_permission" to users).
+  const optionalPrivacyText = (key) =>
+    I18N[LANG] && Object.prototype.hasOwnProperty.call(I18N[LANG], key) ? t(key) : "";
   $("privacyBody").textContent = [
-    t("privacy_permission"), withoutLeadingSentences(t("privacy_body"), 1),
+    optionalPrivacyText("privacy_permission"), withoutLeadingSentences(t("privacy_body"), 1),
   ].filter(Boolean).join(" ");
   $("privacyLocal").textContent = [
-    t("privacy_source"), withoutLeadingSentences(t("privacy_local"), 2),
+    optionalPrivacyText("privacy_source"), withoutLeadingSentences(t("privacy_local"), 2),
   ].filter(Boolean).join(" ");
   $("privacyGovernment").textContent = t("privacy_government");
   $("privacyLink").textContent = t("privacy_link");
@@ -1318,8 +1383,13 @@ function applyLang() {
   $("reviewBack").textContent = t("lbl_done");
   $("driveStop").innerHTML = t("stop");
   if (nativeDrivePlugin()) {
-    $("keepFramesSetting").classList.add("hidden");
-    $("keepFramesNote").classList.add("hidden");
+    // Older native layouts exposed a wrapper for this setting; the current layout keeps
+    // only the note. Applying language must never abort the entire UI when that legacy
+    // wrapper is absent, otherwise no button handlers are installed on Android.
+    const keepFramesSetting = $("keepFramesSetting");
+    const keepFramesNote = $("keepFramesNote");
+    if (keepFramesSetting) keepFramesSetting.classList.add("hidden");
+    if (keepFramesNote) keepFramesNote.classList.add("hidden");
     $("debugLabel").textContent = "Debug mode: keep repeat detections as separate reports";
     $("debugNote").textContent = "Normally, nearby sightings of the same pothole are grouped into one report.";
   }
@@ -2280,10 +2350,22 @@ const RECORD_MIMES = ["video/mp4;codecs=avc1.42E01E", "video/mp4",
 let drive = null;
 let driveStarting = false;
 let driveFinalizing = null;
+// Native Drive Mode state is shared by the Capacitor bridge and the WebView.
+// Initialise it before lifecycle callbacks can arrive during a cold launch.
+let cameraAdmissionOwner = null;
+let nativeHostAppActive = document.visibilityState !== "hidden";
+let nativeHostAppStateEpoch = 0;
 let nativeDriveListener = null;
 const DATA_NOTICE_VERSION = "2026-09-05-v3";
 let consentWaiter = null;
 let nativeDriveListenersReady = false;
+let nativePreviewGeneration = 0;
+let nativePreviewAttached = false;
+let nativePreviewAttachPending = false;
+let nativePreviewPendingGeneration = 0;
+let nativePreviewFailureCount = 0;
+let nativePreviewRetryTimer = null;
+let nativePreviewScrollFrame = null;
 const handledNativeEnds = new Set();
 const provisionalNativeEnds = new Set();
 let nativeStopPromise = null;
