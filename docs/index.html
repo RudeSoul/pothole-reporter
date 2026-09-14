@@ -6776,7 +6776,8 @@ function updateProviderSettings() {
   $("providerNote").textContent = personal ? t("provider_personal_note") : t("provider_shared_note");
 }
 
-window.openSettings = (firstRun) => {
+window.openSettings = (firstRun = false, requireCompletion = false) => {
+  initialSettingsActive = Boolean(requireCompletion || (firstRun && initialSettingsRequired));
   $("setKey").value = localStorage.getItem("openai_key") || "";
   $("setProvider").value = visionProvider();
   $("setName").value = localStorage.getItem("sender_name") || "";
@@ -6793,6 +6794,8 @@ window.openSettings = (firstRun) => {
     ? String(localStorage.getItem(DASHCAM_RTSP_URL_KEY) || "") : "";
   $("setLang").value = LANG;
   $("settingsHint").textContent = firstRun ? t("welcome_hint") : "";
+  $("setBack").classList.toggle("hidden", initialSettingsActive);
+  $("setSave").textContent = initialSettingsActive ? t("privacy_accept") : t("save");
   updateProviderSettings();
   updateCaptureSourceSettings();
   show("settings");
@@ -6809,9 +6812,7 @@ $("setDashcamRtspUrl").oninput = () => {
     setDashcamRtspFeedback();
   }
 };
-$("gearBtn").onclick = () => openSettings(false);
 $("setProvider").onchange = updateProviderSettings;
-$("setBack").onclick = () => show("home");
 $("setSave").onclick = async () => {
   const saveButton = $("setSave");
   if (saveButton.disabled) return;
