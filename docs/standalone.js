@@ -84,7 +84,7 @@
   const DEDUPE_HISTORY_S = 30 * 24 * 60 * 60;
   const ACCEPTED_REPORT_STATUSES = new Set(["draft", "queued", "sent", "unrouted", "duplicate"]);
   const SERVICE_URL = (localStorage.getItem("service_url")
-    || "https://pothole-detect.gauravsen.workers.dev").replace(/\/+$/, "");
+    || "https://ffjvg34k07.execute-api.ap-south-1.amazonaws.com").replace(/\/+$/, "");
   const usingSharedVision = () => S.provider === "shared";
   const INSTALLATION_KEY = "central_installation";
 
@@ -8791,9 +8791,53 @@
   }
 
   // ---------- API dispatch ----------
+  // Tester feedback is small and holds no image. Each entry keeps its exact signed body
+  // and idempotency key, so a retry after a dropped connection is never counted twice.
+  const FEEDBACK_QUEUE_KEY = "pending_feedback";
+  const readFeedbackQueue = () => {
+    try {
+      const value = JSON.parse(localStorage.getItem(FEEDBACK_QUEUE_KEY) || "[]");
+      return Array.isArray(value) ? value : [];
+    } catch (e) { return []; }
+  };
+  const writeFeedbackQueue = (items) => {
+    if (items.length) localStorage.setItem(FEEDBACK_QUEUE_KEY, JSON.stringify(items));
+    else localStorage.removeItem(FEEDBACK_QUEUE_KEY);
+  };
+  let feedbackFlush = null;
+  function flushFeedbackQueue() {
+    if (feedbackFlush) return feedbackFlush;
+    feedbackFlush = (async () => {
+      let sent = 0;
+      for (const entry of readFeedbackQueue()) {
+        try {
+          await signedServicePost("/v1/feedback", null, {
+            exactBody: entry.body, idempotencyKey: entry.key, timeout: 15000,
+            fallback: "Feedback could not be sent.",
+          });
+        } catch (error) {
+          // A rejected entry (bad input or today's limit) will never succeed; drop it.
+          if (!(error && error.status >= 400 && error.status < 500 && error.status !== 408
+              && error.status !== 425)) break;
+        }
+        writeFeedbackQueue(readFeedbackQueue().filter((item) => item.key !== entry.key));
+        sent += 1;
+      }
+      return { sent, pending: readFeedbackQueue().length };
+    })().finally(() => { feedbackFlush = null; });
+    return feedbackFlush;
+  }
+
   async function handle(path, opts) {
     const method = ((opts && opts.method) || "GET").toUpperCase();
     let m;
+    if (path === "/api/feedback" && method === "POST") {
+      const value = JSON.parse((opts && opts.body) || "{}");
+      writeFeedbackQueue([...readFeedbackQueue(),
+        { key: randomId(), body: JSON.stringify(value), queued_at: Date.now() }]);
+      const result = await flushFeedbackQueue();
+      return { ok: true, queued: result.pending > 0 };
+    }
     if (path === "/api/health") {
       const base = {
         provider: usingSharedVision() ? "shared_server" : "personal_openai",
@@ -9149,6 +9193,7 @@
   // Pending accepted observations contain no image or complaint text. Retry them only
   // at bounded lifecycle signals; the stable body/idempotency key prevents double count.
   window.addEventListener("online", () => {
+    void flushFeedbackQueue().catch(() => {});
     if (projectServiceAvailable()) {
       void flushCentralOutbox().catch(() => {});
       return;
@@ -9164,6 +9209,7 @@
   // install needs no setup screen: without a personal key its effective provider is the
   // shared detector automatically.
   window.addEventListener("load", () => {
+    if (readFeedbackQueue().length) void flushFeedbackQueue().catch(() => {});
     void probeProjectService().then((available) => {
       if (available) return flushCentralOutbox();
     }).catch(() => {});

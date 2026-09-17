@@ -88,6 +88,13 @@
     <button class="primary" id="captureBtn">&#128247; &nbsp;Report road damage</button>
     <button class="ghost" id="dashBtn" style="width:100%;margin-bottom:14px">&#128506;&#65039; &nbsp;Public pothole map</button>
     <button class="primary" id="driveBtn" style="background:#26272c;color:#f2f2f4;margin-top:-8px">&#128663; &nbsp;Drive mode</button>
+    <div class="card hidden" id="feedbackNudge">
+      <div class="meta" id="feedbackNudgeText">You have made a few reports. How is it going? Two minutes of feedback shapes the next version.</div>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="ghost" id="feedbackNudgeDismiss" style="padding:10px">Not now</button>
+        <button class="send" id="feedbackNudgeOpen" style="padding:10px">Give feedback</button>
+      </div>
+    </div>
     <input type="file" id="fileInput" accept="image/*" capture="environment" class="hidden">
     <div class="card" id="videoImportCard">
       <button class="ghost" id="videoImportBtn" style="width:100%">&#127909; &nbsp;Import Meta glasses / dashcam video</button>
@@ -255,12 +262,44 @@
         <a id="privacyLink" href="https://coding-parrot.github.io/pothole-reporter/privacy.html" target="_blank" rel="noopener noreferrer">Privacy policy</a>
         <a id="sourcesLink" href="https://coding-parrot.github.io/pothole-reporter/sources.html" target="_blank" rel="noopener noreferrer">Data sources and limits</a>
       </div>
-      <button class="ghost" id="reviewBtn" style="width:100%;margin-top:12px">Review and label frames</button>
+      <button class="ghost" id="feedbackBtn" style="width:100%;margin-top:12px">Send feedback</button>
+      <button class="ghost" id="reviewBtn" style="width:100%;margin-top:8px">Review and label frames</button>
       <button class="ghost" id="exportBtn" style="width:100%;margin-top:8px">Export labelled dataset</button>
       <button class="ghost danger" id="wipeBtn" style="width:100%;margin-top:12px">Delete all reports and photos</button>
       <div class="btn-row">
         <button class="ghost" id="setBack">Back</button>
         <button class="send" id="setSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="feedback" class="hidden">
+    <div class="card">
+      <div class="verdict" id="feedbackTitle">Send feedback</div>
+      <div class="meta" id="feedbackIntro" style="margin-bottom:6px">Tell us what worked and what did not. This goes to the team with this installation's usage, so we can see exactly what you hit.</div>
+      <label id="feedbackRatingLabel">How is the app so far?</label>
+      <div id="feedbackStars" role="radiogroup" style="display:flex;gap:6px;margin:6px 0">
+        <button type="button" class="ghost" data-rating="1" role="radio" aria-checked="false" style="flex:1;padding:10px;font-size:20px">&#9734;</button>
+        <button type="button" class="ghost" data-rating="2" role="radio" aria-checked="false" style="flex:1;padding:10px;font-size:20px">&#9734;</button>
+        <button type="button" class="ghost" data-rating="3" role="radio" aria-checked="false" style="flex:1;padding:10px;font-size:20px">&#9734;</button>
+        <button type="button" class="ghost" data-rating="4" role="radio" aria-checked="false" style="flex:1;padding:10px;font-size:20px">&#9734;</button>
+        <button type="button" class="ghost" data-rating="5" role="radio" aria-checked="false" style="flex:1;padding:10px;font-size:20px">&#9734;</button>
+      </div>
+      <label id="feedbackModeLabel" for="feedbackMode">How are you testing?</label>
+      <select id="feedbackMode">
+        <option id="feedbackModeBike" value="bike">Bike</option>
+        <option id="feedbackModeCar" value="car">Car</option>
+        <option id="feedbackModeWalk" value="walk">On foot</option>
+        <option id="feedbackModeOther" value="other">Other</option>
+      </select>
+      <label id="feedbackTextLabel" for="feedbackText">What happened?</label>
+      <textarea id="feedbackText" maxlength="2000" style="min-height:140px" placeholder="What broke, what confused you, what you liked"></textarea>
+      <label id="feedbackEmailLabel" for="feedbackEmail">Your email (optional, so we can reply)</label>
+      <input type="text" id="feedbackEmail" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false">
+      <div class="meta" id="feedbackStatus" aria-live="polite" style="margin-top:8px"></div>
+      <div class="btn-row">
+        <button class="ghost" id="feedbackBack">Back</button>
+        <button class="send" id="feedbackSend">Send</button>
       </div>
     </div>
   </div>
@@ -455,6 +494,11 @@ const I18N = {
     privacy_accept: "Continue", privacy_decline: "Not now",
     wipe_btn: "Delete all app data",
     welcome_hint: "No API key is needed for Shared project service. Choose My OpenAI API key only if you want images sent directly from this device to OpenAI.",
+    name_placeholder: "Name used in the email",
+    feedback_empty: "Pick a star rating or write something first.",
+    feedback_bad_email: "That email address does not look complete. Fix it or leave it empty.",
+    feedback_sent: "Thank you. Your feedback was sent.",
+    feedback_queued: "Saved on this phone. It will be sent when the connection returns.",
     back: "Back", save: "Save", discard: "Discard", del: "Delete", email_btn: "Email complaint", stop: "&#9632; Stop", working: "Working...",
     manual_analysis_active: "The previous photo is still being analysed. Wait for it to finish before taking another.",
     chip_draft: "Draft", chip_sent: "Opened in email", chip_queued: "Opened in email", chip_rejected: "Undamaged", chip_review: "Retake / review",
@@ -1251,7 +1295,7 @@ const hasAuthoritativeMunicipalCivicCache = (report) => !!report
   && report.road_ownership === "municipal"
   && (report._native || report.road_ownership_source === "central_v1");
 const CENTRAL_SERVICE_URL = () => (localStorage.getItem("service_url")
-  || "https://pothole-detect.gauravsen.workers.dev").replace(/\/+$/, "");
+  || "https://ffjvg34k07.execute-api.ap-south-1.amazonaws.com").replace(/\/+$/, "");
 // A missing personal key transparently selects the shared detector. Keep this routed
 // through the engine's tested helper so UI preflight, web capture and native Drive Mode
 // cannot disagree about which provider owns the image.
@@ -1266,7 +1310,7 @@ function show(screen) {
   const viewer = $("viewer");
   if (viewer) viewer.classList.add("hidden");
   document.body.classList.toggle("public-map-view", screen === "dash");
-  for (const s of ["home", "progress", "detail", "drive", "settings", "review", "dash", "dataConsent"]) {
+  for (const s of ["home", "progress", "detail", "drive", "settings", "review", "dash", "dataConsent", "feedback"]) {
     $(s).classList.toggle("hidden", s !== screen);
   }
   window.scrollTo(0, 0);
@@ -1642,6 +1686,7 @@ async function renderReports() {
   // ---------- End native merge ----------
 
   loadReports.latest = allReports;
+  maybeNudgeFeedback(allReports.length);
   const list = $("list");
   // A recorded drive is history even when GPS never arrived and therefore no frame was
   // assessed. Returning on an empty reports store made its footage impossible to reach.
@@ -6762,6 +6807,7 @@ window.handleAppBack = () => {
     void loadReports().catch(() => {});
     return true;
   }
+  if (!$("feedback").classList.contains("hidden")) { openSettings(); return true; }
   for (const s of ["detail", "settings", "progress", "drive", "review", "dash"]) {
     if (!$(s).classList.contains("hidden")) { show("home"); loadReports(); return true; }
   }
@@ -6806,6 +6852,112 @@ $("gearBtn").onclick = () => {
   openSettings(initialSettingsRequired, initialSettingsRequired);
 };
 $("setBack").onclick = () => { if (!initialSettingsActive) show("home"); };
+
+// ---------- Tester feedback ----------
+let feedbackRating = null;
+let feedbackReturn = "settings";
+function renderFeedbackStars() {
+  for (const star of $("feedbackStars").querySelectorAll("button")) {
+    const value = Number(star.dataset.rating);
+    const on = feedbackRating !== null && value <= feedbackRating;
+    star.innerHTML = on ? "&#9733;" : "&#9734;";
+    star.style.color = on ? "var(--accent)" : "";
+    star.setAttribute("aria-checked", String(value === feedbackRating));
+  }
+}
+// The WebView user agent lists the phone model between the Android version and the
+// "wv" / "Build/..." markers. Those markers are not a model and must never be reported
+// as one: every tester would look like the same device.
+function feedbackDevice() {
+  const inside = /\(([^)]*)\)/.exec(navigator.userAgent || "");
+  if (!inside) return null;
+  const parts = inside[1].split(";").map((part) => part.trim());
+  const index = parts.findIndex((part) => /^Android [\d.]+$/.test(part));
+  if (index < 0) return null;
+  const version = parts[index].slice("Android ".length);
+  const model = parts.slice(index + 1)
+    .map((part) => part.replace(/\s*Build\/.*$/, "").trim())
+    .find((part) => part && part !== "wv");
+  return (model ? `${model} (Android ${version})` : `Android ${version}`).slice(0, 80);
+}
+async function feedbackAppVersion() {
+  try {
+    const App = window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.App;
+    if (App && App.getInfo) {
+      const info = await App.getInfo();
+      if (info && info.version) return `${info.version} (${info.build})`;
+    }
+  } catch (e) {}
+  return null;
+}
+window.openFeedback = (returnTo = "settings") => {
+  feedbackReturn = returnTo;
+  feedbackRating = null;
+  renderFeedbackStars();
+  $("feedbackMode").value = localStorage.getItem("feedback_test_mode") || "bike";
+  $("feedbackText").value = "";
+  $("feedbackEmail").value = localStorage.getItem("feedback_email") || "";
+  $("feedbackStatus").textContent = "";
+  $("feedbackSend").disabled = false;
+  show("feedback");
+  return true;
+};
+$("feedbackBtn").onclick = () => openFeedback("settings");
+$("feedbackStars").onclick = (event) => {
+  const star = event.target.closest("button[data-rating]");
+  if (!star) return;
+  feedbackRating = Number(star.dataset.rating);
+  renderFeedbackStars();
+};
+$("feedbackBack").onclick = () => {
+  if (feedbackReturn === "home") { show("home"); loadReports(); } else openSettings();
+};
+$("feedbackSend").onclick = async () => {
+  const text = $("feedbackText").value.trim();
+  if (feedbackRating === null && !text) {
+    $("feedbackStatus").textContent = t("feedback_empty");
+    return;
+  }
+  const email = $("feedbackEmail").value.trim();
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    $("feedbackStatus").textContent = t("feedback_bad_email");
+    return;
+  }
+  localStorage.setItem("feedback_test_mode", $("feedbackMode").value);
+  if (email) localStorage.setItem("feedback_email", email);
+  else localStorage.removeItem("feedback_email");
+  $("feedbackSend").disabled = true;
+  $("feedbackStatus").textContent = t("working");
+  const body = {
+    rating: feedbackRating, text, test_mode: $("feedbackMode").value,
+    app_version: await feedbackAppVersion(), device: feedbackDevice(),
+    ...(email ? { email } : {}),
+  };
+  try {
+    const result = await api("/api/feedback", { method: "POST", body: JSON.stringify(body) });
+    $("feedbackStatus").textContent = result && result.queued ? t("feedback_queued") : t("feedback_sent");
+    setTimeout(() => { if (!$("feedback").classList.contains("hidden")) $("feedbackBack").onclick(); }, 1500);
+  } catch (error) {
+    $("feedbackStatus").textContent = t("feedback_queued");
+    $("feedbackSend").disabled = false;
+  }
+};
+// Ask once, after the third report, when there is real experience to describe.
+function maybeNudgeFeedback(reportCount) {
+  const nudge = $("feedbackNudge");
+  if (!nudge) return;
+  const due = reportCount >= 3 && localStorage.getItem("feedback_nudged") !== "1";
+  nudge.classList.toggle("hidden", !due);
+}
+$("feedbackNudgeOpen").onclick = () => {
+  localStorage.setItem("feedback_nudged", "1");
+  $("feedbackNudge").classList.add("hidden");
+  openFeedback("home");
+};
+$("feedbackNudgeDismiss").onclick = () => {
+  localStorage.setItem("feedback_nudged", "1");
+  $("feedbackNudge").classList.add("hidden");
+};
 $("setCaptureSource").onchange = updateCaptureSourceSettings;
 $("setDashcamRtspUrl").oninput = () => {
   if ($("setDashcamRtspUrl").getAttribute("aria-invalid") === "true") {

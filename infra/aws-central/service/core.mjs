@@ -30,6 +30,8 @@ const IDEMPOTENCY_AGE_MS = 30 * 24 * 60 * 60_000;
 const DAMAGE_TYPES = new Set(DETECT_SCHEMA.properties.damage_type.enum.filter(Boolean));
 const SIZES = new Set(DETECT_SCHEMA.properties.size.enum.filter(Boolean));
 const CAPTURE_SOURCES = new Set(["manual", "drive_live", "drive_vod", "imported_video"]);
+const FEEDBACK_TEST_MODES = new Set(["bike", "car", "walk", "other"]);
+const FEEDBACK_TEXT_MAX = 2_000;
 const LOCATION_SOURCES = new Set([
   "device_gps", "gpx_timestamp", "current_position_confirmed", "none",
 ]);
@@ -391,6 +393,39 @@ export function createService({ repository, detector, geolocator, logger = conso
     return complete(context, 200, payload);
   }
 
+  async function feedback(body, context) {
+    const hasRating = Object.hasOwn(body, "rating") && body.rating !== null;
+    const rating = hasRating ? number(body.rating) : null;
+    const text = bounded(body.text, FEEDBACK_TEXT_MAX);
+    const testMode = body.test_mode == null ? null : bounded(body.test_mode, 16);
+    if ((hasRating && !(Number.isInteger(rating) && rating >= 1 && rating <= 5))
+        || (!hasRating && !text)
+        || (testMode !== null && !FEEDBACK_TEST_MODES.has(testMode))) {
+      throw new HttpError(400, "bad_feedback",
+        "Feedback needs a whole 1 to 5 rating or some text, and test_mode must be bike, car, walk or other.");
+    }
+    const quota = await repository.takeFeedbackQuota(context.installId);
+    if (!quota.ok) {
+      throw new HttpError(429, "feedback_limit_reached",
+        "This installation has sent the maximum feedback for today.", { limit: quota.limit });
+    }
+    const email = bounded(body.email, 254);
+    const createdAt = Date.now();
+    await repository.putFeedback({
+      install_id: context.installId,
+      request_id: context.requestId,
+      created_at: createdAt,
+      rating,
+      text,
+      test_mode: testMode,
+      app_version: bounded(body.app_version, 32) || null,
+      device: bounded(body.device, 80) || null,
+      email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email.toLowerCase() : null,
+    });
+    context.outcome = "feedback_received";
+    return complete(context, 201, { accepted: true, created_at: createdAt });
+  }
+
   async function resolveTender(body, context) {
     const lat = number(body.lat);
     const lng = number(body.lng);
@@ -658,6 +693,7 @@ export function createService({ repository, detector, geolocator, logger = conso
       "/v1/vision/detect",
       "/v1/tenders/resolve",
       "/v1/potholes/report",
+      "/v1/feedback",
     ].includes(target.path)) {
       throw new HttpError(404, "not_found", "No such endpoint exists.");
     }
@@ -669,6 +705,7 @@ export function createService({ repository, detector, geolocator, logger = conso
     if (target.path === "/v1/activity") return activity(parsed.value, context);
     if (target.path === "/v1/vision/detect") return detect(parsed.value, context);
     if (target.path === "/v1/tenders/resolve") return resolveTender(parsed.value, context);
+    if (target.path === "/v1/feedback") return feedback(parsed.value, context);
     return report(parsed.value, context);
   }
 
@@ -692,6 +729,7 @@ export function createService({ repository, detector, geolocator, logger = conso
     } catch (error) {
       const known = asHttpError(error);
       context.outcome = known.code;
+      context.failed = true;
       if (context.idempotencyClaimed) {
         await repository.releaseIdempotency(context.idempotencyId, context.requestId).catch(() => {});
       }
@@ -712,6 +750,7 @@ export function createService({ repository, detector, geolocator, logger = conso
       outcome: context.outcome,
       visionMode: context.visionMode,
       installId: context.installId,
+      failed: Boolean(context.failed),
     }).catch((error) => logger.error(JSON.stringify({
       event: "metrics_write_failed",
       request_id: context.requestId,

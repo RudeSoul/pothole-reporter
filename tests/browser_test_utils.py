@@ -2,10 +2,11 @@
 
 import json
 import os
+from urllib.parse import urlsplit
 
 
 def _central_service(route, request):
-    path = request.url.split(".dev", 1)[-1].split("?", 1)[0]
+    path = urlsplit(request.url).path
     body = json.loads(request.post_data or "{}") if request.method == "POST" else {}
     headers = {"content-type": "application/json", "x-request-id": "test-central-request"}
     if path == "/v1/installations":
@@ -44,7 +45,7 @@ def _central_service(route, request):
 
 
 def open_app(page, key):
-    page.route("https://pothole-detect.gauravsen.workers.dev/**", _central_service)
+    page.route("https://ffjvg34k07.execute-api.ap-south-1.amazonaws.com/**", _central_service)
     page.goto(os.environ.get("POTHOLE_TEST_APP", "http://localhost:8765/"))
     page.wait_for_load_state("domcontentloaded")
     page.evaluate("""key => {

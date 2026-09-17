@@ -37,7 +37,7 @@ class CentralServiceIdentity(private val context: Context) {
 
     companion object {
         private const val KEY_ALIAS = "pothole_central_identity_v1"
-        const val DEFAULT_SERVICE_URL = "https://pothole-detect.gauravsen.workers.dev"
+        const val DEFAULT_SERVICE_URL = "https://ffjvg34k07.execute-api.ap-south-1.amazonaws.com"
         const val PREFS = "pothole_central_service"
         private const val CONNECT_TIMEOUT_MS = 15_000L
         private val IDENTITY_LOCK = Any()

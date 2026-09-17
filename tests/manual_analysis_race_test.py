@@ -25,7 +25,7 @@ with sync_playwright() as playwright:
         url = route.request.url
         if url.startswith(APP) or url.startswith("blob:") or url.startswith("data:"):
             route.continue_()
-        elif url == "https://pothole-detect.gauravsen.workers.dev/v1/health":
+        elif url == "https://ffjvg34k07.execute-api.ap-south-1.amazonaws.com/v1/health":
             route.fulfill(status=200, content_type="application/json", body=json.dumps({
                 "ok": True, "shared_vision_configured": True,
             }))

@@ -57,7 +57,7 @@ INIT = r"""
 
   window.fetch = async (url, init = {}) => {
     const target = String(url);
-    if (target.startsWith("https://pothole-detect.gauravsen.workers.dev/")) {
+    if (target.startsWith("https://ffjvg34k07.execute-api.ap-south-1.amazonaws.com/")) {
       const path = new URL(target).pathname;
       const body = init.body ? JSON.parse(init.body) : {};
       const headers = {"content-type":"application/json", "x-request-id":"test-central"};

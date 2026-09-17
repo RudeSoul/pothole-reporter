@@ -42,6 +42,7 @@ export function createDynamoRepository({
     globalMinute: Number(quota.globalMinute ?? 120),
     globalDay: Number(quota.globalDay ?? 5_000),
     globalMonth: Number(quota.globalMonth ?? 50_000),
+    feedbackPerInstallDay: Number(quota.feedbackPerInstallDay ?? 10),
   };
 
   async function send(command) {
@@ -201,6 +202,37 @@ export function createDynamoRepository({
         }
         return { ok: false, code: "shared_rate_limit", limit: config.globalMinute };
       }
+    },
+
+    async takeFeedbackQuota(installId, now = Date.now()) {
+      try {
+        await send(new UpdateCommand({
+          TableName: tables.usage,
+          Key: { id: `feedback#${installId}#${day(now)}` },
+          UpdateExpression: "ADD used :one SET expires_at=:expires",
+          ConditionExpression: "attribute_not_exists(used) OR used < :limit",
+          ExpressionAttributeValues: {
+            ":one": 1,
+            ":limit": config.feedbackPerInstallDay,
+            ":expires": ttl(now + 2 * 86_400_000),
+          },
+        }));
+        return { ok: true, limit: config.feedbackPerInstallDay };
+      } catch (error) {
+        if (!conditionalFailure(error)) throw error;
+        return { ok: false, limit: config.feedbackPerInstallDay };
+      }
+    },
+
+    async putFeedback(item) {
+      await send(new PutCommand({
+        TableName: tables.records,
+        Item: {
+          pk: `FEEDBACK#${item.install_id}`,
+          sk: `${String(item.created_at).padStart(15, "0")}#${item.request_id}`,
+          ...item,
+        },
+      }));
     },
 
     async putReceipt(receipt) {
@@ -439,7 +471,7 @@ export function createDynamoRepository({
       return rows.flatMap((row) => row.Items || []);
     },
 
-    async recordRequest({ route, outcome, visionMode, installId }) {
+    async recordRequest({ route, outcome, visionMode, installId, failed = false }) {
       const today = day();
       const tasks = [send(new UpdateCommand({
         TableName: tables.metrics,
@@ -453,6 +485,12 @@ export function createDynamoRepository({
           Key: { day: today, metric: `active#${installId}` },
           UpdateExpression: "ADD request_count :one SET last_seen_at=:now",
           ExpressionAttributeValues: { ":one": 1, ":now": Date.now() },
+        })));
+        tasks.push(send(new UpdateCommand({
+          TableName: tables.metrics,
+          Key: { day: today, metric: `install#${installId}#${route}#${outcome}#${failed ? "error" : "ok"}` },
+          UpdateExpression: "ADD request_count :one",
+          ExpressionAttributeValues: { ":one": 1 },
         })));
       }
       await Promise.all(tasks);

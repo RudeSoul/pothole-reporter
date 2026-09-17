@@ -53,13 +53,13 @@ def releaseSigningReady = missingReleaseValues.isEmpty() && releaseStoreFile != 
 
 android {
     namespace = "com.gauravsen.potholereporter"
-    compileSdk = rootProject.ext.compileSdkVersion
+    compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {
         applicationId "com.gauravsen.potholereporter"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 68
-        versionName "1.38.1"
+        versionCode 69
+        versionName "1.39.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

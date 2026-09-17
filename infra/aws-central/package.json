@@ -2,7 +2,12 @@
   "name": "pothole-reporter-central-lambda",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.879.0",
     "@aws-sdk/client-lambda": "^3.879.0",
