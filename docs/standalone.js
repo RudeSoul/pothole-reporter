@@ -5916,25 +5916,6 @@
       || /^[A-Z]{2}$/.test(String(route.contract_state_code || ""));
   }
 
-  async function verifyRepairCandidate(prior, contextDataUrl, roadViews, primaryIndex,
-                                       model, detail) {
-    const oldEvidence = await blobToDataUrl(prior && prior.photo);
-    if (!oldEvidence || !contextDataUrl || !Array.isArray(roadViews) || !roadViews.length) {
-      return null;
-    }
-    const current = [roadViews[primaryIndex]];
-    for (let i = 0; i < roadViews.length && current.length < 2; i++) {
-      if (i !== primaryIndex) current.push(roadViews[i]);
-    }
-    const images = [{ url: oldEvidence }, { url: contextDataUrl },
-      ...current.filter(Boolean).map((url) => ({ url }))];
-    const language = LANG() === "kn"
-      ? "\n- Write description in formal Kannada."
-      : LANG() === "mr" ? "\n- Write description in formal Marathi."
-        : LANG() === "bn" ? "\n- Write description in formal Bengali." : "";
-    return analyzeImage(images, REPAIR_PROMPT + language, "road_repair_verification",
-      REPAIR_SCHEMA, model, null, false, detail);
-  }
 
   const clearAbsenceForRepair = (a) => !!a
 
@@ -8287,36 +8268,6 @@
       throw error;
     }
     if (driveMode && !accepted) {
-      // Ordinary non-detection is only the gate. Fixed requires a separate model call
-      // that sees the saved before photo and the current usable revisit together.
-      const repairCandidate = repairCandidateP ? await repairCandidateP : null;
-      if (repairCandidate && clearAbsenceForRepair(a)) {
-        progress(pmsg("repair"));
-        const comparison = await verifyRepairCandidate(repairCandidate, dataUrl,
-          [dataUrl], 0, detectionModel, detectionDetail).catch(() => null);
-        const provenCondition = repairConditionFor(comparison);
-        if (provenCondition) {
-          if (commitTurn) await commitTurn.wait;
-          const repairResult = await applyRepairObservation(repairCandidate.id, {
-            ...repairObservationBase,
-            ...comparison,
-            // Preserve the full scene so a later reviewer can audit whether the before/after
-            // frames show the same footprint.
-            current_photo_data_url: dataUrl,
-            detection_model: detectionModel,
-            image_detail: detectionDetail,
-            // Repair comparison is a legacy local evidence path, not an LLM contract.
-            prompt_version: REPAIR_VERIFICATION_VERSION,
-            schema_version: REPAIR_SCHEMA_VERSION,
-          });
-          const applied = !repairResult.ignored ? repairResult.condition_status : null;
-          return { analyzed: true, accepted: false, stored: false, found: false,
-                   duplicate: false, duplicate_of: null, decision, review: false,
-                   repaired: applied === "fixed", repair_review: applied === "repair_review",
-                   repair_target_id: repairCandidate.id, repair_result: repairResult,
-                   ...a, observation: { ...a }, repair_observation: comparison, detector };
-        }
-      }
       return { analyzed: true, accepted: false, stored: false, found: false,
                duplicate: false, duplicate_of: null, decision, review: false,
                ...a, observation: { ...a }, detector };
@@ -10042,32 +9993,7 @@
     return findRepairCandidateFromReports(observation, nearby);
   }
 
-  const REPAIR_PROMPT = `Compare a saved pothole photograph with new road views from a later live drive.
 
-Image 1 is the older saved road-damage evidence. Image 2 is the current full-frame context. Every remaining image is a complete current camera frame in chronological order. No current image is cropped, tiled, masked, or limited to a region of interest.
-
-This is a strict before/after verification, not ordinary pothole detection:
-- Set same_location_visible true only when stable road geometry and surrounding features show that the old damaged footprint itself is visible in the current views. Nearby clean asphalt, a different lane, or a similar-looking road is not the same footprint.
-- Set completed_repair_visible true only when that exact old footprint is now covered by completed, intact asphalt, concrete, or a sealed level patch on the drivable surface.
-- The absence of a visible cavity is never repair evidence by itself. Blur, distance, glare, traffic, water, occlusion, a changed viewpoint, or failure to locate the old footprint must produce current_condition uncertain or not_visible.
-- Use still_damaged if the old defect or a failed repair remains visible.
-- Use repaired only when the same footprint and the completed intact repair are both clear. Do not infer repairs from time, GPS, or a generally smooth road.
-- description must state the stable same-place cues and the visible repair material, or state why verification is inconclusive.`;
-
-  const REPAIR_SCHEMA = {
-    type: "object", additionalProperties: false,
-    required: ["same_location_visible", "completed_repair_visible", "current_condition",
-      "assessment", "image_quality", "description"],
-    properties: {
-      same_location_visible: { type: "boolean" },
-      completed_repair_visible: { type: "boolean" },
-      current_condition: { type: "string",
-        enum: ["repaired", "still_damaged", "not_visible", "uncertain"] },
-      assessment: { type: "string", enum: ["clear", "probable", "uncertain"] },
-      image_quality: { type: "string", enum: ["usable", "degraded", "unusable"] },
-      description: { type: "string" },
-    },
-  };
 
   const REPAIR_SCHEMA_VERSION = 1;
 
@@ -10316,7 +10242,7 @@ This is a strict before/after verification, not ordinary pothole detection:
       && normaliseDetail(detail, model) === detail
       && typeof observation.description === "string"
       && observation.description.trim().length > 0
-      && observation.prompt_version === REPAIR_PROMPT_VERSION
+      && observation.prompt_version === NATIVE_REPAIR_CONTRACT_VERSION
       && Number.isInteger(observation.schema_version)
       && observation.schema_version === REPAIR_SCHEMA_VERSION;
   };
@@ -10346,7 +10272,7 @@ This is a strict before/after verification, not ordinary pothole detection:
 
   const REPAIR_EVIDENCE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-  const REPAIR_PROMPT_VERSION = "road-repair-v1";
+  const NATIVE_REPAIR_CONTRACT_VERSION = "road-repair-v1";
 
   const VERIFIED_HANDOFF_FIELDS = [
     "officer_name", "authority_id", "authority_name", "authority_registry_version",

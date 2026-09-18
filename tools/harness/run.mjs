@@ -5,7 +5,8 @@
 //   node tools/harness/run.mjs                 static gates + flow tests (the fast set)
 //   node tools/harness/run.mjs --all           everything, including the slow suites
 //   node tools/harness/run.mjs --only flow     one group: static, flow, server, python
-//   node tools/harness/run.mjs --loop          keep running until everything passes
+//   node tools/harness/run.mjs --loop          re-run until no regressions remain
+//   node tools/harness/run.mjs --until-green   re-run until EVERY check passes
 //   node tools/harness/run.mjs --baseline      write baseline.json instead of judging
 //
 // It serves static/ once for every browser test rather than once per test, and runs
@@ -200,7 +201,23 @@ async function judge() {
   return true;
 }
 
-if (flag("loop")) {
+// --until-green ignores the baseline: nothing is "known broken" any more, the run
+// repeats until every check in the repo passes. This is the mode to leave running
+// while the pre-existing failures are worked through.
+if (flag("until-green")) {
+  const waitSeconds = Number(value("wait", 60));
+  for (let attempt = 1; ; attempt += 1) {
+    console.log(`\n===== until-green, attempt ${attempt} =====`);
+    const { results, failed } = await once();
+    if (!failed.length) {
+      console.log(`Everything green: ${results.length} checks passing.`);
+      break;
+    }
+    console.log(`${failed.length} still failing: ${failed.map((r) => r.name).join(", ")}`);
+    console.log(`Re-running in ${waitSeconds}s.`);
+    await new Promise((done) => setTimeout(done, waitSeconds * 1000));
+  }
+} else if (flag("loop")) {
   const waitSeconds = Number(value("wait", 30));
   for (let attempt = 1; ; attempt += 1) {
     console.log(`\n===== harness loop, attempt ${attempt} =====`);

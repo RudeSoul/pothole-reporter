@@ -5916,2130 +5916,11 @@
       || /^[A-Z]{2}$/.test(String(route.contract_state_code || ""));
   }
 
-  async function verifyRepairCandidate(prior, contextDataUrl, roadViews, primaryIndex,
-                                       model, detail) {
-    const oldEvidence = await blobToDataUrl(prior && prior.photo);
-    if (!oldEvidence || !contextDataUrl || !Array.isArray(roadViews) || !roadViews.length) {
-      return null;
-    }
-    const current = [roadViews[primaryIndex]];
-    for (let i = 0; i < roadViews.length && current.length < 2; i++) {
-      if (i !== primaryIndex) current.push(roadViews[i]);
-    }
-    const images = [{ url: oldEvidence }, { url: contextDataUrl },
-      ...current.filter(Boolean).map((url) => ({ url }))];
-    const language = LANG() === "kn"
-      ? "\n- Write description in formal Kannada."
-      : LANG() === "mr" ? "\n- Write description in formal Marathi."
-        : LANG() === "bn" ? "\n- Write description in formal Bengali." : "";
-    return analyzeImage(images, REPAIR_PROMPT + language, "road_repair_verification",
-      REPAIR_SCHEMA, model, null, false, detail);
-  }
 
   const clearAbsenceForRepair = (a) => !!a
 
   const conditionStatus = (r) => r && (r.condition_status === "fixed"
     || r.condition_status === "repair_review") ? r.condition_status : "open";
-
-  // Restored from the last coherent production file: the v1.38 merge dropped these
-  // definitions while their call sites stayed, so these paths threw on first use.
-  function mutateReportAtomically(id, mutate) {
-    const reportId = Number(id);
-    if (!Number.isFinite(reportId) || reportId <= 0) {
-      return Promise.reject(new Error("Report not found."));
-    }
-    return idb().then((d) => new Promise((resolve, reject) => {
-      const tx = d.transaction("reports", "readwrite");
-      const store = tx.objectStore("reports");
-      let result = null, failure = null;
-      const abortWith = (error) => {
-        failure = error instanceof Error ? error : new Error(String(error || "Could not update this report."));
-        try { tx.abort(); } catch (_) {}
-      };
-      const read = store.get(reportId);
-      read.onsuccess = () => {
-        const current = read.result;
-        if (!current) { abortWith(new Error("Report not found.")); return; }
-        const migrated = migrateLegacyComplaintRecord(current);
-        if (migrated !== current) {
-          for (const field of ["email_body", "whatsapp_text", "portal_fields",
-            "portal_copy_text", "complaint_template_version"]) {
-            current[field] = migrated[field];
-          }
-        }
-        try { mutate(current); } catch (error) { abortWith(error); return; }
-        const write = store.put(current);
-        write.onsuccess = () => { result = toDict(current); };
-        write.onerror = () => { failure = write.error; };
-      };
-      read.onerror = () => { failure = read.error; };
-      tx.oncomplete = () => resolve(result);
-      tx.onabort = () => reject(failure || storageError(tx.error));
-      tx.onerror = () => {};
-    }));
-  }
-
-  async function applyRepairObservation(targetId, observation) {
-    const id = Number(targetId);
-    const sourceEventKey = String(observation && observation.source_event_key || "").slice(0, 180);
-    const nextCondition = repairConditionFor(observation);
-    if (!Number.isFinite(id) || id <= 0 || !sourceEventKey || !nextCondition) {
-      return { ignored: true, reason: "repair_not_proven" };
-    }
-    if (!repairProvenanceIsExact(observation)) {
-      return { ignored: true, reason: "repair_provenance_invalid" };
-    }
-    const repairPhoto = await decodeRepairEvidence(observation.current_photo_data_url);
-    if (!repairPhoto) return { ignored: true, reason: "repair_evidence_invalid" };
-    const candidate = {
-      ...observation,
-      capture_source: "drive_live",
-      debug_capture: false,
-      drive_id: observation.drive_id == null ? null : String(observation.drive_id),
-    };
-    if (!finiteCoord(candidate.lat) || !finiteCoord(candidate.lng)) {
-      return { ignored: true, reason: "target_ambiguous_or_mismatched" };
-    }
-    // The uniqueness scan and update deliberately share one read-write transaction.
-    // IndexedDB serialises competing writers on this store, so no nearby report can be
-    // inserted or changed between the ambiguity decision and the physical-status write.
-    return idb().then((d) => new Promise((resolve, reject) => {
-      const tx = d.transaction("reports", "readwrite");
-      const store = tx.objectStore("reports");
-      let result = null, failure = null;
-      const matches = [];
-      const replays = [];
-      const latitudeBand = REPAIR_RADIUS_M / 110900;
-      const scan = store.index("by_lat").openCursor(IDBKeyRange.bound(
-        candidate.lat - latitudeBand, candidate.lat + latitudeBand));
-      scan.onsuccess = () => {
-        const cursor = scan.result;
-        if (cursor) {
-          const priorKeys = Array.isArray(cursor.value.repair_source_event_keys)
-            ? cursor.value.repair_source_event_keys : [];
-          if (priorKeys.includes(sourceEventKey)) replays.push(cursor.value);
-          if (repairTargetMatch(candidate, cursor.value)) matches.push(cursor.value);
-          cursor.continue();
-          return;
-        }
-        if (replays.length) {
-          if (replays.length === 1 && Number(replays[0].id) === id) {
-            result = { id, duplicate: true, condition_status: conditionStatus(replays[0]) };
-          } else {
-            result = { ignored: true, reason: "target_ambiguous_or_mismatched" };
-          }
-          return;
-        }
-        if (matches.length !== 1 || Number(matches[0].id) !== id) {
-          result = { ignored: true, reason: "target_ambiguous_or_mismatched" };
-          return;
-        }
-        const prior = matches[0];
-        const keys = Array.isArray(prior.repair_source_event_keys)
-          ? prior.repair_source_event_keys.slice() : [];
-        if (keys.includes(sourceEventKey)) {
-          result = { id, duplicate: true, condition_status: conditionStatus(prior) };
-          return;
-        }
-        keys.push(sourceEventKey);
-        const observedAt = observation.observed_at;
-        const updated = {
-          ...prior,
-          condition_status: nextCondition,
-          condition_updated_at: observedAt,
-          condition_source: "ai_revisit_comparison",
-          repair_observed_at: observedAt,
-          repair_drive_id: candidate.drive_id,
-          repair_source_event_keys: keys.slice(-64),
-          repair_photo: repairPhoto,
-          repair_lat: observation.lat,
-          repair_lng: observation.lng,
-          repair_gps_accuracy: observation.gps_accuracy,
-          repair_speed_mps: Number.isFinite(observation.speed_mps) ? observation.speed_mps : null,
-          repair_heading: Number.isFinite(observation.heading) ? observation.heading : null,
-          repair_current_condition: observation.current_condition,
-          repair_assessment: observation.assessment,
-          repair_image_quality: observation.image_quality,
-          repair_same_location_visible: observation.same_location_visible,
-          repair_completed_visible: observation.completed_repair_visible,
-          repair_description: String(observation.description || "").trim().slice(0, 1000),
-          repair_detection_model: observation.detection_model,
-          repair_image_detail: observation.image_detail,
-          repair_prompt_version: observation.prompt_version,
-          repair_schema_version: observation.schema_version,
-        };
-        const write = store.put(updated);
-        write.onsuccess = () => {
-          result = { id, duplicate: false, condition_status: nextCondition, report: toDict(updated) };
-        };
-        write.onerror = () => { failure = write.error; };
-      };
-      scan.onerror = () => { failure = scan.error; };
-      tx.oncomplete = () => resolve(result || { ignored: true, reason: "target_ambiguous_or_mismatched" });
-      const died = () => reject(storageError(failure || tx.error));
-      tx.onabort = died;
-      tx.onerror = () => {};
-    }));
-  }
-
-  async function importNativeReport(native) {
-    if (!native || typeof native !== "object") throw new Error("Native report missing.");
-    const nativeId = Number(native.id);
-    const lat = Number(native.lat), lng = Number(native.lng);
-    if (!Number.isFinite(nativeId) || nativeId <= 0) throw new Error("Native report id missing.");
-    const nativeIsPothole = native.is_pothole === true || Number(native.is_pothole) === 1;
-    const nativeIsReportable = native.is_reportable === true || Number(native.is_reportable) === 1;
-    const nativeContract = nativeDetectorContract(native);
-    const nativeSize = POTHOLE_SIZES.has(native.size) ? native.size : null;
-    const nativeSurface = nativeContract && nativeContract.surfaceTypes.has(native.surface_type)
-      ? native.surface_type : "unknown";
-    const nativeTemporal = native.temporal_consistency;
-    const nativeLowerInterior = native.has_unambiguous_lower_interior === true;
-    const lowerInteriorContract = nativeContract &&
-      (nativeContract.kind === "current_v19" || nativeContract.kind === "legacy_v16");
-    const nativePassedBinaryGate = !!nativeContract && native.decision === "accept"
-      && nativeIsPothole && nativeIsReportable && native.damage_type === "pothole_cavity"
-      && native.looks_like_speed_breaker === false
-      && native.image_quality === "usable" && nativeContract.surfaceTypes.has(nativeSurface)
-      && native.on_drivable_surface === true
-      && native.has_localized_cavity === true
-      && (!lowerInteriorContract || typeof native.has_unambiguous_lower_interior === "boolean")
-      && (!lowerInteriorContract || nativeSurface !== TEMPORARY_DRIVABLE_SURFACE
-        || nativeLowerInterior)
-      && native.has_broken_edge_or_rim === true && native.has_depth_or_surface_loss === true
-      && nativeTemporal === "consistent" && Number(native.evidence_count) >= 3 && !!nativeSize;
-    // Contracts older than v6, malformed current rows, and v6 rows claiming a v7+-only
-    // surface are acknowledged and discarded instead of looping forever or becoming a
-    // complaint. Already-synced WebView reports are never reclassified here.
-    if (!nativePassedBinaryGate) {
-      return { native_id: nativeId, ignored: true, reason: "obsolete_or_invalid_detector_contract" };
-    }
-    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
-      throw new Error("Native report location is invalid.");
-    }
-    const sourceEventKey = String(native.source_event_key || `native:${nativeId}`).slice(0, 180);
-    const gpsAccuracy = native.gps_accuracy == null ? null : Number(native.gps_accuracy);
-    const speed = Number(native.speed_mps);
-    const heading = Number(native.heading);
-    const geo = await reverseGeocode(lat, lng).catch(() => null);
-    const address = (geo && geo.short) || native.address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    const route = await routeOfficer(
-      geo || address, lat, lng,
-      Number.isFinite(gpsAccuracy) ? gpsAccuracy : null,
-      Number.isFinite(heading) ? heading : null,
-      Number.isFinite(speed) ? speed : null
-    );
-    const covered = !!route.routed;
-    const tenderCandidate = covered && canSearchTenderCatalog(route)
-      ? await matchTenderAt(address, route, lat, lng).catch(() => null)
-      : null;
-    const tender = normaliseTenderMatch(tenderCandidate, covered ? route : null);
-    const assessment = binaryAssessment({
-      // Every supported native version saved this row only after its own binary physical
-      // gate accepted it. v16+ additionally persists the exact lower-interior verdict.
-      is_pothole: true,
-      looks_like_speed_breaker: false,
-      image_quality: native.image_quality,
-      surface_type: nativeSurface,
-      on_drivable_surface: true,
-      has_localized_cavity: true,
-      // Feed legacy accepted rows through the current derived-field helper, then restore
-      // the field to unknown below instead of inventing evidence their schema never saved.
-      has_unambiguous_lower_interior: lowerInteriorContract ? nativeLowerInterior : true,
-      has_broken_edge_or_rim: true,
-      has_depth_or_surface_loss: true,
-      temporal_consistency: nativeTemporal,
-      size: nativeSize,
-      description: native.description || "Pothole detected during Drive Mode.",
-    }, true, Math.max(2, Number(native.evidence_count) - 1));
-    if (!lowerInteriorContract) assessment.has_unambiguous_lower_interior = null;
-    const complaint = covered
-      ? buildComplaintOutputs(assessment, lat, lng, address, route.officer_name, tender, route, {
-          captured_at: Number.isFinite(Number(native.captured_at)) ? Number(native.captured_at) : null,
-          gps_accuracy: Number.isFinite(gpsAccuracy) ? gpsAccuracy : null,
-          photo_provenance: "Android Drive Mode camera frame",
-        }) : null;
-    const subject = complaint ? complaint.email_subject : null;
-    const body = complaint ? complaint.email_body : null;
-    const capturedAt = Number(native.captured_at);
-    const offset = Number(native.source_offset_s);
-    const driveId = native.drive_id == null ? null : String(native.drive_id);
-    const debug = !!native.debug_capture;
-    const rec = {
-      created_at: Number(native.created_at) || Date.now() / 1000,
-      lat, lng, address,
-      photo: await dataUrlToBlob(native.photo_data_url),
-      photo_full: await dataUrlToBlob(native.photo_full_data_url || native.photo_data_url),
-      issue_type: "road_damage",
-      report_origin: "ai_detection",
-      is_reportable: assessment.reportable ? 1 : 0,
-      is_pothole: assessment.damage_type === "pothole_cavity" ? 1 : 0,
-      looks_like_speed_breaker: false,
-      damage_type: assessment.damage_type, assessment: assessment.assessment,
-      image_quality: assessment.image_quality,
-      defect_type: assessment.defect_type,
-      surface_type: assessment.surface_type,
-      measurement_provenance: assessment.measurement_provenance,
-      measurement_confidence: assessment.measurement_confidence,
-      measurement_length_cm: assessment.measurement_length_cm,
-      measurement_width_cm: assessment.measurement_width_cm,
-      measurement_depth_cm: assessment.measurement_depth_cm,
-      on_drivable_surface: assessment.on_drivable_surface,
-      has_localized_cavity: assessment.has_localized_cavity,
-      has_unambiguous_lower_interior: assessment.has_unambiguous_lower_interior,
-      has_broken_edge_or_rim: assessment.has_broken_edge_or_rim,
-      has_depth_or_surface_loss: assessment.has_depth_or_surface_loss,
-      temporal_consistency: assessment.temporal_consistency,
-      size: assessment.size, decision: native.decision || "accept",
-      description: assessment.description, email_subject: subject, email_body: body,
-      whatsapp_text: complaint ? complaint.whatsapp_text : null,
-      portal_fields: complaint ? complaint.portal_fields : null,
-      portal_copy_text: complaint ? complaint.portal_copy_text : null,
-      complaint_profile_id: complaint ? complaint.complaint_profile_id : null,
-      complaint_template_version: body ? COMPLAINT_TEMPLATE_VERSION : null,
-      status: covered ? "draft" : "unrouted",
-      condition_status: "open", condition_updated_at: null, condition_source: null,
-      detection_model: native.detection_model || S.model,
-      image_detail: native.image_detail || S.detail,
-      prompt_version: native.prompt_version || PROMPT_VERSION,
-      schema_version: Number(native.schema_version) || SCHEMA_VERSION,
-      evidence_count: Number(native.evidence_count) || 1,
-      unrouted_reason: covered ? null : (route.unrouted_reason || "outside_area"),
-      unrouted_body: covered ? null : (route.authority_name || null),
-      officer_name: covered ? (route.officer_name || null) : null,
-      officer_email: covered ? (route.officer_email || null) : null,
-      authority_id: covered ? (route.authority_id || null) : null,
-      authority_name: covered ? (route.authority_name || null) : null,
-      authority_registry_version: covered ? (route.authority_registry_version || null) : null,
-      delivery_channel: covered ? (route.delivery_channel || "email") : null,
-      ward_code: covered ? (route.ward_code || null) : null,
-      routing_source: covered ? (route.routing_source || null) : null,
-      routing_match_field: covered ? (route.routing_match_field || null) : null,
-      routing_match_value: covered ? (route.routing_match_value || null) : null,
-      highway_ref: covered ? (route.highway_ref || null) : null,
-      contract_state_code: covered ? (route.contract_state_code || null) : null,
-      routing_pack_id: covered ? (route.routing_pack_id || null) : null,
-      routing_pack_version: covered ? (route.routing_pack_version || null) : null,
-      routing_pack_sha256: covered ? (route.routing_pack_sha256 || null) : null,
-      routing_pack_state_code: covered ? (route.routing_pack_state_code || null) : null,
-      region: covered ? (route.region || null) : null,
-      ownership_unverified: covered ? !!route.ownership_unverified : null,
-      geographic_authority_id: complaint ? complaint.geographic_authority_id : null,
-      geographic_authority_name: complaint ? complaint.geographic_authority_name : null,
-      intake_authority_id: complaint ? complaint.intake_authority_id : null,
-      intake_authority_name: complaint ? complaint.intake_authority_name : null,
-      road_owner_id: complaint ? complaint.road_owner_id : null,
-      road_owner_name: complaint ? complaint.road_owner_name : null,
-      road_owner_status: complaint ? complaint.road_owner_status : null,
-      road_owner_evidence: complaint ? complaint.road_owner_evidence : null,
-      handoff_name: covered ? (route.handoff_name || null) : null,
-      handoff_url: covered ? (route.handoff_url || null) : null,
-      handoff_package: covered ? (route.handoff_package || null) : null,
-      alternate_handoff_name: covered ? (route.alternate_handoff_name || null) : null,
-      alternate_handoff_url: covered ? (route.alternate_handoff_url || null) : null,
-      whatsapp_url: covered ? (route.whatsapp_url || null) : null,
-      helpline: covered ? (route.helpline || null) : null,
-      requires_official_reference: covered ? !!route.requires_official_reference : false,
-      official_grievance_id: null, submitted_at: null,
-      tender_number: tender ? tender.tender_number : null,
-      tender_reference_label: tender ? (tender.reference_label || "Tender number") : null,
-      tender_title: tender ? tender.title : null,
-      contractor: tender ? tender.contractor : null,
-      tender_note: tender ? tender.note : null,
-      tender_published: tender ? tender.published : null,
-      tender_organisation: tender ? (tender.organisation || null) : null,
-      tender_detail_url: tender ? (tender.detail_url || null) : null,
-      tender_bid_closing: tender ? (tender.bid_closing || null) : null,
-      tender_bid_opening: tender ? (tender.bid_opening || null) : null,
-      tender_project_start: tender ? (tender.project_start || null) : null,
-      tender_project_completion: tender ? (tender.project_completion || null) : null,
-      tender_agreement_number: tender ? (tender.agreement_number || null) : null,
-      tender_agreement_date: tender ? (tender.agreement_date || null) : null,
-      tender_package_reference: tender ? (tender.package_reference || null) : null,
-      tender_highway_reference: tender ? (tender.highway_reference || null) : null,
-      tender_published_chainage: tender ? (tender.published_chainage || null) : null,
-      tender_road_from: tender ? (tender.road_from || null) : null,
-      tender_road_to: tender ? (tender.road_to || null) : null,
-      tender_source_name: tender ? tender.source_name : null,
-      tender_source_url: tender ? tender.source_url : null,
-      tender_lifecycle: tender ? (tender.lifecycle || null) : null,
-      tender_lifecycle_status: tender ? (tender.lifecycle_status || null) : null,
-      tender_match_basis: tender ? (tender.match_basis || null) : null,
-      tender_candidate_status: tender ? tender.candidate_status : null,
-      tender_scope_status: tender ? tender.scope_status : null,
-      tender_scope_verified: tender ? !!tender.scope_verified : false,
-      tender_segment_status: tender ? tender.segment_status : null,
-      tender_segment_verified: tender ? !!tender.segment_verified : false,
-      tender_award_status: tender ? tender.award_status : null,
-      tender_award_verified: tender ? !!tender.award_verified : false,
-      tender_dlp_status: tender ? tender.dlp_status : null,
-      tender_dlp_verified: tender ? !!tender.dlp_verified : false,
-      tender_responsibility_active_verified: tender
-        ? tender.responsibility_active_verified === true : false,
-      tender_responsibility_valid_from: tender ? (tender.responsibility_valid_from || null) : null,
-      tender_responsibility_valid_until: tender ? (tender.responsibility_valid_until || null) : null,
-      tender_responsible_authority_id: tender ? (tender.responsible_authority_id || null) : null,
-      tender_road_owner_id: tender ? (tender.road_owner_id || null) : null,
-      tender_verification_evidence: tender ? (tender.verification_evidence || null) : null,
-      tender_unambiguous: tender ? tender.unambiguous === true : false,
-      tender_pack_id: tender ? (tender.tender_pack_id || null) : null,
-      tender_pack_version: tender ? (tender.tender_pack_version || null) : null,
-      tender_pack_sha256: tender ? (tender.tender_pack_sha256 || null) : null,
-      tender_pack_state_code: tender ? (tender.tender_pack_state_code || null) : null,
-      sent_at: null, drive_id: driveId, capture_source: "drive_live",
-      source_event_key: sourceEventKey, source_event_keys: [sourceEventKey],
-      captured_at: Number.isFinite(capturedAt) ? capturedAt : null,
-      source_offset_s: Number.isFinite(offset) ? offset : null,
-      gps_accuracy: Number.isFinite(gpsAccuracy) ? gpsAccuracy : null,
-      speed_mps: Number.isFinite(speed) ? speed : null,
-      heading: Number.isFinite(heading) ? ((heading % 360) + 360) % 360 : null,
-      frame_quality: null, primary_frame_index: Number(native.primary_frame_index) || 0,
-      debug_capture: debug, dedupe_eligible: !debug,
-      event_sightings: [eventSighting({
-        drive_id: driveId, lat, lng,
-        source_offset_s: Number.isFinite(offset) ? offset : null,
-        captured_at: Number.isFinite(capturedAt) ? capturedAt : null,
-        gps_accuracy: Number.isFinite(gpsAccuracy) ? gpsAccuracy : null,
-        speed_mps: Number.isFinite(speed) ? speed : null,
-        heading: Number.isFinite(heading) ? heading : null,
-        source_event_key: sourceEventKey,
-      })],
-      sighting_drive_ids: driveId ? [driveId] : [], seen_count: 1,
-      last_seen_at: Number.isFinite(capturedAt) ? capturedAt : Date.now() / 1000,
-    };
-    const committed = await addReportUnlessDuplicate(rec, !debug);
-    return { native_id: nativeId, id: committed.duplicate ? committed.duplicate.id : committed.id,
-             duplicate: !!committed.duplicate };
-  }
-
-  async function evidenceForReport(rec) {
-    if (conditionStatus(rec) === "fixed") {
-      throw new Error("This pothole was verified fixed on a later drive, so its old complaint evidence is archival only.");
-    }
-    if (!rec || !ACCEPTED_REPORT_STATUSES.has(rec.status)) {
-      throw new Error("Only an accepted report has shareable evidence.");
-    }
-    rec = migrateLegacyComplaintRecord(rec);
-    const fullSource = fullFramePhoto(rec);
-    if (!fullSource) throw new Error("A complete full-frame evidence image is unavailable for this legacy report.");
-    const source = await dataUrlToBlob(fullSource);
-    const wideUrl = await toDataUrl(source, 1280, 0.86, false);
-    const base64 = wideUrl && wideUrl.split(",")[1];
-    if (!base64) throw new Error("The report photo could not be read.");
-    const safeId = String(rec.id || "report").replace(/[^a-zA-Z0-9_-]/g, "");
-    const recordedAt = Number.isFinite(rec.captured_at) ? rec.captured_at : rec.created_at;
-    const captured = new Date(recordedAt * 1000);
-    const when = Number.isNaN(captured.getTime()) ? "" : captured.toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "medium",
-    });
-    const issueStem = issueFileStem(rec.issue_type);
-    const evidenceBits = [
-      when ? `${rec.capture_source === "manual_import" ? "Selected photo file date"
-        : Number.isFinite(rec.captured_at) ? "Captured" : "Report created"} (IST): ${when}` : "",
-      rec.capture_source === "manual_import"
-        ? "Photo provenance: selected/imported by the user; original capture time unknown"
-        : rec.capture_source === "manual_camera"
-          ? "Photo provenance: app camera" : "",
-      Number.isFinite(rec.gps_accuracy) ? `GPS accuracy: ±${Math.round(rec.gps_accuracy)} m` : "",
-      rec.official_grievance_id
-        ? `User-entered grievance/reference ID: ${rec.official_grievance_id}` : "",
-    ].filter(Boolean);
-    const evidenceLine = evidenceBits.length ? `Evidence: ${evidenceBits.join("; ")}.` : "";
-    const bodyBlocks = String(rec.email_body || "").split(/\n{2,}/);
-    const hasFooter = bodyBlocks.length > 1
-      && /Pothole Reporter/.test(bodyBlocks[bodyBlocks.length - 1]);
-    const finalParagraph = hasFooter ? bodyBlocks.pop() : null;
-    const evidenceIndex = Math.max(0, bodyBlocks.length - 2);
-    if (evidenceLine) bodyBlocks.splice(evidenceIndex, 0, evidenceLine);
-    if (finalParagraph) bodyBlocks.push(finalParagraph);
-    const bodyWithEvidence = bodyBlocks.filter(Boolean).join("\n\n");
-    const meta = [
-      rec.email_subject || `${civicIssueName(rec.issue_type)} report`,
-      bodyWithEvidence,
-    ].filter(Boolean).join("\n\n");
-    return { name: `${issueStem}-${safeId}.jpg`, base64, text: meta };
-  }
-
-  const blobToDataUrl = async (v) => {
-    if (!v) return null;
-    if (typeof v === "string") return v;
-    return await new Promise((resolve, reject) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(String(fr.result));
-      fr.onerror = () => reject(fr.error || new Error("Could not read saved repair evidence."));
-      fr.readAsDataURL(v);
-    });
-  };
-
-  async function createCivicReport(fd) {
-    const issueType = String(fd.get("issue_type") || "");
-    if (!ISSUE_TYPE_SET.has(issueType) || issueType === "road_damage") {
-      throw new Error("Choose garbage or open/damaged manhole for a civic report.");
-    }
-    const photo = fd.get("photo");
-    if (!photo || !photo.size) throw new Error("Empty photo.");
-    const latRaw = fd.get("lat"), lngRaw = fd.get("lng");
-    const lat = latRaw != null && latRaw !== "" ? parseFloat(latRaw) : null;
-    const lng = lngRaw != null && lngRaw !== "" ? parseFloat(lngRaw) : null;
-    const gpsAccuracyRaw = parseFloat(fd.get("gps_accuracy"));
-    const speedRaw = parseFloat(fd.get("speed"));
-    const headingRaw = parseFloat(fd.get("heading"));
-    const capturedAtRaw = parseInt(fd.get("captured_at_ms"), 10);
-    const captureSource = normaliseManualCaptureSource(String(fd.get("capture_source") || ""));
-    const locationSource = String(fd.get("location_source") || "") || null;
-    const issueConfirmation = captureSource === "manual_camera"
-      ? "user_selected_before_capture" : "user_selected_for_import";
-
-    progress(pmsg("compress"));
-    const dataUrl = await toDataUrl(photo, 2000, 0.85, true);
-    progress(pmsg("finalize"));
-    const geo = lat != null ? await reverseGeocode(lat, lng).catch(() => null) : null;
-    const address = (geo && geo.short) || null;
-    const route = await routeOfficer(
-      geo || address, lat, lng, gpsAccuracyRaw, headingRaw, speedRaw, issueType);
-    const covered = !!route.routed;
-    progress(pmsg("write"));
-    const [subject, body] = covered
-      ? draftCivicComplaint(issueType, lat, lng, address, route.officer_name, route,
-          captureSource, locationSource)
-      : [null, null];
-    const capturedAt = Number.isFinite(capturedAtRaw) ? capturedAtRaw / 1000 : null;
-    const rec = {
-      created_at: Date.now() / 1000,
-      captured_at: capturedAt,
-      lat, lng, address,
-      photo: await dataUrlToBlob(dataUrl),
-      // Keep the original evidence even when routing is temporarily unavailable. The
-      // resized copy above is only for fast lists/previews; retrying must not depend on
-      // the user still having the source file.
-      photo_full: photo,
-      issue_type: issueType,
-      issue_confirmation: issueConfirmation,
-      report_origin: "user_reported",
-      is_reportable: 1,
-      is_pothole: 0,
-      damage_type: "none",
-      assessment: "manual",
-      image_quality: null,
-      on_drivable_surface: false,
-      has_localized_cavity: false,
-      has_unambiguous_lower_interior: false,
-      has_broken_edge_or_rim: false,
-      has_depth_or_surface_loss: false,
-      temporal_consistency: null,
-      size: null,
-      decision: "manual",
-      description: civicIssueName(issueType, LANG()),
-      email_subject: subject,
-      email_body: body,
-      complaint_template_version: body ? COMPLAINT_TEMPLATE_VERSION : null,
-      status: covered ? "draft" : "unrouted",
-      detection_model: null,
-      image_detail: null,
-      prompt_version: null,
-      schema_version: null,
-      evidence_count: 1,
-      unrouted_reason: covered ? null : (route.unrouted_reason || "outside_area"),
-      unrouted_body: covered ? null : (route.authority_name || null),
-      officer_name: covered ? (route.officer_name || null) : null,
-      officer_email: covered ? (route.officer_email || null) : null,
-      authority_id: covered ? (route.authority_id || null) : null,
-      authority_name: covered ? (route.authority_name || null) : null,
-      authority_registry_version: covered ? (route.authority_registry_version || null) : null,
-      delivery_channel: covered ? (route.delivery_channel || "email") : null,
-      ward_code: covered ? (route.ward_code || null) : null,
-      routing_source: covered ? (route.routing_source || null) : null,
-      routing_match_field: covered ? (route.routing_match_field || null) : null,
-      routing_match_value: covered ? (route.routing_match_value || null) : null,
-      highway_ref: null,
-      routing_pack_id: covered ? (route.routing_pack_id || null) : null,
-      routing_pack_version: covered ? (route.routing_pack_version || null) : null,
-      routing_pack_sha256: covered ? (route.routing_pack_sha256 || null) : null,
-      routing_pack_state_code: covered ? (route.routing_pack_state_code || null) : null,
-      region: covered ? (route.region || null) : null,
-      ownership_unverified: covered ? !!route.ownership_unverified : null,
-      handoff_name: covered ? (route.handoff_name || null) : null,
-      handoff_url: covered ? (route.handoff_url || null) : null,
-      handoff_package: covered ? (route.handoff_package || null) : null,
-      alternate_handoff_name: covered ? (route.alternate_handoff_name || null) : null,
-      alternate_handoff_url: covered ? (route.alternate_handoff_url || null) : null,
-      whatsapp_url: covered ? (route.whatsapp_url || null) : null,
-      helpline: covered ? (route.helpline || null) : null,
-      requires_official_reference: covered ? !!route.requires_official_reference : false,
-      official_grievance_id: null,
-      submitted_at: null,
-      tender_number: null,
-      tender_title: null,
-      contractor: null,
-      tender_note: null,
-      tender_pack_id: null,
-      tender_pack_version: null,
-      tender_pack_sha256: null,
-      tender_pack_state_code: null,
-      sent_at: null,
-      drive_id: null,
-      capture_source: captureSource,
-      location_source: locationSource,
-      capture_time_source: Number.isFinite(capturedAtRaw)
-        ? (captureSource === "manual_camera" ? "camera_return_time"
-          : captureSource === "manual_import" ? "file_last_modified" : "provided_time")
-        : null,
-      source_event_key: null,
-      source_event_keys: [],
-      source_offset_s: null,
-      gps_accuracy: Number.isFinite(gpsAccuracyRaw) ? gpsAccuracyRaw : null,
-      speed_mps: Number.isFinite(speedRaw) ? speedRaw : null,
-      heading: Number.isFinite(headingRaw) ? ((headingRaw % 360) + 360) % 360 : null,
-      frame_quality: null,
-      primary_frame_index: 0,
-      debug_capture: false,
-      dedupe_eligible: false,
-      event_sightings: [],
-      sighting_drive_ids: [],
-      seen_count: 1,
-      last_seen_at: capturedAt || Date.now() / 1000,
-    };
-    rec.id = await addReport(rec);
-    return toDict(rec);
-  }
-
-  async function retryCivicRouting(rec) {
-    if (!rec || rec.status !== "unrouted") {
-      throw new Error("Only an unrouted report can retry routing.");
-    }
-    const roadDamage = normaliseIssueType(rec.issue_type) === "road_damage";
-    if (!finiteCoord(rec.lat) || !finiteCoord(rec.lng)) {
-      throw new Error("This report has no stored coordinates. Retake it with location enabled.");
-    }
-    const retryableReasons = roadDamage
-      ? ["jurisdiction_unavailable", "road_class_unknown", "no_address_for_body"]
-      : ["jurisdiction_unavailable", "no_address_for_body"];
-    if (!retryableReasons.includes(rec.unrouted_reason)) {
-      throw new Error(
-        "Retry cannot change this saved location or issue category. Retake the report at the correct location instead."
-      );
-    }
-
-    const geo = await reverseGeocode(rec.lat, rec.lng).catch(() => null);
-    const address = (geo && geo.short) || rec.address || null;
-    const route = await routeOfficer(geo || address, rec.lat, rec.lng, rec.gps_accuracy,
-      rec.heading, rec.speed_mps, rec.issue_type);
-    rec.routing_retry_at = Date.now() / 1000;
-    rec.routing_retry_count = Math.max(0, Number(rec.routing_retry_count) || 0) + 1;
-    if (address) rec.address = address;
-
-    if (!route.routed) {
-      rec.unrouted_reason = route.unrouted_reason || rec.unrouted_reason || "outside_area";
-      rec.unrouted_body = route.authority_name || null;
-      await putReport(rec);
-      return toDict(rec);
-    }
-
-    applyRouteRecord(rec, route);
-    if (roadDamage) {
-      const tenderCandidate = canSearchTenderCatalog(route)
-        ? await matchTenderAt(rec.address, route, rec.lat, rec.lng).catch(() => null) : null;
-      const tender = normaliseTenderMatch(tenderCandidate, route);
-      applyTenderRecord(rec, tender);
-      const complaint = buildComplaintOutputs({
-        size: rec.size, surface_type: rec.surface_type,
-        measurement_provenance: rec.measurement_provenance,
-        measurement_confidence: rec.measurement_confidence,
-        description: rec.description,
-      }, rec.lat, rec.lng, rec.address, route.officer_name, tender, route, {
-        captured_at: rec.captured_at || rec.created_at,
-        gps_accuracy: rec.gps_accuracy,
-        photo_provenance: rec.capture_source === "manual_import"
-          ? "User-selected/imported photo" : "Pothole Reporter camera evidence",
-      });
-      Object.assign(rec, complaint);
-    } else {
-      const [subject, body] = draftCivicComplaint(rec.issue_type, rec.lat, rec.lng,
-        rec.address, route.officer_name, route, rec.capture_source, rec.location_source);
-      rec.email_subject = subject;
-      rec.email_body = body;
-    }
-    rec.complaint_template_version = COMPLAINT_TEMPLATE_VERSION;
-    rec.status = "draft";
-    rec.unrouted_reason = null;
-    rec.unrouted_body = null;
-    await putReport(rec);
-    return toDict(rec);
-  }
-
-  async function refreshAndPersistOfficialHandoff(rec) {
-    if (conditionStatus(rec) === "fixed") {
-      throw new Error("This pothole was verified fixed on a later drive, so its old handoff cannot be refreshed.");
-    }
-    const verified = await openOfficialHandoff(rec);
-    return mutateReportAtomically(rec.id, (current) => {
-      if (conditionStatus(current) === "fixed") {
-        throw new Error("This pothole was verified fixed on a later drive, so its old handoff cannot be refreshed.");
-      }
-      applyVerifiedHandoff(current, verified);
-    });
-  }
-
-  function getRepairTargetIds() {
-    return idb().then((d) => new Promise((resolve, reject) => {
-      const tx = d.transaction("reports", "readonly");
-      const ids = [];
-      let selectedBytes = 0;
-      let failure = null;
-      const scan = tx.objectStore("reports").openCursor(null, "prev");
-      scan.onsuccess = () => {
-        const cursor = scan.result;
-        if (!cursor || ids.length >= MAX_REPAIR_TARGETS) return;
-        const report = cursor.value;
-        const id = Number(report && report.id);
-        const photoBytes = repairTargetPhotoBytes(fullFramePhoto(report));
-        if (Number.isSafeInteger(id) && id > 0 && eligibleRepairTarget(report)
-            && Number.isFinite(photoBytes) && photoBytes > 0
-            && photoBytes <= MAX_REPAIR_TARGET_IMAGE_BYTES
-            && selectedBytes <= MAX_REPAIR_TARGET_TOTAL_BYTES - photoBytes) {
-          ids.push(id);
-          selectedBytes += photoBytes;
-        }
-        cursor.continue();
-      };
-      scan.onerror = () => { failure = scan.error; };
-      tx.oncomplete = () => failure ? reject(storageError(failure)) : resolve(ids);
-      const died = () => reject(storageError(failure || tx.error));
-      tx.onabort = died;
-      tx.onerror = () => {};
-    }));
-  }
-
-  async function getRepairTargetBatch(ids) {
-    if (!Array.isArray(ids) || !ids.length || ids.length > MAX_REPAIR_TARGET_BATCH_SIZE
-        || ids.some((id) => !Number.isSafeInteger(id) || id <= 0)
-        || new Set(ids).size !== ids.length) {
-      throw new Error("Repair target batch must contain one or two unique report ids.");
-    }
-    // At most two records and two photos exist in this call at any time.
-    const reports = await Promise.all(ids.map((id) => getReport(id)));
-    const targets = [];
-    for (let index = 0; index < ids.length; index++) {
-      const report = reports[index];
-      if (!report || Number(report.id) !== ids[index] || !eligibleRepairTarget(report)) {
-        throw new Error("Repair history changed while its native cache was being refreshed.");
-      }
-      const photoBytes = repairTargetPhotoBytes(fullFramePhoto(report));
-      if (!Number.isFinite(photoBytes) || photoBytes <= 0
-          || photoBytes > MAX_REPAIR_TARGET_IMAGE_BYTES) {
-        throw new Error("A repair target photo exceeds the 4 MB native cache limit.");
-      }
-      targets.push({
-        id: report.id,
-        lat: report.lat,
-        lng: report.lng,
-        gps_accuracy: report.gps_accuracy,
-        heading: Number.isFinite(report.heading) ? report.heading : null,
-        capture_source: report.capture_source || null,
-        photo_data_url: await blobToDataUrl(fullFramePhoto(report)),
-        last_damage_observed_at: eventTime(report),
-        damage_type: storedDamageType(report),
-        condition_status: conditionStatus(report),
-      });
-    }
-    return targets;
-  }
-
-  function repairConditionFor(observation) {
-    if (!observation || observation.current_condition !== "repaired"
-        || observation.same_location_visible !== true
-        || observation.completed_repair_visible !== true
-        || observation.image_quality !== "usable") return null;
-    if (observation.assessment === "clear") return "fixed";
-    if (observation.assessment === "probable") return "repair_review";
-    return null;
-  }
-
-  async function findRepairCandidate(observation) {
-    if (!observation || !finiteCoord(observation.lat) || !finiteCoord(observation.lng)) return null;
-    const latitudeBand = REPAIR_RADIUS_M / 110900;
-    const nearby = await op("readonly", (store) => store.index("by_lat").getAll(
-      IDBKeyRange.bound(observation.lat - latitudeBand, observation.lat + latitudeBand)));
-    return findRepairCandidateFromReports(observation, nearby);
-  }
-
-  const REPAIR_PROMPT = `Compare a saved pothole photograph with new road views from a later live drive.
-
-Image 1 is the older saved road-damage evidence. Image 2 is the current full-frame context. Every remaining image is a complete current camera frame in chronological order. No current image is cropped, tiled, masked, or limited to a region of interest.
-
-This is a strict before/after verification, not ordinary pothole detection:
-- Set same_location_visible true only when stable road geometry and surrounding features show that the old damaged footprint itself is visible in the current views. Nearby clean asphalt, a different lane, or a similar-looking road is not the same footprint.
-- Set completed_repair_visible true only when that exact old footprint is now covered by completed, intact asphalt, concrete, or a sealed level patch on the drivable surface.
-- The absence of a visible cavity is never repair evidence by itself. Blur, distance, glare, traffic, water, occlusion, a changed viewpoint, or failure to locate the old footprint must produce current_condition uncertain or not_visible.
-- Use still_damaged if the old defect or a failed repair remains visible.
-- Use repaired only when the same footprint and the completed intact repair are both clear. Do not infer repairs from time, GPS, or a generally smooth road.
-- description must state the stable same-place cues and the visible repair material, or state why verification is inconclusive.`;
-
-  const REPAIR_SCHEMA = {
-    type: "object", additionalProperties: false,
-    required: ["same_location_visible", "completed_repair_visible", "current_condition",
-      "assessment", "image_quality", "description"],
-    properties: {
-      same_location_visible: { type: "boolean" },
-      completed_repair_visible: { type: "boolean" },
-      current_condition: { type: "string",
-        enum: ["repaired", "still_damaged", "not_visible", "uncertain"] },
-      assessment: { type: "string", enum: ["clear", "probable", "uncertain"] },
-      image_quality: { type: "string", enum: ["usable", "degraded", "unusable"] },
-      description: { type: "string" },
-    },
-  };
-
-  const REPAIR_SCHEMA_VERSION = 1;
-
-  // Restored from the last coherent production file: the v1.38 merge dropped these
-  // definitions while their call sites stayed, so these paths threw on first use.
-  const MAX_REPAIR_TARGETS = 2000;
-
-  function applyRouteRecord(rec, route) {
-    for (const field of ROUTE_RECORD_FIELDS) {
-      rec[field] = route[field] === undefined ? null : route[field];
-    }
-  }
-
-  function fullFramePhoto(report) {
-    if (!report) return null;
-    if (report.photo_full) return report.photo_full;
-    if (isManualCaptureSource(report.capture_source)) return report.photo || null;
-    // v13 is the first Drive contract that guarantees every working and evidence image is
-    // a complete frame. v16 remains valid after the confirmation-policy upgrade.
-    // Older Web Drive rows may store a crop in `photo`, so fail closed.
-    return (report.prompt_version === PROMPT_VERSION
-      || report.prompt_version === LEGACY_NATIVE_V16_PROMPT_VERSION
-      || report.prompt_version === LEGACY_NATIVE_V15_PROMPT_VERSION
-      || report.prompt_version === LEGACY_NATIVE_V13_PROMPT_VERSION)
-      ? report.photo || null : null;
-  }
-
-  async function matchTenderAt(address, route, lat, lng, provisional = null) {
-    if (!canSearchTenderCatalog(route)) return null;
-    const lower = startLowerCatalogMatches(address, route);
-    const highwayP = route.region === "national-highway"
-      ? optionalCatalogResult(matchHighwayContract(address, route)) : Promise.resolve(null);
-    const karnatakaP = provisional ? optionalCatalogResult(provisional)
-      : (route.routing_pack_state_code === "KA" || route.contract_state_code === "KA")
-        ? optionalCatalogResult((async () => {
-        const where = await jurisdictionOf(lat, lng);
-        return where && where.kind === "town" && where.lgd
-          ? matchTender(address, where.lgd) : null;
-      })()) : Promise.resolve(null);
-    const highway = await highwayP;
-    if (highway) return highway;
-    const karnataka = await karnatakaP;
-    if (karnataka) return karnataka;
-    return preferredLowerCatalogMatch(lower);
-  }
-
-  // Restored from the last coherent production file: the v1.38 merge dropped these
-  // definitions while their call sites stayed, so these paths threw on first use.
-  const MAX_REPAIR_TARGET_BATCH_SIZE = 2;
-
-  const MAX_REPAIR_TARGET_IMAGE_BYTES = 4 * 1024 * 1024;
-
-  const MAX_REPAIR_TARGET_TOTAL_BYTES = 512 * 1024 * 1024;
-
-  const TEMPORARY_DRIVABLE_SURFACE = "temporary_drivable_surface";
-
-  function applyTenderRecord(rec, tender) {
-    for (const [recordField, tenderField] of Object.entries(TENDER_RECORD_FIELDS)) {
-      rec[recordField] = tender && tender[tenderField] !== undefined
-        ? tender[tenderField] : null;
-    }
-    rec.tender_scope_verified = !!(tender && tender.scope_verified);
-    rec.tender_segment_verified = !!(tender && tender.segment_verified);
-    rec.tender_award_verified = !!(tender && tender.award_verified);
-    rec.tender_dlp_verified = !!(tender && tender.dlp_verified);
-    rec.tender_responsibility_active_verified = !!(
-      tender && tender.responsibility_active_verified);
-    rec.tender_unambiguous = !!(tender && tender.unambiguous);
-  }
-
-  function applyVerifiedHandoff(rec, verified) {
-    for (const field of VERIFIED_HANDOFF_FIELDS) {
-      rec[field] = verified[field] === undefined ? null : verified[field];
-    }
-    refreshGeneratedComplaintFields(rec);
-    return rec;
-  }
-
-  async function decodeRepairEvidence(value) {
-    let blob = null;
-    if (typeof Blob !== "undefined" && value instanceof Blob) {
-      blob = value;
-    } else if (typeof value === "string"
-        && /^data:image\/(?:jpeg|png|webp);base64,/i.test(value)) {
-      try {
-        const response = await fetch(value);
-        if (!response.ok) return null;
-        blob = await response.blob();
-      } catch (_) { return null; }
-    }
-    const type = String(blob && blob.type || "").toLowerCase();
-    if (!blob || blob.size < REPAIR_EVIDENCE_MIN_BYTES || blob.size > REPAIR_EVIDENCE_MAX_BYTES
-        || !REPAIR_EVIDENCE_TYPES.has(type)) return null;
-    let header;
-    try { header = new Uint8Array(await blob.slice(0, 12).arrayBuffer()); }
-    catch (_) { return null; }
-    const jpeg = header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
-    const png = header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4e
-      && header[3] === 0x47 && header[4] === 0x0d && header[5] === 0x0a
-      && header[6] === 0x1a && header[7] === 0x0a;
-    const webp = header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46
-      && header[3] === 0x46 && header[8] === 0x57 && header[9] === 0x45
-      && header[10] === 0x42 && header[11] === 0x50;
-    if ((type === "image/jpeg" && !jpeg) || (type === "image/png" && !png)
-        || (type === "image/webp" && !webp)) return null;
-    let width = 0, height = 0;
-    if (typeof createImageBitmap === "function") {
-      let bitmap = null;
-      try {
-        bitmap = await createImageBitmap(blob);
-        width = bitmap.width; height = bitmap.height;
-      } catch (_) { return null; }
-      finally { if (bitmap && bitmap.close) bitmap.close(); }
-    } else {
-      const url = URL.createObjectURL(blob);
-      try {
-        const dimensions = await new Promise((resolve, reject) => {
-          const img = new Image();
-          img.onload = () => resolve([img.naturalWidth, img.naturalHeight]);
-          img.onerror = () => reject(new Error("Repair evidence is not a decodable image."));
-          img.src = url;
-        });
-        width = dimensions[0]; height = dimensions[1];
-      } catch (_) { return null; }
-      finally { URL.revokeObjectURL(url); }
-    }
-    if (!Number.isInteger(width) || !Number.isInteger(height)
-        || width < REPAIR_EVIDENCE_MIN_DIMENSION || height < REPAIR_EVIDENCE_MIN_DIMENSION
-        || width > REPAIR_EVIDENCE_MAX_DIMENSION || height > REPAIR_EVIDENCE_MAX_DIMENSION
-        || width * height > REPAIR_EVIDENCE_MAX_PIXELS) return null;
-    return blob;
-  }
-
-  function eligibleRepairTarget(report) {
-    if (!acceptedReport(report) || conditionStatus(report) === "fixed"
-        || report.debug_capture || report.dedupe_eligible === false || !fullFramePhoto(report)
-        || report.capture_source === "manual_import"
-        || !finiteCoord(report.lat) || !finiteCoord(report.lng)
-        || !Number.isFinite(eventTime(report))
-        || !Number.isFinite(report.gps_accuracy) || report.gps_accuracy < 0
-        || report.gps_accuracy > REPAIR_MAX_ACCURACY_M) return false;
-    return normaliseIssueType(report.issue_type) === "road_damage";
-  }
-
-  const normaliseManualCaptureSource = (value) => value === "manual_camera"
-    ? "manual_camera" : value === "manual_import" ? "manual_import" : "manual";
-
-  async function openOfficialHandoff(rec) {
-    if (conditionStatus(rec) === "fixed") {
-      throw new Error("This pothole was verified fixed on a later drive, so its old handoff cannot be opened.");
-    }
-    if (!isOfficialHandoff(rec)) throw new Error("This report has no official app or portal handoff.");
-    // v1.14 BMC records did not persist pack metadata. Keep them usable, but never trust
-    // the URL saved in the report: reload the current app-pinned pack and find the same
-    // stable authority ID inside its freshly validated registry.
-    const legacyBmc = rec.delivery_channel === "bmc_quickfix";
-    const authorityId = legacyBmc ? "mh-bmc" : rec.authority_id;
-    if (authorityId === "in-national-highway") {
-      return openNationalHighwayHandoff(rec);
-    }
-    if (normaliseIssueType(rec.issue_type) === "road_damage") {
-      const highway = await nationalHighwayRoute(
-        rec.lat, rec.lng, rec.gps_accuracy, rec.heading, rec.speed_mps);
-      if (highway && highway.routed !== true) {
-        throw new Error(
-          "The road class is currently uncertain at this coordinate, so the app will not open a possibly wrong civic route. Try again with routing data available."
-        );
-      }
-      if (highway && highway.authority_id === "in-national-highway") {
-        const geo = await reverseGeocode(rec.lat, rec.lng).catch(() => null);
-        const stateHint = stateCodeForGeocode(geo)
-          || (/^[A-Z]{2}$/.test(String(rec.routing_pack_state_code || ""))
-            ? rec.routing_pack_state_code : null);
-        const contractStateCode = await exactPinnedContractStateCode(
-          stateHint, rec.lat, rec.lng, rec.gps_accuracy);
-        return routeForIssue({
-          ...toDict(rec), ...highway,
-          contract_state_code: contractStateCode,
-          tender_eligible: !!contractStateCode,
-        }, rec.issue_type);
-      }
-    }
-    if (/^ka-lgd-[0-9]+$/.test(String(authorityId || ""))) {
-      return openBengaluruHandoff(rec);
-    }
-    if (authorityId === "in-tn-cm-helpline") {
-      const migrated = await migrateLegacyTamilNaduHandoff(rec);
-      if (!migrated) {
-        throw new Error("This saved Tamil Nadu report could not be safely upgraded to the current state route.");
-      }
-      return migrated;
-    }
-    if (authorityId === "in-ap-puramithra") {
-      const migrated = await migrateLegacyAndhraPradeshHandoff(rec);
-      if (!migrated) {
-        throw new Error("This saved Andhra Pradesh report could not be safely upgraded to the current state route.");
-      }
-      return migrated;
-    }
-    const packId = routingPackForAuthority(authorityId, rec.routing_pack_id || null);
-    if (rec.routing_pack_id && rec.routing_pack_id !== packId) {
-      throw new Error("This saved report's authority does not match its verified routing provenance.");
-    }
-    const pack = packId ? await loadStatePack(packId) : null;
-    const current = pack && Array.isArray(pack.authorities)
-      ? pack.authorities.find((authority) => authority.id === authorityId) : null;
-    if (!current) {
-      throw new Error("This saved report's verified official handoff is unavailable. Connect and try again.");
-    }
-    const binding = await savedOfficialRouteBinding(rec, packId, authorityId, pack);
-    if (!binding) {
-      throw new Error("This saved report's authority does not match its verified routing provenance.");
-    }
-    const verified = routeForIssue({
-      ...toDict(rec),
-      officer_name: `${current.handoff_name}, ${current.name}`,
-      authority_id: current.id,
-      authority_name: current.name,
-      authority_registry_version: AUTHORITY_REGISTRY_VERSION,
-      routing_source: rec.routing_source || binding.routing_source,
-      region: binding.region,
-      handoff_name: current.handoff_name,
-      handoff_url: current.handoff_url,
-      handoff_package: current.handoff_package || null,
-      alternate_handoff_name: current.alternate_handoff_name || null,
-      alternate_handoff_url: current.alternate_handoff_url || null,
-      whatsapp_url: current.whatsapp_url || null,
-      helpline: current.helpline || null,
-      requires_official_reference: true,
-      ownership_unverified: true,
-      tender_eligible: false,
-      ...statePackProvenance(packId),
-    }, rec.issue_type);
-    if (!verified.handoff_url || !String(verified.handoff_url).startsWith("https://")) {
-      throw new Error("The verified official handoff for this saved report is unavailable.");
-    }
-    return verified;
-  }
-
-  const repairProvenanceIsExact = (observation) => {
-    if (!observation || typeof observation !== "object") return false;
-    const model = observation.detection_model;
-    const detail = observation.image_detail;
-    return typeof model === "string" && model.length > 0 && ALLOWED_MODELS.has(model)
-      && typeof detail === "string" && detail.length > 0 && ALLOWED_DETAILS.has(detail)
-      && normaliseDetail(detail, model) === detail
-      && typeof observation.description === "string"
-      && observation.description.trim().length > 0
-      && observation.prompt_version === REPAIR_PROMPT_VERSION
-      && Number.isInteger(observation.schema_version)
-      && observation.schema_version === REPAIR_SCHEMA_VERSION;
-  };
-
-  function repairTargetPhotoBytes(photo) {
-    if (typeof photo === "string") {
-      const match = photo.match(/^data:image\/(?:jpeg|jpg|png|webp|gif);base64,([A-Za-z0-9+/]*={0,2})$/i);
-      if (!match) return NaN;
-      const payload = match[1];
-      const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
-      return Math.floor(payload.length * 3 / 4) - padding;
-    }
-    return photo && Number.isFinite(photo.size) ? Number(photo.size) : NaN;
-  }
-
-  // Restored from the last coherent production file: the v1.38 merge dropped these
-  // definitions while their call sites stayed, so these paths threw on first use.
-  const REPAIR_EVIDENCE_MAX_BYTES = 8 * 1024 * 1024;
-
-  const REPAIR_EVIDENCE_MAX_DIMENSION = 8192;
-
-  const REPAIR_EVIDENCE_MAX_PIXELS = 40 * 1024 * 1024;
-
-  const REPAIR_EVIDENCE_MIN_BYTES = 256;
-
-  const REPAIR_EVIDENCE_MIN_DIMENSION = 32;
-
-  const REPAIR_EVIDENCE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-
-  const REPAIR_PROMPT_VERSION = "road-repair-v1";
-
-  const VERIFIED_HANDOFF_FIELDS = [
-    "officer_name", "authority_id", "authority_name", "authority_registry_version",
-    "routing_source", "region", "handoff_name", "handoff_url", "handoff_package",
-    "alternate_handoff_name", "alternate_handoff_url", "whatsapp_url", "helpline",
-    "requires_official_reference", "routing_pack_id", "routing_pack_version",
-    "routing_pack_sha256", "routing_pack_state_code", "routing_match_field",
-    "routing_match_value", "highway_ref", "contract_state_code",
-    "ownership_unverified", "tender_eligible",
-    "geographic_authority_id", "geographic_authority_name",
-    "intake_authority_id", "intake_authority_name",
-    "road_owner_id", "road_owner_name", "road_owner_status", "road_owner_evidence",
-  ];
-
-  const isOfficialHandoff = (rec) => !!rec && OFFICIAL_HANDOFF_CHANNELS.has(rec.delivery_channel);
-
-  async function matchHighwayContract(address, route) {
-    const stateCode = route && route.contract_state_code;
-    if (!route || route.region !== "national-highway" || route.tender_eligible !== true
-        || !stateCode || !route.highway_ref) return null;
-    const pack = await loadHighwayContractPack(stateCode);
-    const ranked = highwayContractCandidates(pack && pack.contracts, route.highway_ref, address);
-    if (!ranked.length) return null;
-    const { record, matching_refs: matchingRefs, locality_hits: localityHits } = ranked[0];
-    const lifecycleNote = record.lifecycle === "procurement_notice"
-      ? "Open procurement notice; no contractor or award is asserted"
-      : `Official project lifecycle: ${record.lifecycle_status}`;
-    return {
-      tender_number: record.reference_value,
-      reference_label: record.reference_label,
-      contractor: record.contractor,
-      title: record.title,
-      published: record.published_at || record.start_date,
-      source_name: record.source_name,
-      source_url: record.source_url,
-      lifecycle: record.lifecycle,
-      lifecycle_status: record.lifecycle_status,
-      match_basis: `State/UT ${stateCode}; mapped ${matchingRefs.join(" / ")}`
-        + (localityHits.length ? `; title/address ${localityHits.join(", ")}` : ""),
-      candidate_status: "candidate",
-      scope_status: "carriageway_scope_present",
-      scope_verified: true,
-      // The source publishes a highway/package chainage, but the OSM route geometry has
-      // no authoritative chainage origin. Do not claim this GPS point lies in that range.
-      segment_status: "unverified_chainage",
-      segment_verified: false,
-      award_status: record.award_verified ? "verified_by_source_record" : "unverified",
-      award_verified: record.award_verified,
-      dlp_status: "unverified",
-      dlp_verified: false,
-      note: `${record.reference_label}: ${record.reference_value}. ${lifecycleNote}.`,
-      ...contractPackProvenance(stateCode),
-    };
-  }
-
-  async function migrateLegacyAndhraPradeshHandoff(rec) {
-    const region = rec && LEGACY_ANDHRA_PRADESH_TOP50_REGIONS[rec.region];
-    const match = String(rec && rec.routing_match_value || "")
-      .match(/^(city|municipality): (.+)$/);
-    const aliases = region && new Set(region.aliases.map(normaliseAuthorityValue));
-    if (!region || !match || !aliases.has(normaliseAuthorityValue(match[2]))
-        || rec.authority_id !== "in-ap-puramithra"
-        || rec.routing_pack_id !== "in-top50-routing"
-        || rec.routing_pack_version !== 1
-        || rec.routing_pack_sha256 !== LEGACY_ANDHRA_PRADESH_TOP50_SHA256
-        || rec.routing_pack_state_code !== "IN"
-        || rec.routing_source !== "nominatim_structured_city"
-        || rec.routing_match_field !== "structured_place"
-        || !Number.isFinite(rec.lat) || !Number.isFinite(rec.lng)
-        || !Number.isFinite(rec.gps_accuracy) || rec.gps_accuracy < 0
-        || rec.gps_accuracy > 30
-        || !accuracyCircleWithinEnvelope(
-          rec.lat, rec.lng, rec.gps_accuracy, region.envelope)) {
-      return null;
-    }
-    const current = await andhraPradeshRouteFromGeocode(
-      null, rec.lat, rec.lng, rec.gps_accuracy);
-    if (!current || !current.routed
-        || current.authority_id !== "ap-statewide-unverified"
-        || current.routing_pack_id !== "in-ap-routing") return null;
-    return routeForIssue({ ...toDict(rec), ...current }, rec.issue_type);
-  }
-
-  async function migrateLegacyTamilNaduHandoff(rec) {
-    const region = rec && LEGACY_TAMIL_NADU_TOP50_REGIONS[rec.region];
-    const match = String(rec && rec.routing_match_value || "")
-      .match(/^(city|municipality): (.+)$/);
-    const aliases = region && new Set(region.aliases.map(normaliseAuthorityValue));
-    if (!region || !match || !aliases.has(normaliseAuthorityValue(match[2]))
-        || rec.authority_id !== "in-tn-cm-helpline"
-        || rec.routing_pack_id !== "in-top50-routing"
-        || rec.routing_pack_version !== 1
-        || rec.routing_pack_sha256 !== LEGACY_TAMIL_NADU_TOP50_SHA256
-        || rec.routing_pack_state_code !== "IN"
-        || rec.routing_source !== "nominatim_structured_city"
-        || rec.routing_match_field !== "structured_place"
-        || !Number.isFinite(rec.lat) || !Number.isFinite(rec.lng)
-        || !Number.isFinite(rec.gps_accuracy) || rec.gps_accuracy < 0
-        || rec.gps_accuracy > 30
-        || !accuracyCircleWithinEnvelope(
-          rec.lat, rec.lng, rec.gps_accuracy, region.envelope)) {
-      return null;
-    }
-    const current = await tamilNaduRouteFromGeocode(
-      null, rec.lat, rec.lng, rec.gps_accuracy);
-    if (!current || !current.routed
-        || current.authority_id !== "tn-statewide-unverified"
-        || current.routing_pack_id !== "in-tn-state-routing") return null;
-    return routeForIssue({ ...toDict(rec), ...current }, rec.issue_type);
-  }
-
-  async function openBengaluruHandoff(rec) {
-    if (normaliseIssueType(rec && rec.issue_type) === "road_damage") {
-      throw new Error("Bengaluru road reports use the verified municipal email route.");
-    }
-    const match = String(rec.authority_id || "").match(/^ka-lgd-([0-9]+)$/);
-    if (!match || rec.routing_pack_id !== "in-ka-routing"
-        || rec.routing_pack_state_code !== "KA"
-        || rec.routing_match_field !== "lgd"
-        || String(rec.routing_match_value || "") !== match[1]) {
-      throw new Error("This saved Bengaluru report has incomplete routing provenance.");
-    }
-    const pack = await loadStatePack("in-ka-routing");
-    const entry = pack && pack.payload && pack.payload.bodies
-      ? pack.payload.bodies[match[1]] : null;
-    if (!entry || !BENGALURU_AUTHORITY_NAMES.has(normaliseAuthorityValue(entry.name))
-        || normaliseAuthorityValue(rec.authority_name) !== normaliseAuthorityValue(entry.name)) {
-      throw new Error("This saved report no longer matches a verified Bengaluru civic body.");
-    }
-    // Re-check the live civic boundary before launching the generic city service. This
-    // prevents a locally altered saved record from borrowing a Bengaluru handoff while
-    // retaining unrelated coordinates or another body's LGD code.
-    const current = await kgisCivicJurisdiction(rec.lat, rec.lng);
-    if (!current || current.kind !== "town" || String(current.lgd || "") !== match[1]) {
-      throw new Error("This saved report no longer matches the Bengaluru civic jurisdiction.");
-    }
-    const verified = routeForIssue({
-      ...toDict(rec),
-      routed: true,
-      officer_name: `Civic complaint desk, ${entry.name}`,
-      officer_email: entry.email,
-      authority_id: `ka-lgd-${match[1]}`,
-      authority_name: entry.name,
-      authority_registry_version: AUTHORITY_REGISTRY_VERSION,
-      delivery_channel: "email",
-      region: "karnataka",
-      routing_source: "kgis",
-      routing_match_field: "lgd",
-      routing_match_value: match[1],
-      ownership_unverified: true,
-      requires_official_reference: false,
-      tender_eligible: true,
-      ...statePackProvenance("in-ka-routing"),
-    }, rec.issue_type);
-    if (!verified.handoff_url || !verified.handoff_url.startsWith("https://")) {
-      throw new Error("The verified Bengaluru official handoff is unavailable.");
-    }
-    return verified;
-  }
-
-  async function openNationalHighwayHandoff(rec) {
-    if (!rec || rec.authority_id !== "in-national-highway") {
-      throw new Error("This report is not bound to the National Highway handoff.");
-    }
-    const provenance = ["routing_pack_id", "routing_pack_version", "routing_pack_sha256",
-      "routing_pack_state_code"];
-    const present = provenance.filter((field) => rec[field] !== undefined
-      && rec[field] !== null && rec[field] !== "");
-    if (present.length !== provenance.length
-        || !/^in-nh-e[0-9]{3}n[0-9]{2}$/.test(String(rec.routing_pack_id || ""))
-        || rec.routing_pack_state_code !== "IN"
-        || !Number.isInteger(rec.routing_pack_version) || rec.routing_pack_version < 1
-        || !/^[0-9a-f]{64}$/.test(String(rec.routing_pack_sha256 || ""))) {
-      throw new Error("This saved highway report has incomplete routing provenance.");
-    }
-    const current = await nationalHighwayRoute(
-      rec.lat, rec.lng, rec.gps_accuracy, rec.heading, rec.speed_mps);
-    if (!current || !current.routed || current.authority_id !== "in-national-highway"
-        || current.region !== "national-highway" || !current.highway_ref) {
-      throw new Error("This saved report no longer matches a verified National Highway tile.");
-    }
-    const oldRefs = new Set(String(rec.highway_ref || "").split(" / ").filter(Boolean));
-    const currentRefs = String(current.highway_ref).split(" / ").filter(Boolean);
-    if (oldRefs.size && !currentRefs.some((ref) => oldRefs.has(ref))) {
-      throw new Error("This saved report's highway reference changed; review the location again.");
-    }
-    return {
-      ...toDict(rec), ...current,
-      contract_state_code: rec.contract_state_code || null,
-      tender_eligible: !!rec.contract_state_code,
-    };
-  }
-
-  async function preferredLowerCatalogMatch(matches) {
-    const agreement = await matches.agreement;
-    return agreement || await matches.notice;
-  }
-
-  function routingPackForAuthority(authorityId, preferredPackId = null) {
-    const id = String(authorityId || "");
-    if (PACK_ID_BY_AUTHORITY.has(id)) {
-      const installed = PACK_ID_BY_AUTHORITY.get(id);
-      if (preferredPackId && installed.has(preferredPackId)) return preferredPackId;
-      if (installed.size === 1) return [...installed][0];
-      return null;
-    }
-    const match = id.match(/^([a-z]{2})-/);
-    if (!match) return null;
-    const stateCode = match[1].toUpperCase();
-    const candidates = Object.entries(SUPPORTED_STATE_PACKS)
-      .filter(([, spec]) => spec.kind === "routing" && spec.state_code === stateCode)
-      .map(([packId]) => packId);
-    if (preferredPackId && candidates.includes(preferredPackId)) return preferredPackId;
-    return candidates.length === 1 ? candidates[0] : null;
-  }
-
-  async function savedOfficialRouteBinding(rec, packId, authorityId, pack) {
-    const binding = currentOfficialRouteBinding(packId, authorityId, pack, rec.region);
-    if (!binding) return null;
-    const provenanceFields = [
-      "routing_pack_id", "routing_pack_version", "routing_pack_sha256",
-      "routing_pack_state_code",
-    ];
-    const present = provenanceFields.filter((field) => rec[field] !== undefined
-      && rec[field] !== null && rec[field] !== "");
-    // Old reports predate pack provenance and are upgraded after validation. Newer
-    // records must retain the complete binding; a partial mix is not trustworthy.
-    if (present.length && present.length !== provenanceFields.length) return null;
-    const municipal = MUNICIPAL_CITY_CONFIGS[packId];
-    if (municipal && present.length !== provenanceFields.length) return null;
-    const newNeutralRoute = packId === "in-pb-routing"
-      || packId === "in-tn-state-routing" || packId === "in-ap-routing"
-      || packId === "in-tg-state-routing" || packId === "in-ka-state-routing"
-      || packId === "in-kl-routing" || packId === "in-up-routing"
-      || packId === "in-cg-routing" || packId === "in-rj-routing"
-      || packId === "in-ga-routing" || packId === "in-mp-routing"
-      || packId === "in-br-routing" || packId === "in-od-routing"
-      || packId === "in-top50-routing"
-      || !!REMAINING_STATE_ROUTE_CONFIGS[packId];
-    if (newNeutralRoute && present.length !== provenanceFields.length) return null;
-    // The statewide West Bengal route did not exist before this pack release, so there
-    // is no legitimate provenance-free legacy record to upgrade.
-    if (authorityId === "wb-statewide-unverified"
-        && present.length !== provenanceFields.length) return null;
-    if (present.length) {
-      const resource = _statePackManifest && _statePackManifest.resources
-        && _statePackManifest.resources[packId];
-      if (!resource || rec.routing_pack_id !== packId
-          || rec.routing_pack_state_code !== resource.state_code
-          || !Number.isInteger(rec.routing_pack_version) || rec.routing_pack_version < 1
-          || rec.routing_pack_version > resource.pack_version
-          || !/^[0-9a-f]{64}$/.test(String(rec.routing_pack_sha256 || ""))) {
-        return null;
-      }
-      if (newNeutralRoute && (rec.routing_pack_version !== resource.pack_version
-          || rec.routing_pack_sha256 !== resource.sha256)) return null;
-      const digestOwner = Object.values(_statePackManifest.resources)
-        .find((item) => item.sha256 === rec.routing_pack_sha256);
-      if (digestOwner && digestOwner.pack_id !== packId) return null;
-    }
-    if (rec.region && rec.region !== binding.region) return null;
-    if (newNeutralRoute && rec.region !== binding.region) return null;
-    const remaining = REMAINING_STATE_ROUTE_CONFIGS[packId];
-    if (remaining
-        && (rec.routing_source !== remaining.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== `${remaining.name} (OpenStreetMap relation ${remaining.relation_id})`)) {
-      return null;
-    }
-    if (packId === "in-wb-routing" && rec.routing_source
-        && rec.routing_source !== binding.routing_source) return null;
-    if (packId === "in-wb-routing" && rec.routing_match_field
-        && rec.routing_match_field !== "boundary") return null;
-    if (authorityId === "wb-kmc" && rec.routing_match_value
-        && rec.routing_match_value !== "wb_municipal_boundary:250299_0000001") return null;
-    if (authorityId === "wb-statewide-unverified"
-        && (rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "West Bengal (OpenStreetMap relation 1960177)")) {
-      return null;
-    }
-    if (packId === "in-pb-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Punjab (OpenStreetMap relation 1942686)")) {
-      return null;
-    }
-    if (packId === "in-tn-state-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Tamil Nadu (OpenStreetMap relation 96905)")) {
-      return null;
-    }
-    if (packId === "in-ap-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Andhra Pradesh (OpenStreetMap relation 2022095)")) {
-      return null;
-    }
-    if (packId === "in-tg-state-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Telangana (OpenStreetMap relation 3250963)")) {
-      return null;
-    }
-    if (packId === "in-ka-state-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Karnataka (OpenStreetMap relation 2019939)")) {
-      return null;
-    }
-    if (packId === "in-kl-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Kerala (OpenStreetMap relation 2018151)")) {
-      return null;
-    }
-    if (packId === "in-up-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Uttar Pradesh (OpenStreetMap relation 1942587)")) {
-      return null;
-    }
-    if (packId === "in-cg-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Chhattisgarh (OpenStreetMap relation 1972004)")) {
-      return null;
-    }
-    if (packId === "in-rj-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Rajasthan (OpenStreetMap relation 1942920)")) {
-      return null;
-    }
-    if (packId === "in-ga-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Goa (OpenStreetMap relation 11251493)")) {
-      return null;
-    }
-    if (packId === "in-mp-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Madhya Pradesh (OpenStreetMap relation 1950071)")) {
-      return null;
-    }
-    if (packId === "in-br-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Bihar (OpenStreetMap relation 1958982)")) {
-      return null;
-    }
-    if (packId === "in-od-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "boundary"
-          || rec.routing_match_value !== "Odisha (OpenStreetMap relation 1984022)")) {
-      return null;
-    }
-    if (packId === "in-top50-routing"
-        && (rec.routing_source !== binding.routing_source
-          || rec.routing_match_field !== "structured_place")) return null;
-    if (municipal && rec.routing_source && rec.routing_source !== binding.routing_source) return null;
-    if (municipal && !await savedMunicipalLocationMatches(rec, municipal, pack)) return null;
-    if (!municipal && !savedNonMunicipalLocationMatches(rec, packId, authorityId, pack)) return null;
-    return binding;
-  }
-
-  function startLowerCatalogMatches(address, route) {
-    // Start both downloads immediately. Awaiting the preferred PMGSY answer first keeps
-    // deterministic result priority without paying two serial network deadlines.
-    return {
-      agreement: optionalCatalogResult(matchRoadAgreement(address, route)),
-      notice: optionalCatalogResult(matchRoadNotice(address, route)),
-    };
-  }
-
-  // Restored from the last coherent production file: the v1.38 merge dropped these
-  // definitions while their call sites stayed, so these paths threw on first use.
-  const LEGACY_ANDHRA_PRADESH_TOP50_REGIONS = Object.freeze({
-    visakhapatnam: Object.freeze({
-      aliases: Object.freeze(["Visakhapatnam", "Vizag", "Waltair", "విశాఖపట్నం"]),
-      envelope: Object.freeze({
-        min_lng: 83.1321297, min_lat: 17.5335526,
-        max_lng: 83.4521297, max_lat: 17.8535526,
-      }),
-    }),
-    vijayawada: Object.freeze({
-      aliases: Object.freeze(["Vijayawada", "Bezawada", "విజయవాడ"]),
-      envelope: Object.freeze({
-        min_lng: 80.4560469, min_lat: 16.3515306,
-        max_lng: 80.7760469, max_lat: 16.6715306,
-      }),
-    }),
-  });
-
-  const LEGACY_ANDHRA_PRADESH_TOP50_SHA256 = LEGACY_TAMIL_NADU_TOP50_SHA256;
-
-  const LEGACY_TAMIL_NADU_TOP50_REGIONS = Object.freeze({
-    coimbatore: Object.freeze({
-      aliases: Object.freeze(["Coimbatore", "Kovai", "கோயம்புத்தூர்"]),
-      envelope: Object.freeze({
-        min_lng: 76.8028425, min_lat: 10.8418115,
-        max_lng: 77.1228425, max_lat: 11.1618115,
-      }),
-    }),
-    madurai: Object.freeze({
-      aliases: Object.freeze(["Madurai", "மதுரை"]),
-      envelope: Object.freeze({
-        min_lng: 78.0155927, min_lat: 9.8245041,
-        max_lng: 78.2030091, max_lat: 9.9933722,
-      }),
-    }),
-  });
-
-  const LEGACY_TAMIL_NADU_TOP50_SHA256 =
-    "0250e95980b7c801986a2bf025c82e4b8eb2745fe36dad09fc6dfb2a5a4f8bf5";
-
-  function currentOfficialRouteBinding(packId, authorityId, pack, regionId = null) {
-    const remaining = REMAINING_STATE_ROUTE_CONFIGS[packId];
-    if (remaining) {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || authorityId !== remaining.authority_id
-          || region.id !== remaining.region_id
-          || region.authority_id !== authorityId) return null;
-      return { region: remaining.region_id, routing_source: remaining.routing_source };
-    }
-    const municipal = MUNICIPAL_CITY_CONFIGS[packId];
-    if (municipal) {
-      const region = pack && pack.payload && Array.isArray(pack.payload.regions)
-        ? pack.payload.regions.find((item) => item && item.id === municipal.region_id) : null;
-      if (!region || authorityId !== municipal.authority_id
-          || region.authority_id !== authorityId) return null;
-      return { region: municipal.region_id, routing_source: municipal.routing_source };
-    }
-    if (packId === "in-top50-routing") {
-      const region = pack && pack.payload && Array.isArray(pack.payload.regions)
-        ? pack.payload.regions.find((item) => item && item.id === regionId) : null;
-      if (!region || region.authority_id !== authorityId
-          || region.routing_source !== "nominatim_structured_city") return null;
-      return { region: region.id, routing_source: region.routing_source };
-    }
-    if (packId === "in-pb-routing" && authorityId === "pb-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "punjab-state" || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_punjab_state_boundary" };
-    }
-    if (packId === "in-tn-state-routing" && authorityId === "tn-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "tamil-nadu-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_tamil_nadu_state_boundary" };
-    }
-    if (packId === "in-ap-routing" && authorityId === "ap-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "andhra-pradesh-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_andhra_pradesh_state_boundary" };
-    }
-    if (packId === "in-tg-state-routing" && authorityId === "tg-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "telangana-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_telangana_state_boundary" };
-    }
-    if (packId === "in-ka-state-routing" && authorityId === "ka-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "karnataka-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_karnataka_state_boundary" };
-    }
-    if (packId === "in-kl-routing" && authorityId === "kl-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "kerala-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_kerala_state_boundary" };
-    }
-    if (packId === "in-up-routing" && authorityId === "up-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "uttar-pradesh-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_uttar_pradesh_state_boundary" };
-    }
-    if (packId === "in-cg-routing" && authorityId === "cg-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "chhattisgarh-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_chhattisgarh_state_boundary" };
-    }
-    if (packId === "in-rj-routing" && authorityId === "rj-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "rajasthan-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_rajasthan_state_boundary" };
-    }
-    if (packId === "in-ga-routing" && authorityId === "ga-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "goa-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_goa_state_boundary" };
-    }
-    if (packId === "in-mp-routing" && authorityId === "mp-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "madhya-pradesh-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_madhya_pradesh_state_boundary" };
-    }
-    if (packId === "in-br-routing" && authorityId === "br-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "bihar-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_bihar_state_boundary" };
-    }
-    if (packId === "in-od-routing" && authorityId === "od-statewide-unverified") {
-      const region = pack && pack.payload && pack.payload.region;
-      if (!region || region.id !== "odisha-state"
-          || region.authority_id !== authorityId) return null;
-      return { region: region.id, routing_source: "osm_odisha_state_boundary" };
-    }
-    if (packId === "in-dl-routing" && authorityId === "dl-pwd-sewa") {
-      return { region: "delhi", routing_source: "osm_delhi_nct_boundary" };
-    }
-    if (packId === "in-wb-routing" && authorityId === "wb-kmc") {
-      return { region: "kolkata", routing_source: "wb_udma_official_gis" };
-    }
-    if (packId === "in-wb-routing" && authorityId === "wb-statewide-unverified") {
-      return { region: "west-bengal", routing_source: "osm_west_bengal_state_boundary" };
-    }
-    if (packId === "in-mh-routing" && authorityId === "mh-pmc") {
-      return { region: "pune", routing_source: "pmc_official_gis" };
-    }
-    if (packId === "in-mh-routing" && authorityId === "mh-statewide-unverified") {
-      return { region: "maharashtra", routing_source: "osm_maharashtra_state_boundary" };
-    }
-    if (packId === "in-mh-routing" && authorityId.startsWith("mh-")) {
-      return { region: "mmr", routing_source: authorityId === "mh-mmr-unverified"
-        ? "mmr_boundary_fallback" : "osm_ulb_boundary" };
-    }
-    return null;
-  }
-
-  function highwayContractCandidates(records, highwayRef, address = "") {
-    const routeRefs = new Set(highwayRefsOf(highwayRef));
-    if (!routeRefs.size || !Array.isArray(records)) return [];
-    const addressParts = String(address || "").split(",").slice(0, 3).map((part) =>
-      tenderTokens(part).filter((token) => token.length > 2
-        && !HIGHWAY_CONTRACT_LOCATION_STOP.has(token))).filter((part) => part.length);
-    const addressTokens = new Set(addressParts.flat());
-    if (!addressTokens.size) return [];
-    const eligible = [];
-    for (const record of records) {
-      if (!record || record.scope_verified !== true
-          || !tenderCoversCarriageway(record.title, record.reference_value)) continue;
-      const matchingRefs = (record.highway_refs || []).filter((ref) => routeRefs.has(ref));
-      if (matchingRefs.length) eligible.push({ record, matching_refs: matchingRefs });
-    }
-    const titleTokensByRecord = eligible.map(({ record }) =>
-      new Set(tenderTokens(record.title)));
-    const frequencies = new Map();
-    for (const token of addressTokens) {
-      frequencies.set(token, titleTokensByRecord.reduce(
-        (count, tokens) => count + (tokens.has(token) ? 1 : 0), 0));
-    }
-    const scored = [];
-    for (let index = 0; index < eligible.length; index++) {
-      const { record, matching_refs: matchingRefs } = eligible[index];
-      const titleTokens = titleTokensByRecord[index];
-      const localityHits = [...addressTokens].filter((token) => titleTokens.has(token));
-      const normalisedTitle = tenderTokens(record.title).join(" ");
-      const phraseHits = addressParts.filter((part) => part.length >= 2
-        && normalisedTitle.includes(part.join(" ")));
-      const uniqueLongHits = localityHits.filter((token) => token.length >= 6
-        && frequencies.get(token) === 1);
-      // An NH reference identifies a route, not which package covers this point; feeder
-      // roads also cite the NH they meet. Require independent title/address evidence.
-      if (!phraseHits.length && localityHits.length < 2 && !uniqueLongHits.length) continue;
-      let score = matchingRefs.length * 100 + localityHits.length * 8;
-      score += phraseHits.length * 30 + uniqueLongHits.length * 16;
-      if (record.lifecycle === "current_project") score += 30;
-      if (record.award_verified && record.contractor) score += 15;
-      if (/maintenance|o\s*&\s*m|under construction/i.test(record.lifecycle_status)) score += 8;
-      if (record.chainages && record.chainages.length) score += 2;
-      scored.push({ record, matching_refs: matchingRefs, locality_hits: localityHits,
-        phrase_hits: phraseHits, unique_long_hits: uniqueLongHits, score });
-    }
-    scored.sort((left, right) => (right.score - left.score)
-      || (right.phrase_hits.length - left.phrase_hits.length)
-      || (right.locality_hits.length - left.locality_hits.length)
-      || String(left.record.record_id).localeCompare(String(right.record.record_id)));
-    return scored;
-  }
-
-  async function matchRoadAgreement(address, route) {
-    const stateCode = route && route.contract_state_code;
-    if (!route || route.routed !== true || !stateCode
-        || (route.issue_type && route.issue_type !== "road_damage")) return null;
-    const pack = await loadRoadAgreementPack(stateCode);
-    const ranked = roadAgreementCandidates(pack && pack.agreements, address);
-    if (!ranked.length) return null;
-    const best = ranked[0], second = ranked[1];
-    // Two equally supported road records cannot be disambiguated without geometry.
-    if (second && Math.abs(best.score - second.score) < 8
-        && best.phrase_hits.length === second.phrase_hits.length
-        && best.road_hits.length === second.road_hits.length
-        && best.district_hits.length === second.district_hits.length) return null;
-    const record = best.record;
-    const agreement = record.agreement_verified && record.agreement_number
-      && record.agreement_date
-      ? `; agreement ${record.agreement_number} dated ${record.agreement_date}` : "";
-    const evidence = [...new Set([
-      ...best.phrase_hits.map((part) => part.join(" ")),
-      ...best.road_hits, ...best.district_hits,
-    ])];
-    return {
-      tender_number: `${record.reference_value}${agreement}`,
-      reference_label: agreement ? "PMGSY package / agreement" : record.reference_label,
-      contractor: null,
-      title: record.title,
-      published: null,
-      source_name: record.source_name,
-      source_url: record.source_url,
-      lifecycle: "current_project",
-      lifecycle_status: `Source-reported In Progress as retrieved ${record.retrieved_at}; `
-        + "not independently freshness-verified",
-      match_basis: `State/UT ${stateCode}; title/from/to/district evidence ${evidence.join(", ")}`,
-      candidate_status: "candidate",
-      scope_status: "official_road_record",
-      scope_verified: true,
-      segment_status: "unverified_title_match_no_geometry",
-      segment_verified: false,
-      // An agreement number/date does not identify a contractor assignment in this feed.
-      agreement_verified: record.agreement_verified === true,
-      award_status: "unverified_contractor_assignment",
-      award_verified: false,
-      dlp_status: "unverified_no_maintenance_dates",
-      dlp_verified: false,
-      note: `PMGSY road-record candidate ${record.reference_value}${agreement}. `
-        + "No geometry, contractor assignment, completion, maintenance or DLP is asserted.",
-      ...roadAgreementPackProvenance(stateCode),
-    };
-  }
-
-  async function matchRoadNotice(address, route) {
-    const stateCode = route && route.contract_state_code;
-    if (!route || route.routed !== true || !stateCode
-        || (route.issue_type && route.issue_type !== "road_damage")) return null;
-    const pack = await loadRoadNoticePack(stateCode);
-    const ranked = roadNoticeCandidates(pack && pack.notices, address, route);
-    if (!ranked.length) return null;
-    const best = ranked[0];
-    const record = best.record;
-    const source = (pack.sources || []).find((item) => item.source_id === record.source_id);
-    const locationEvidence = [...new Set([...best.phrase_hits.map((part) => part.join(" ")),
-      ...best.token_hits])];
-    const reference = record.tender_reference === record.tender_id
-      ? record.tender_id : `${record.tender_reference} [${record.tender_id}]`;
-    return {
-      tender_number: reference,
-      reference_label: record.tender_reference === record.tender_id
-        ? "Tender ID" : "Tender reference / ID",
-      contractor: null,
-      title: record.title,
-      published: record.published_at,
-      source_name: source ? source.source_name : "Official State/UT e-Procurement portal",
-      // GePNIC detail links contain session-shaped tokens and can expire. Cite the
-      // stable official portal root plus the tender reference/ID above; keep the exact
-      // captured detail URL inside the immutable pack for audit and fresh-link lookup.
-      source_url: source ? source.source_url : record.source_url,
-      lifecycle: "procurement_notice",
-      lifecycle_status: `Open procurement notice; bid closing ${record.closing_at}`,
-      match_basis: `State/UT ${stateCode}`
-        + (best.highway_hits.length ? `; mapped ${best.highway_hits.join(" / ")}` : "")
-        + (locationEvidence.length ? `; title/address ${locationEvidence.join(", ")}` : ""),
-      candidate_status: "candidate",
-      scope_status: "carriageway_scope_present",
-      scope_verified: true,
-      segment_status: "unverified_title_match",
-      segment_verified: false,
-      award_status: "unverified_procurement_notice",
-      award_verified: false,
-      dlp_status: "unverified",
-      dlp_verified: false,
-      note: `Open procurement notice ${record.tender_id}; no award or contractor is asserted.`,
-      ...roadNoticePackProvenance(stateCode),
-    };
-  }
-
-  async function savedMunicipalLocationMatches(rec, config, pack) {
-    const lat = rec.lat, lng = rec.lng, accuracy = rec.gps_accuracy;
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)
-        || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 30) return false;
-    const region = pack && pack.payload && Array.isArray(pack.payload.regions)
-      ? pack.payload.regions.find((item) => item && item.id === config.region_id) : null;
-    if (!region) return false;
-    if (config.routing_mode === "official_point_query") {
-      if (rec.routing_match_field !== "official_accuracy_envelope") return false;
-      const result = await officialPointRegionMatch(region, lat, lng, accuracy);
-      return result.kind === "match";
-    }
-    if (config.routing_mode === "boundary") {
-      if (!pointInGeometry(lng, lat, region.geometry)
-          || geometryBoundaryDistanceMeters(lng, lat, region.geometry) <= accuracy) return false;
-      for (const exclusion of region.exclusions) {
-        if (pointInEnvelope(lat, lng, exclusion.bbox)
-            || geometryBoundaryDistanceMeters(lng, lat,
-              envelopeGeometry(exclusion.bbox)) <= accuracy) return false;
-      }
-      return true;
-    }
-    if (!pointInEnvelope(lat, lng, region.envelope)
-        || rec.routing_match_field !== "structured_place") return false;
-    const match = String(rec.routing_match_value || "").match(/^(city|municipality): (.+)$/);
-    const aliases = new Set(config.place_aliases.map(normaliseAuthorityValue));
-    return !!match && aliases.has(normaliseAuthorityValue(match[2]));
-  }
-
-  function savedNonMunicipalLocationMatches(rec, packId, authorityId, pack) {
-    const payload = pack && pack.payload;
-    const remaining = REMAINING_STATE_ROUTE_CONFIGS[packId];
-    if (remaining) {
-      return authorityId === remaining.authority_id
-        && savedBoundaryLocationMatches(rec,
-          payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-pb-routing") {
-      return authorityId === "pb-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-tn-state-routing") {
-      return authorityId === "tn-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-ap-routing") {
-      return authorityId === "ap-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-tg-state-routing") {
-      return authorityId === "tg-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-ka-state-routing") {
-      return authorityId === "ka-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-kl-routing") {
-      return authorityId === "kl-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-up-routing") {
-      return authorityId === "up-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-cg-routing") {
-      return authorityId === "cg-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-rj-routing") {
-      return authorityId === "rj-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-ga-routing") {
-      return authorityId === "ga-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-mp-routing") {
-      return authorityId === "mp-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-br-routing") {
-      return authorityId === "br-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-od-routing") {
-      return authorityId === "od-statewide-unverified"
-        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-top50-routing") {
-      return savedMajorCityLocationMatches(rec, pack);
-    }
-    if (packId === "in-dl-routing") {
-      return savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
-    }
-    if (packId === "in-wb-routing") {
-      const regions = payload && payload.regions;
-      if (!regions) return false;
-      if (authorityId === "wb-kmc") {
-        return savedBoundaryLocationMatches(rec,
-          regions.kmc && regions.kmc.geometry);
-      }
-      if (authorityId === "wb-statewide-unverified") {
-        const stateMatches = savedBoundaryLocationMatches(rec,
-          regions.west_bengal && regions.west_bengal.geometry);
-        if (!stateMatches) return false;
-        // A statewide fallback report must still be outside KMC by more than its stated
-        // accuracy. Otherwise revalidation could silently change the exact recipient.
-        const accuracy = rec.gps_accuracy;
-        const kmcGeometry = regions.kmc && regions.kmc.geometry;
-        if (!kmcGeometry || pointInGeometry(rec.lng, rec.lat, kmcGeometry)) return false;
-        return geometryBoundaryDistanceMeters(rec.lng, rec.lat, kmcGeometry) > accuracy;
-      }
-      return false;
-    }
-    if (packId !== "in-mh-routing" || !payload || !payload.regions) return false;
-    if (authorityId === "mh-pmc") {
-      return savedBoundaryLocationMatches(rec,
-        payload.regions.pmc && payload.regions.pmc.geometry);
-    }
-    if (authorityId === "mh-statewide-unverified") {
-      return savedBoundaryLocationMatches(rec,
-        payload.regions.maharashtra && payload.regions.maharashtra.geometry);
-    }
-    const mmr = payload.regions.mmr;
-    if (!mmr || !savedBoundaryLocationMatches(rec, mmr.geometry,
-      rec.delivery_channel === "bmc_quickfix")) return false;
-    if (authorityId === "mh-mmr-unverified") return true;
-    const boundary = mmr.authority_boundaries && mmr.authority_boundaries[authorityId];
-    return savedBoundaryLocationMatches(rec, boundary && boundary.geometry,
-      rec.delivery_channel === "bmc_quickfix");
-  }
-
-  // Restored from the last coherent production file: the v1.38 merge dropped these
-  // definitions while their call sites stayed, so these paths threw on first use.
-  const HIGHWAY_CONTRACT_LOCATION_STOP = new Set([
-    ...TENDER_STOP,
-    ...[...INDIA_STATE_CODE_BY_NAME.keys()].flatMap((name) => tenderTokens(name)),
-    "area", "at", "district", "from", "highway", "junction", "near", "number", "route",
-    "state", "towards", "via",
-  ]);
-
-  const highwayRefsOf = (value) => String(value || "").split(" / ")
-    .map((ref) => ref.trim().toUpperCase()).filter((ref) => HIGHWAY_REF_RE.test(ref));
-
-  function roadAgreementCandidates(records, address) {
-    if (!Array.isArray(records) || !records.length) return [];
-    const addressParts = roadAgreementAddressParts(address);
-    const addressTokens = new Set(addressParts.flat());
-    if (!addressTokens.size) return [];
-    const districtTokensByRecord = records.map((record) => new Set(
-      tenderTokens(record && record.district_name)
-        .filter((token) => token.length >= 3 && !ROAD_NOTICE_STOP.has(token))));
-    const roadTokensByRecord = records.map((record, index) => new Set(tenderTokens([
-      record && record.title, record && record.road_from, record && record.road_to,
-    ].filter(Boolean).join(" ")).filter((token) => token.length >= 3
-      && !ROAD_NOTICE_STOP.has(token) && !districtTokensByRecord[index].has(token))));
-    const frequencies = new Map();
-    for (const token of addressTokens) {
-      frequencies.set(token, roadTokensByRecord.reduce(
-        (count, tokens) => count + (tokens.has(token) ? 1 : 0), 0));
-    }
-    const scored = [];
-    for (let index = 0; index < records.length; index++) {
-      const record = records[index];
-      if (!record || record.lifecycle !== "current_project"
-          || record.lifecycle_status !== "In Progress" || record.scope_verified !== true
-          || record.segment_verified !== false || record.contractor !== null
-          || record.contractor_assignment_verified !== false || record.dlp_verified !== false) {
-        continue;
-      }
-      const roadTokens = roadTokensByRecord[index];
-      const roadHits = [...addressTokens].filter((token) => roadTokens.has(token));
-      const districtTokens = districtTokensByRecord[index];
-      const districtHits = [...addressTokens].filter((token) => districtTokens.has(token));
-      const normalisedRoad = tenderTokens([
-        record.title, record.road_from, record.road_to,
-      ].filter(Boolean).join(" ")).join(" ");
-      const phraseHits = addressParts.filter((part) => {
-        const phrase = part.join(" ");
-        return part.some((token) => !districtTokens.has(token))
-          && phrase.length >= 6 && normalisedRoad.includes(phrase);
-      });
-      const multiTokenPhrase = phraseHits.some((part) => part.length >= 2);
-      const uniqueLongHits = roadHits.filter((token) => token.length >= 6
-        && frequencies.get(token) === 1);
-      // The source has no geometry. A State match or district name alone is never enough:
-      // require an exact multi-word road phrase, two road-name words, or a unique long
-      // road word corroborated by the district in the reverse-geocoded address.
-      const strongLocationEvidence = multiTokenPhrase || roadHits.length >= 2
-        || (uniqueLongHits.length > 0 && districtHits.length > 0);
-      if (!strongLocationEvidence) continue;
-      const rarity = roadHits.reduce((sum, token) => {
-        const frequency = frequencies.get(token) || records.length;
-        return sum + Math.log((records.length + 1) / (frequency + 0.5));
-      }, 0);
-      const score = (multiTokenPhrase ? 80 : 0) + phraseHits.length * 20
-        + roadHits.length * 16 + uniqueLongHits.length * 12
-        + districtHits.length * 10 + rarity;
-      scored.push({ record, score, road_hits: roadHits, district_hits: districtHits,
-        phrase_hits: phraseHits, unique_long_hits: uniqueLongHits });
-    }
-    scored.sort((left, right) => (right.score - left.score)
-      || (right.phrase_hits.length - left.phrase_hits.length)
-      || (right.road_hits.length - left.road_hits.length)
-      || String(left.record.record_id).localeCompare(String(right.record.record_id)));
-    return scored;
-  }
-
-  function roadNoticeCandidates(records, address, route = null, now = Date.now()) {
-    if (!Array.isArray(records) || !records.length) return [];
-    const addressParts = roadNoticeAddressParts(address);
-    const addressTokens = new Set(addressParts.flat());
-    const routeRefs = new Set(highwayRefsOf(route && route.highway_ref));
-    if (!addressTokens.size && !routeRefs.size) return [];
-
-    const titleTokens = records.map((record) => new Set(tenderTokens(record && record.title)));
-    const frequencies = new Map();
-    for (const token of addressTokens) {
-      frequencies.set(token, titleTokens.reduce(
-        (count, tokens) => count + (tokens.has(token) ? 1 : 0), 0));
-    }
-    const routeAuthorityTokens = new Set(tenderTokens(route && route.authority_name)
-      .filter((token) => token.length >= 4 && !ROAD_NOTICE_STOP.has(token)));
-    const scored = [];
-    for (let index = 0; index < records.length; index++) {
-      const record = records[index];
-      if (!record || record.lifecycle !== "procurement_notice" || record.scope !== "road_surface"
-          || record.segment_verified !== false || record.award_verified !== false
-          || record.dlp_verified !== false
-          || !Number.isFinite(Date.parse(String(record.closing_at || "")))
-          || Date.parse(record.closing_at) < now
-          || !tenderCoversCarriageway(record.title, record.tender_reference)) continue;
-      const tokens = titleTokens[index];
-      const tokenHits = [...addressTokens].filter((token) => tokens.has(token));
-      const phraseHits = addressParts.filter((part) => {
-        const phrase = part.join(" ");
-        return phrase.length >= 6
-          && tenderTokens(record.title).join(" ").includes(phrase);
-      });
-      const rareHits = tokenHits.filter((token) => token.length >= 6
-        && frequencies.get(token) > 0 && frequencies.get(token) <= 2);
-      const noticeRefs = highwayRefsInNotice(`${record.title} ${record.tender_reference}`);
-      const highwayHits = [...routeRefs].filter((ref) => noticeRefs.has(ref));
-      // One common locality word is too weak for a nationwide title index. Admit an
-      // ordinary-road candidate only for a phrase, two distinct address words, or one
-      // long word that occurs in at most two notices in this State/UT snapshot.
-      const locationEvidence = phraseHits.length > 0 || tokenHits.length >= 2
-        || rareHits.length > 0;
-      if (!locationEvidence) continue;
-      const organisationTokens = new Set(tenderTokens(record.organisation_chain));
-      const authorityHits = [...routeAuthorityTokens].filter(
-        (token) => organisationTokens.has(token));
-      const rarity = tokenHits.reduce((sum, token) => {
-        const frequency = frequencies.get(token) || records.length;
-        return sum + Math.log((records.length + 1) / (frequency + 0.5));
-      }, 0);
-      const score = highwayHits.length * 100 + phraseHits.length * 30
-        + rareHits.length * 16 + tokenHits.length * 8 + rarity + authorityHits.length * 3;
-      scored.push({ record, score, token_hits: tokenHits, phrase_hits: phraseHits,
-        rare_hits: rareHits, highway_hits: highwayHits, authority_hits: authorityHits });
-    }
-    scored.sort((left, right) => (right.score - left.score)
-      || (right.phrase_hits.length - left.phrase_hits.length)
-      || (right.token_hits.length - left.token_hits.length)
-      || String(left.record.record_id).localeCompare(String(right.record.record_id)));
-    return scored;
-  }
-
-  function savedBoundaryLocationMatches(rec, geometry, allowMissingAccuracy = false) {
-    const lat = rec.lat, lng = rec.lng, accuracy = rec.gps_accuracy;
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)
-        || !pointInGeometry(lng, lat, geometry)) return false;
-    if (!Number.isFinite(accuracy)) return allowMissingAccuracy;
-    return accuracy >= 0 && accuracy <= 30
-      && geometryBoundaryDistanceMeters(lng, lat, geometry) > accuracy;
-  }
-
-  function savedMajorCityLocationMatches(rec, pack) {
-    const region = pack && pack.payload && Array.isArray(pack.payload.regions)
-      ? pack.payload.regions.find((item) => item && item.id === rec.region) : null;
-    if (!region || region.authority_id !== rec.authority_id
-        || rec.routing_source !== region.routing_source
-        || rec.routing_match_field !== "structured_place"
-        || !Number.isFinite(rec.lat) || !Number.isFinite(rec.lng)
-        || !Number.isFinite(rec.gps_accuracy) || rec.gps_accuracy < 0
-        || rec.gps_accuracy > 30
-        || !accuracyCircleWithinEnvelope(
-          rec.lat, rec.lng, rec.gps_accuracy, region.envelope)) {
-      return false;
-    }
-    const match = String(rec.routing_match_value || "").match(/^(city|municipality): (.+)$/);
-    const aliases = new Set(region.place_aliases.map(normaliseAuthorityValue));
-    return !!match && aliases.has(normaliseAuthorityValue(match[2]));
-  }
-
-  // Restored from the last coherent production file: the v1.38 merge dropped these
-  // definitions while their call sites stayed, so these paths threw on first use.
-  const ROAD_NOTICE_STOP = new Set([...TENDER_STOP,
-    "area", "avenue", "bazaar", "bazar", "bridge", "chowk", "circle", "colony",
-    "district", "extension", "galli", "lane", "locality", "market", "municipal",
-    "municipality", "nagar", "near", "number", "path", "place", "sector", "state",
-    "village", "zone"]);
-
-  function highwayRefsInNotice(value) {
-    const refs = new Set();
-    const pattern = /\bN([HE])\s*[-:]?\s*([0-9]{1,4}[A-Z]{0,3})\b/gi;
-    for (const match of String(value || "").matchAll(pattern)) {
-      refs.add(`N${match[1].toUpperCase()}-${match[2].toUpperCase()}`);
-    }
-    return refs;
-  }
-
-  function roadAgreementAddressParts(address) {
-    return String(address || "").split(",").slice(0, 4).map((part) =>
-      tenderTokens(part).filter((token) => token.length >= 3
-        && !/^\d{5,6}$/.test(token) && !ROAD_NOTICE_STOP.has(token)))
-      .filter((tokens) => tokens.length);
-  }
-
-  function roadNoticeAddressParts(address) {
-    // Nominatim's compact address ends with the city. A city name is shared by hundreds
-    // of unrelated notices and once made Kanjur, Mumbai select a Pune road whose title
-    // merely contained "old Mumbai-Pune". Road plus immediate locality are the evidence.
-    return String(address || "").split(",").slice(0, 2).map((part) =>
-      tenderTokens(part).filter((token) => token.length >= 3
-        && !/^\d{5,6}$/.test(token) && !ROAD_NOTICE_STOP.has(token)))
-      .filter((tokens) => tokens.length);
-  }
-
-  // Restored from the last coherent production file: the v1.38 merge dropped these
-  // definitions while their call sites stayed, so these paths threw on first use.
-  const ROUTE_RECORD_FIELDS = Object.freeze([
-    "officer_name", "officer_email", "authority_id", "authority_name",
-    "authority_registry_version", "delivery_channel", "ward_code", "routing_source",
-    "routing_match_field", "routing_match_value", "highway_ref", "contract_state_code",
-    "routing_pack_id", "routing_pack_version", "routing_pack_sha256",
-    "routing_pack_state_code", "region", "ownership_unverified", "handoff_name",
-    "handoff_url", "handoff_package", "alternate_handoff_name",
-    "alternate_handoff_url", "whatsapp_url", "helpline", "requires_official_reference",
-    "tender_eligible",
-  ]);
-
-  const TENDER_RECORD_FIELDS = Object.freeze({
-    tender_number: "tender_number", tender_reference_label: "reference_label",
-    tender_title: "title", contractor: "contractor", tender_note: "note",
-    tender_published: "published", tender_organisation: "organisation",
-    tender_detail_url: "detail_url", tender_bid_closing: "bid_closing",
-    tender_bid_opening: "bid_opening", tender_project_start: "project_start",
-    tender_project_completion: "project_completion", tender_agreement_number: "agreement_number",
-    tender_agreement_date: "agreement_date", tender_package_reference: "package_reference",
-    tender_highway_reference: "highway_reference", tender_published_chainage: "published_chainage",
-    tender_road_from: "road_from", tender_road_to: "road_to", tender_source_name: "source_name",
-    tender_source_url: "source_url", tender_lifecycle: "lifecycle",
-    tender_lifecycle_status: "lifecycle_status", tender_match_basis: "match_basis",
-    tender_candidate_status: "candidate_status", tender_scope_status: "scope_status",
-    tender_segment_status: "segment_status", tender_award_status: "award_status",
-    tender_dlp_status: "dlp_status", tender_responsibility_valid_from: "responsibility_valid_from",
-    tender_responsibility_valid_until: "responsibility_valid_until",
-    tender_responsible_authority_id: "responsible_authority_id",
-    tender_road_owner_id: "road_owner_id", tender_verification_evidence: "verification_evidence",
-    tender_pack_id: "tender_pack_id", tender_pack_version: "tender_pack_version",
-    tender_pack_sha256: "tender_pack_sha256", tender_pack_state_code: "tender_pack_state_code",
-  });
-
-  // Restored from the last coherent production file: the v1.38 merge dropped these
-  // definitions while their call sites stayed, so these paths threw on first use.
-  const LEGACY_NATIVE_V13_PROMPT_VERSION = "pothole-binary-v13";
-  const LEGACY_NATIVE_V15_PROMPT_VERSION = "pothole-binary-v15";
-  const LEGACY_NATIVE_V16_PROMPT_VERSION = "pothole-binary-v16";
-
-  // Restored from the last coherent production file: the v1.38 merge dropped these
-  // definitions while their call sites stayed, so these paths threw on first use.
-  async function emailAttachmentBase64(photo) {
-    const blob = await dataUrlToBlob(photo);
-    if (!blob || typeof blob === "string") {
-      throw new Error("The saved evidence photo could not be read for attachment.");
-    }
-    // The Capacitor bridge must briefly hold the base64 string in memory. Keep the
-    // complete edge-to-edge scene, but resize/compress the email copy so a high-megapixel
-    // camera image cannot freeze or kill the WebView while opening the composer.
-    const dataUrl = await toDataUrl(blob, 1600, 0.82, false);
-    const base64 = dataUrl && dataUrl.split(",")[1];
-    if (!base64) throw new Error("The evidence attachment could not be prepared.");
-    return base64;
-  }
 
   function roadEventMatch(candidate, prior) {
     if (!candidate.dedupe_eligible || !acceptedReport(prior)
@@ -10387,36 +8268,6 @@ This is a strict before/after verification, not ordinary pothole detection:
       throw error;
     }
     if (driveMode && !accepted) {
-      // Ordinary non-detection is only the gate. Fixed requires a separate model call
-      // that sees the saved before photo and the current usable revisit together.
-      const repairCandidate = repairCandidateP ? await repairCandidateP : null;
-      if (repairCandidate && clearAbsenceForRepair(a)) {
-        progress(pmsg("repair"));
-        const comparison = await verifyRepairCandidate(repairCandidate, dataUrl,
-          [dataUrl], 0, detectionModel, detectionDetail).catch(() => null);
-        const provenCondition = repairConditionFor(comparison);
-        if (provenCondition) {
-          if (commitTurn) await commitTurn.wait;
-          const repairResult = await applyRepairObservation(repairCandidate.id, {
-            ...repairObservationBase,
-            ...comparison,
-            // Preserve the full scene so a later reviewer can audit whether the before/after
-            // frames show the same footprint.
-            current_photo_data_url: dataUrl,
-            detection_model: detectionModel,
-            image_detail: detectionDetail,
-            // Repair comparison is a legacy local evidence path, not an LLM contract.
-            prompt_version: REPAIR_VERIFICATION_VERSION,
-            schema_version: REPAIR_SCHEMA_VERSION,
-          });
-          const applied = !repairResult.ignored ? repairResult.condition_status : null;
-          return { analyzed: true, accepted: false, stored: false, found: false,
-                   duplicate: false, duplicate_of: null, decision, review: false,
-                   repaired: applied === "fixed", repair_review: applied === "repair_review",
-                   repair_target_id: repairCandidate.id, repair_result: repairResult,
-                   ...a, observation: { ...a }, repair_observation: comparison, detector };
-        }
-      }
       return { analyzed: true, accepted: false, stored: false, found: false,
                duplicate: false, duplicate_of: null, decision, review: false,
                ...a, observation: { ...a }, detector };
@@ -11419,6 +9270,2082 @@ This is a strict before/after verification, not ordinary pothole detection:
                    warrantyFor, shortlistFor, matchTenderFor: matchTender,
                    centralReportIsConfirmed,
                    canonicalServiceRequest };
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  function mutateReportAtomically(id, mutate) {
+    const reportId = Number(id);
+    if (!Number.isFinite(reportId) || reportId <= 0) {
+      return Promise.reject(new Error("Report not found."));
+    }
+    return idb().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction("reports", "readwrite");
+      const store = tx.objectStore("reports");
+      let result = null, failure = null;
+      const abortWith = (error) => {
+        failure = error instanceof Error ? error : new Error(String(error || "Could not update this report."));
+        try { tx.abort(); } catch (_) {}
+      };
+      const read = store.get(reportId);
+      read.onsuccess = () => {
+        const current = read.result;
+        if (!current) { abortWith(new Error("Report not found.")); return; }
+        const migrated = migrateLegacyComplaintRecord(current);
+        if (migrated !== current) {
+          for (const field of ["email_body", "whatsapp_text", "portal_fields",
+            "portal_copy_text", "complaint_template_version"]) {
+            current[field] = migrated[field];
+          }
+        }
+        try { mutate(current); } catch (error) { abortWith(error); return; }
+        const write = store.put(current);
+        write.onsuccess = () => { result = toDict(current); };
+        write.onerror = () => { failure = write.error; };
+      };
+      read.onerror = () => { failure = read.error; };
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(failure || storageError(tx.error));
+      tx.onerror = () => {};
+    }));
+  }
+
+  async function applyRepairObservation(targetId, observation) {
+    const id = Number(targetId);
+    const sourceEventKey = String(observation && observation.source_event_key || "").slice(0, 180);
+    const nextCondition = repairConditionFor(observation);
+    if (!Number.isFinite(id) || id <= 0 || !sourceEventKey || !nextCondition) {
+      return { ignored: true, reason: "repair_not_proven" };
+    }
+    if (!repairProvenanceIsExact(observation)) {
+      return { ignored: true, reason: "repair_provenance_invalid" };
+    }
+    const repairPhoto = await decodeRepairEvidence(observation.current_photo_data_url);
+    if (!repairPhoto) return { ignored: true, reason: "repair_evidence_invalid" };
+    const candidate = {
+      ...observation,
+      capture_source: "drive_live",
+      debug_capture: false,
+      drive_id: observation.drive_id == null ? null : String(observation.drive_id),
+    };
+    if (!finiteCoord(candidate.lat) || !finiteCoord(candidate.lng)) {
+      return { ignored: true, reason: "target_ambiguous_or_mismatched" };
+    }
+    // The uniqueness scan and update deliberately share one read-write transaction.
+    // IndexedDB serialises competing writers on this store, so no nearby report can be
+    // inserted or changed between the ambiguity decision and the physical-status write.
+    return idb().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction("reports", "readwrite");
+      const store = tx.objectStore("reports");
+      let result = null, failure = null;
+      const matches = [];
+      const replays = [];
+      const latitudeBand = REPAIR_RADIUS_M / 110900;
+      const scan = store.index("by_lat").openCursor(IDBKeyRange.bound(
+        candidate.lat - latitudeBand, candidate.lat + latitudeBand));
+      scan.onsuccess = () => {
+        const cursor = scan.result;
+        if (cursor) {
+          const priorKeys = Array.isArray(cursor.value.repair_source_event_keys)
+            ? cursor.value.repair_source_event_keys : [];
+          if (priorKeys.includes(sourceEventKey)) replays.push(cursor.value);
+          if (repairTargetMatch(candidate, cursor.value)) matches.push(cursor.value);
+          cursor.continue();
+          return;
+        }
+        if (replays.length) {
+          if (replays.length === 1 && Number(replays[0].id) === id) {
+            result = { id, duplicate: true, condition_status: conditionStatus(replays[0]) };
+          } else {
+            result = { ignored: true, reason: "target_ambiguous_or_mismatched" };
+          }
+          return;
+        }
+        if (matches.length !== 1 || Number(matches[0].id) !== id) {
+          result = { ignored: true, reason: "target_ambiguous_or_mismatched" };
+          return;
+        }
+        const prior = matches[0];
+        const keys = Array.isArray(prior.repair_source_event_keys)
+          ? prior.repair_source_event_keys.slice() : [];
+        if (keys.includes(sourceEventKey)) {
+          result = { id, duplicate: true, condition_status: conditionStatus(prior) };
+          return;
+        }
+        keys.push(sourceEventKey);
+        const observedAt = observation.observed_at;
+        const updated = {
+          ...prior,
+          condition_status: nextCondition,
+          condition_updated_at: observedAt,
+          condition_source: "ai_revisit_comparison",
+          repair_observed_at: observedAt,
+          repair_drive_id: candidate.drive_id,
+          repair_source_event_keys: keys.slice(-64),
+          repair_photo: repairPhoto,
+          repair_lat: observation.lat,
+          repair_lng: observation.lng,
+          repair_gps_accuracy: observation.gps_accuracy,
+          repair_speed_mps: Number.isFinite(observation.speed_mps) ? observation.speed_mps : null,
+          repair_heading: Number.isFinite(observation.heading) ? observation.heading : null,
+          repair_current_condition: observation.current_condition,
+          repair_assessment: observation.assessment,
+          repair_image_quality: observation.image_quality,
+          repair_same_location_visible: observation.same_location_visible,
+          repair_completed_visible: observation.completed_repair_visible,
+          repair_description: String(observation.description || "").trim().slice(0, 1000),
+          repair_detection_model: observation.detection_model,
+          repair_image_detail: observation.image_detail,
+          repair_prompt_version: observation.prompt_version,
+          repair_schema_version: observation.schema_version,
+        };
+        const write = store.put(updated);
+        write.onsuccess = () => {
+          result = { id, duplicate: false, condition_status: nextCondition, report: toDict(updated) };
+        };
+        write.onerror = () => { failure = write.error; };
+      };
+      scan.onerror = () => { failure = scan.error; };
+      tx.oncomplete = () => resolve(result || { ignored: true, reason: "target_ambiguous_or_mismatched" });
+      const died = () => reject(storageError(failure || tx.error));
+      tx.onabort = died;
+      tx.onerror = () => {};
+    }));
+  }
+
+  async function importNativeReport(native) {
+    if (!native || typeof native !== "object") throw new Error("Native report missing.");
+    const nativeId = Number(native.id);
+    const lat = Number(native.lat), lng = Number(native.lng);
+    if (!Number.isFinite(nativeId) || nativeId <= 0) throw new Error("Native report id missing.");
+    const nativeIsPothole = native.is_pothole === true || Number(native.is_pothole) === 1;
+    const nativeIsReportable = native.is_reportable === true || Number(native.is_reportable) === 1;
+    const nativeContract = nativeDetectorContract(native);
+    const nativeSize = POTHOLE_SIZES.has(native.size) ? native.size : null;
+    const nativeSurface = nativeContract && nativeContract.surfaceTypes.has(native.surface_type)
+      ? native.surface_type : "unknown";
+    const nativeTemporal = native.temporal_consistency;
+    const nativeLowerInterior = native.has_unambiguous_lower_interior === true;
+    const lowerInteriorContract = nativeContract &&
+      (nativeContract.kind === "current_v19" || nativeContract.kind === "legacy_v16");
+    const nativePassedBinaryGate = !!nativeContract && native.decision === "accept"
+      && nativeIsPothole && nativeIsReportable && native.damage_type === "pothole_cavity"
+      && native.looks_like_speed_breaker === false
+      && native.image_quality === "usable" && nativeContract.surfaceTypes.has(nativeSurface)
+      && native.on_drivable_surface === true
+      && native.has_localized_cavity === true
+      && (!lowerInteriorContract || typeof native.has_unambiguous_lower_interior === "boolean")
+      && (!lowerInteriorContract || nativeSurface !== TEMPORARY_DRIVABLE_SURFACE
+        || nativeLowerInterior)
+      && native.has_broken_edge_or_rim === true && native.has_depth_or_surface_loss === true
+      && nativeTemporal === "consistent" && Number(native.evidence_count) >= 3 && !!nativeSize;
+    // Contracts older than v6, malformed current rows, and v6 rows claiming a v7+-only
+    // surface are acknowledged and discarded instead of looping forever or becoming a
+    // complaint. Already-synced WebView reports are never reclassified here.
+    if (!nativePassedBinaryGate) {
+      return { native_id: nativeId, ignored: true, reason: "obsolete_or_invalid_detector_contract" };
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      throw new Error("Native report location is invalid.");
+    }
+    const sourceEventKey = String(native.source_event_key || `native:${nativeId}`).slice(0, 180);
+    const gpsAccuracy = native.gps_accuracy == null ? null : Number(native.gps_accuracy);
+    const speed = Number(native.speed_mps);
+    const heading = Number(native.heading);
+    const geo = await reverseGeocode(lat, lng).catch(() => null);
+    const address = (geo && geo.short) || native.address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    const route = await routeOfficer(
+      geo || address, lat, lng,
+      Number.isFinite(gpsAccuracy) ? gpsAccuracy : null,
+      Number.isFinite(heading) ? heading : null,
+      Number.isFinite(speed) ? speed : null
+    );
+    const covered = !!route.routed;
+    const tenderCandidate = covered && canSearchTenderCatalog(route)
+      ? await matchTenderAt(address, route, lat, lng).catch(() => null)
+      : null;
+    const tender = normaliseTenderMatch(tenderCandidate, covered ? route : null);
+    const assessment = binaryAssessment({
+      // Every supported native version saved this row only after its own binary physical
+      // gate accepted it. v16+ additionally persists the exact lower-interior verdict.
+      is_pothole: true,
+      looks_like_speed_breaker: false,
+      image_quality: native.image_quality,
+      surface_type: nativeSurface,
+      on_drivable_surface: true,
+      has_localized_cavity: true,
+      // Feed legacy accepted rows through the current derived-field helper, then restore
+      // the field to unknown below instead of inventing evidence their schema never saved.
+      has_unambiguous_lower_interior: lowerInteriorContract ? nativeLowerInterior : true,
+      has_broken_edge_or_rim: true,
+      has_depth_or_surface_loss: true,
+      temporal_consistency: nativeTemporal,
+      size: nativeSize,
+      description: native.description || "Pothole detected during Drive Mode.",
+    }, true, Math.max(2, Number(native.evidence_count) - 1));
+    if (!lowerInteriorContract) assessment.has_unambiguous_lower_interior = null;
+    const complaint = covered
+      ? buildComplaintOutputs(assessment, lat, lng, address, route.officer_name, tender, route, {
+          captured_at: Number.isFinite(Number(native.captured_at)) ? Number(native.captured_at) : null,
+          gps_accuracy: Number.isFinite(gpsAccuracy) ? gpsAccuracy : null,
+          photo_provenance: "Android Drive Mode camera frame",
+        }) : null;
+    const subject = complaint ? complaint.email_subject : null;
+    const body = complaint ? complaint.email_body : null;
+    const capturedAt = Number(native.captured_at);
+    const offset = Number(native.source_offset_s);
+    const driveId = native.drive_id == null ? null : String(native.drive_id);
+    const debug = !!native.debug_capture;
+    const rec = {
+      created_at: Number(native.created_at) || Date.now() / 1000,
+      lat, lng, address,
+      photo: await dataUrlToBlob(native.photo_data_url),
+      photo_full: await dataUrlToBlob(native.photo_full_data_url || native.photo_data_url),
+      issue_type: "road_damage",
+      report_origin: "ai_detection",
+      is_reportable: assessment.reportable ? 1 : 0,
+      is_pothole: assessment.damage_type === "pothole_cavity" ? 1 : 0,
+      looks_like_speed_breaker: false,
+      damage_type: assessment.damage_type, assessment: assessment.assessment,
+      image_quality: assessment.image_quality,
+      defect_type: assessment.defect_type,
+      surface_type: assessment.surface_type,
+      measurement_provenance: assessment.measurement_provenance,
+      measurement_confidence: assessment.measurement_confidence,
+      measurement_length_cm: assessment.measurement_length_cm,
+      measurement_width_cm: assessment.measurement_width_cm,
+      measurement_depth_cm: assessment.measurement_depth_cm,
+      on_drivable_surface: assessment.on_drivable_surface,
+      has_localized_cavity: assessment.has_localized_cavity,
+      has_unambiguous_lower_interior: assessment.has_unambiguous_lower_interior,
+      has_broken_edge_or_rim: assessment.has_broken_edge_or_rim,
+      has_depth_or_surface_loss: assessment.has_depth_or_surface_loss,
+      temporal_consistency: assessment.temporal_consistency,
+      size: assessment.size, decision: native.decision || "accept",
+      description: assessment.description, email_subject: subject, email_body: body,
+      whatsapp_text: complaint ? complaint.whatsapp_text : null,
+      portal_fields: complaint ? complaint.portal_fields : null,
+      portal_copy_text: complaint ? complaint.portal_copy_text : null,
+      complaint_profile_id: complaint ? complaint.complaint_profile_id : null,
+      complaint_template_version: body ? COMPLAINT_TEMPLATE_VERSION : null,
+      status: covered ? "draft" : "unrouted",
+      condition_status: "open", condition_updated_at: null, condition_source: null,
+      detection_model: native.detection_model || S.model,
+      image_detail: native.image_detail || S.detail,
+      prompt_version: native.prompt_version || PROMPT_VERSION,
+      schema_version: Number(native.schema_version) || SCHEMA_VERSION,
+      evidence_count: Number(native.evidence_count) || 1,
+      unrouted_reason: covered ? null : (route.unrouted_reason || "outside_area"),
+      unrouted_body: covered ? null : (route.authority_name || null),
+      officer_name: covered ? (route.officer_name || null) : null,
+      officer_email: covered ? (route.officer_email || null) : null,
+      authority_id: covered ? (route.authority_id || null) : null,
+      authority_name: covered ? (route.authority_name || null) : null,
+      authority_registry_version: covered ? (route.authority_registry_version || null) : null,
+      delivery_channel: covered ? (route.delivery_channel || "email") : null,
+      ward_code: covered ? (route.ward_code || null) : null,
+      routing_source: covered ? (route.routing_source || null) : null,
+      routing_match_field: covered ? (route.routing_match_field || null) : null,
+      routing_match_value: covered ? (route.routing_match_value || null) : null,
+      highway_ref: covered ? (route.highway_ref || null) : null,
+      contract_state_code: covered ? (route.contract_state_code || null) : null,
+      routing_pack_id: covered ? (route.routing_pack_id || null) : null,
+      routing_pack_version: covered ? (route.routing_pack_version || null) : null,
+      routing_pack_sha256: covered ? (route.routing_pack_sha256 || null) : null,
+      routing_pack_state_code: covered ? (route.routing_pack_state_code || null) : null,
+      region: covered ? (route.region || null) : null,
+      ownership_unverified: covered ? !!route.ownership_unverified : null,
+      geographic_authority_id: complaint ? complaint.geographic_authority_id : null,
+      geographic_authority_name: complaint ? complaint.geographic_authority_name : null,
+      intake_authority_id: complaint ? complaint.intake_authority_id : null,
+      intake_authority_name: complaint ? complaint.intake_authority_name : null,
+      road_owner_id: complaint ? complaint.road_owner_id : null,
+      road_owner_name: complaint ? complaint.road_owner_name : null,
+      road_owner_status: complaint ? complaint.road_owner_status : null,
+      road_owner_evidence: complaint ? complaint.road_owner_evidence : null,
+      handoff_name: covered ? (route.handoff_name || null) : null,
+      handoff_url: covered ? (route.handoff_url || null) : null,
+      handoff_package: covered ? (route.handoff_package || null) : null,
+      alternate_handoff_name: covered ? (route.alternate_handoff_name || null) : null,
+      alternate_handoff_url: covered ? (route.alternate_handoff_url || null) : null,
+      whatsapp_url: covered ? (route.whatsapp_url || null) : null,
+      helpline: covered ? (route.helpline || null) : null,
+      requires_official_reference: covered ? !!route.requires_official_reference : false,
+      official_grievance_id: null, submitted_at: null,
+      tender_number: tender ? tender.tender_number : null,
+      tender_reference_label: tender ? (tender.reference_label || "Tender number") : null,
+      tender_title: tender ? tender.title : null,
+      contractor: tender ? tender.contractor : null,
+      tender_note: tender ? tender.note : null,
+      tender_published: tender ? tender.published : null,
+      tender_organisation: tender ? (tender.organisation || null) : null,
+      tender_detail_url: tender ? (tender.detail_url || null) : null,
+      tender_bid_closing: tender ? (tender.bid_closing || null) : null,
+      tender_bid_opening: tender ? (tender.bid_opening || null) : null,
+      tender_project_start: tender ? (tender.project_start || null) : null,
+      tender_project_completion: tender ? (tender.project_completion || null) : null,
+      tender_agreement_number: tender ? (tender.agreement_number || null) : null,
+      tender_agreement_date: tender ? (tender.agreement_date || null) : null,
+      tender_package_reference: tender ? (tender.package_reference || null) : null,
+      tender_highway_reference: tender ? (tender.highway_reference || null) : null,
+      tender_published_chainage: tender ? (tender.published_chainage || null) : null,
+      tender_road_from: tender ? (tender.road_from || null) : null,
+      tender_road_to: tender ? (tender.road_to || null) : null,
+      tender_source_name: tender ? tender.source_name : null,
+      tender_source_url: tender ? tender.source_url : null,
+      tender_lifecycle: tender ? (tender.lifecycle || null) : null,
+      tender_lifecycle_status: tender ? (tender.lifecycle_status || null) : null,
+      tender_match_basis: tender ? (tender.match_basis || null) : null,
+      tender_candidate_status: tender ? tender.candidate_status : null,
+      tender_scope_status: tender ? tender.scope_status : null,
+      tender_scope_verified: tender ? !!tender.scope_verified : false,
+      tender_segment_status: tender ? tender.segment_status : null,
+      tender_segment_verified: tender ? !!tender.segment_verified : false,
+      tender_award_status: tender ? tender.award_status : null,
+      tender_award_verified: tender ? !!tender.award_verified : false,
+      tender_dlp_status: tender ? tender.dlp_status : null,
+      tender_dlp_verified: tender ? !!tender.dlp_verified : false,
+      tender_responsibility_active_verified: tender
+        ? tender.responsibility_active_verified === true : false,
+      tender_responsibility_valid_from: tender ? (tender.responsibility_valid_from || null) : null,
+      tender_responsibility_valid_until: tender ? (tender.responsibility_valid_until || null) : null,
+      tender_responsible_authority_id: tender ? (tender.responsible_authority_id || null) : null,
+      tender_road_owner_id: tender ? (tender.road_owner_id || null) : null,
+      tender_verification_evidence: tender ? (tender.verification_evidence || null) : null,
+      tender_unambiguous: tender ? tender.unambiguous === true : false,
+      tender_pack_id: tender ? (tender.tender_pack_id || null) : null,
+      tender_pack_version: tender ? (tender.tender_pack_version || null) : null,
+      tender_pack_sha256: tender ? (tender.tender_pack_sha256 || null) : null,
+      tender_pack_state_code: tender ? (tender.tender_pack_state_code || null) : null,
+      sent_at: null, drive_id: driveId, capture_source: "drive_live",
+      source_event_key: sourceEventKey, source_event_keys: [sourceEventKey],
+      captured_at: Number.isFinite(capturedAt) ? capturedAt : null,
+      source_offset_s: Number.isFinite(offset) ? offset : null,
+      gps_accuracy: Number.isFinite(gpsAccuracy) ? gpsAccuracy : null,
+      speed_mps: Number.isFinite(speed) ? speed : null,
+      heading: Number.isFinite(heading) ? ((heading % 360) + 360) % 360 : null,
+      frame_quality: null, primary_frame_index: Number(native.primary_frame_index) || 0,
+      debug_capture: debug, dedupe_eligible: !debug,
+      event_sightings: [eventSighting({
+        drive_id: driveId, lat, lng,
+        source_offset_s: Number.isFinite(offset) ? offset : null,
+        captured_at: Number.isFinite(capturedAt) ? capturedAt : null,
+        gps_accuracy: Number.isFinite(gpsAccuracy) ? gpsAccuracy : null,
+        speed_mps: Number.isFinite(speed) ? speed : null,
+        heading: Number.isFinite(heading) ? heading : null,
+        source_event_key: sourceEventKey,
+      })],
+      sighting_drive_ids: driveId ? [driveId] : [], seen_count: 1,
+      last_seen_at: Number.isFinite(capturedAt) ? capturedAt : Date.now() / 1000,
+    };
+    const committed = await addReportUnlessDuplicate(rec, !debug);
+    return { native_id: nativeId, id: committed.duplicate ? committed.duplicate.id : committed.id,
+             duplicate: !!committed.duplicate };
+  }
+
+  async function evidenceForReport(rec) {
+    if (conditionStatus(rec) === "fixed") {
+      throw new Error("This pothole was verified fixed on a later drive, so its old complaint evidence is archival only.");
+    }
+    if (!rec || !ACCEPTED_REPORT_STATUSES.has(rec.status)) {
+      throw new Error("Only an accepted report has shareable evidence.");
+    }
+    rec = migrateLegacyComplaintRecord(rec);
+    const fullSource = fullFramePhoto(rec);
+    if (!fullSource) throw new Error("A complete full-frame evidence image is unavailable for this legacy report.");
+    const source = await dataUrlToBlob(fullSource);
+    const wideUrl = await toDataUrl(source, 1280, 0.86, false);
+    const base64 = wideUrl && wideUrl.split(",")[1];
+    if (!base64) throw new Error("The report photo could not be read.");
+    const safeId = String(rec.id || "report").replace(/[^a-zA-Z0-9_-]/g, "");
+    const recordedAt = Number.isFinite(rec.captured_at) ? rec.captured_at : rec.created_at;
+    const captured = new Date(recordedAt * 1000);
+    const when = Number.isNaN(captured.getTime()) ? "" : captured.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "medium",
+    });
+    const issueStem = issueFileStem(rec.issue_type);
+    const evidenceBits = [
+      when ? `${rec.capture_source === "manual_import" ? "Selected photo file date"
+        : Number.isFinite(rec.captured_at) ? "Captured" : "Report created"} (IST): ${when}` : "",
+      rec.capture_source === "manual_import"
+        ? "Photo provenance: selected/imported by the user; original capture time unknown"
+        : rec.capture_source === "manual_camera"
+          ? "Photo provenance: app camera" : "",
+      Number.isFinite(rec.gps_accuracy) ? `GPS accuracy: ±${Math.round(rec.gps_accuracy)} m` : "",
+      rec.official_grievance_id
+        ? `User-entered grievance/reference ID: ${rec.official_grievance_id}` : "",
+    ].filter(Boolean);
+    const evidenceLine = evidenceBits.length ? `Evidence: ${evidenceBits.join("; ")}.` : "";
+    const bodyBlocks = String(rec.email_body || "").split(/\n{2,}/);
+    const hasFooter = bodyBlocks.length > 1
+      && /Pothole Reporter/.test(bodyBlocks[bodyBlocks.length - 1]);
+    const finalParagraph = hasFooter ? bodyBlocks.pop() : null;
+    const evidenceIndex = Math.max(0, bodyBlocks.length - 2);
+    if (evidenceLine) bodyBlocks.splice(evidenceIndex, 0, evidenceLine);
+    if (finalParagraph) bodyBlocks.push(finalParagraph);
+    const bodyWithEvidence = bodyBlocks.filter(Boolean).join("\n\n");
+    const meta = [
+      rec.email_subject || `${civicIssueName(rec.issue_type)} report`,
+      bodyWithEvidence,
+    ].filter(Boolean).join("\n\n");
+    return { name: `${issueStem}-${safeId}.jpg`, base64, text: meta };
+  }
+
+  const blobToDataUrl = async (v) => {
+    if (!v) return null;
+    if (typeof v === "string") return v;
+    return await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result));
+      fr.onerror = () => reject(fr.error || new Error("Could not read saved repair evidence."));
+      fr.readAsDataURL(v);
+    });
+  };
+
+  async function createCivicReport(fd) {
+    const issueType = String(fd.get("issue_type") || "");
+    if (!ISSUE_TYPE_SET.has(issueType) || issueType === "road_damage") {
+      throw new Error("Choose garbage or open/damaged manhole for a civic report.");
+    }
+    const photo = fd.get("photo");
+    if (!photo || !photo.size) throw new Error("Empty photo.");
+    const latRaw = fd.get("lat"), lngRaw = fd.get("lng");
+    const lat = latRaw != null && latRaw !== "" ? parseFloat(latRaw) : null;
+    const lng = lngRaw != null && lngRaw !== "" ? parseFloat(lngRaw) : null;
+    const gpsAccuracyRaw = parseFloat(fd.get("gps_accuracy"));
+    const speedRaw = parseFloat(fd.get("speed"));
+    const headingRaw = parseFloat(fd.get("heading"));
+    const capturedAtRaw = parseInt(fd.get("captured_at_ms"), 10);
+    const captureSource = normaliseManualCaptureSource(String(fd.get("capture_source") || ""));
+    const locationSource = String(fd.get("location_source") || "") || null;
+    const issueConfirmation = captureSource === "manual_camera"
+      ? "user_selected_before_capture" : "user_selected_for_import";
+
+    progress(pmsg("compress"));
+    const dataUrl = await toDataUrl(photo, 2000, 0.85, true);
+    progress(pmsg("finalize"));
+    const geo = lat != null ? await reverseGeocode(lat, lng).catch(() => null) : null;
+    const address = (geo && geo.short) || null;
+    const route = await routeOfficer(
+      geo || address, lat, lng, gpsAccuracyRaw, headingRaw, speedRaw, issueType);
+    const covered = !!route.routed;
+    progress(pmsg("write"));
+    const [subject, body] = covered
+      ? draftCivicComplaint(issueType, lat, lng, address, route.officer_name, route,
+          captureSource, locationSource)
+      : [null, null];
+    const capturedAt = Number.isFinite(capturedAtRaw) ? capturedAtRaw / 1000 : null;
+    const rec = {
+      created_at: Date.now() / 1000,
+      captured_at: capturedAt,
+      lat, lng, address,
+      photo: await dataUrlToBlob(dataUrl),
+      // Keep the original evidence even when routing is temporarily unavailable. The
+      // resized copy above is only for fast lists/previews; retrying must not depend on
+      // the user still having the source file.
+      photo_full: photo,
+      issue_type: issueType,
+      issue_confirmation: issueConfirmation,
+      report_origin: "user_reported",
+      is_reportable: 1,
+      is_pothole: 0,
+      damage_type: "none",
+      assessment: "manual",
+      image_quality: null,
+      on_drivable_surface: false,
+      has_localized_cavity: false,
+      has_unambiguous_lower_interior: false,
+      has_broken_edge_or_rim: false,
+      has_depth_or_surface_loss: false,
+      temporal_consistency: null,
+      size: null,
+      decision: "manual",
+      description: civicIssueName(issueType, LANG()),
+      email_subject: subject,
+      email_body: body,
+      complaint_template_version: body ? COMPLAINT_TEMPLATE_VERSION : null,
+      status: covered ? "draft" : "unrouted",
+      detection_model: null,
+      image_detail: null,
+      prompt_version: null,
+      schema_version: null,
+      evidence_count: 1,
+      unrouted_reason: covered ? null : (route.unrouted_reason || "outside_area"),
+      unrouted_body: covered ? null : (route.authority_name || null),
+      officer_name: covered ? (route.officer_name || null) : null,
+      officer_email: covered ? (route.officer_email || null) : null,
+      authority_id: covered ? (route.authority_id || null) : null,
+      authority_name: covered ? (route.authority_name || null) : null,
+      authority_registry_version: covered ? (route.authority_registry_version || null) : null,
+      delivery_channel: covered ? (route.delivery_channel || "email") : null,
+      ward_code: covered ? (route.ward_code || null) : null,
+      routing_source: covered ? (route.routing_source || null) : null,
+      routing_match_field: covered ? (route.routing_match_field || null) : null,
+      routing_match_value: covered ? (route.routing_match_value || null) : null,
+      highway_ref: null,
+      routing_pack_id: covered ? (route.routing_pack_id || null) : null,
+      routing_pack_version: covered ? (route.routing_pack_version || null) : null,
+      routing_pack_sha256: covered ? (route.routing_pack_sha256 || null) : null,
+      routing_pack_state_code: covered ? (route.routing_pack_state_code || null) : null,
+      region: covered ? (route.region || null) : null,
+      ownership_unverified: covered ? !!route.ownership_unverified : null,
+      handoff_name: covered ? (route.handoff_name || null) : null,
+      handoff_url: covered ? (route.handoff_url || null) : null,
+      handoff_package: covered ? (route.handoff_package || null) : null,
+      alternate_handoff_name: covered ? (route.alternate_handoff_name || null) : null,
+      alternate_handoff_url: covered ? (route.alternate_handoff_url || null) : null,
+      whatsapp_url: covered ? (route.whatsapp_url || null) : null,
+      helpline: covered ? (route.helpline || null) : null,
+      requires_official_reference: covered ? !!route.requires_official_reference : false,
+      official_grievance_id: null,
+      submitted_at: null,
+      tender_number: null,
+      tender_title: null,
+      contractor: null,
+      tender_note: null,
+      tender_pack_id: null,
+      tender_pack_version: null,
+      tender_pack_sha256: null,
+      tender_pack_state_code: null,
+      sent_at: null,
+      drive_id: null,
+      capture_source: captureSource,
+      location_source: locationSource,
+      capture_time_source: Number.isFinite(capturedAtRaw)
+        ? (captureSource === "manual_camera" ? "camera_return_time"
+          : captureSource === "manual_import" ? "file_last_modified" : "provided_time")
+        : null,
+      source_event_key: null,
+      source_event_keys: [],
+      source_offset_s: null,
+      gps_accuracy: Number.isFinite(gpsAccuracyRaw) ? gpsAccuracyRaw : null,
+      speed_mps: Number.isFinite(speedRaw) ? speedRaw : null,
+      heading: Number.isFinite(headingRaw) ? ((headingRaw % 360) + 360) % 360 : null,
+      frame_quality: null,
+      primary_frame_index: 0,
+      debug_capture: false,
+      dedupe_eligible: false,
+      event_sightings: [],
+      sighting_drive_ids: [],
+      seen_count: 1,
+      last_seen_at: capturedAt || Date.now() / 1000,
+    };
+    rec.id = await addReport(rec);
+    return toDict(rec);
+  }
+
+  async function retryCivicRouting(rec) {
+    if (!rec || rec.status !== "unrouted") {
+      throw new Error("Only an unrouted report can retry routing.");
+    }
+    const roadDamage = normaliseIssueType(rec.issue_type) === "road_damage";
+    if (!finiteCoord(rec.lat) || !finiteCoord(rec.lng)) {
+      throw new Error("This report has no stored coordinates. Retake it with location enabled.");
+    }
+    const retryableReasons = roadDamage
+      ? ["jurisdiction_unavailable", "road_class_unknown", "no_address_for_body"]
+      : ["jurisdiction_unavailable", "no_address_for_body"];
+    if (!retryableReasons.includes(rec.unrouted_reason)) {
+      throw new Error(
+        "Retry cannot change this saved location or issue category. Retake the report at the correct location instead."
+      );
+    }
+
+    const geo = await reverseGeocode(rec.lat, rec.lng).catch(() => null);
+    const address = (geo && geo.short) || rec.address || null;
+    const route = await routeOfficer(geo || address, rec.lat, rec.lng, rec.gps_accuracy,
+      rec.heading, rec.speed_mps, rec.issue_type);
+    rec.routing_retry_at = Date.now() / 1000;
+    rec.routing_retry_count = Math.max(0, Number(rec.routing_retry_count) || 0) + 1;
+    if (address) rec.address = address;
+
+    if (!route.routed) {
+      rec.unrouted_reason = route.unrouted_reason || rec.unrouted_reason || "outside_area";
+      rec.unrouted_body = route.authority_name || null;
+      await putReport(rec);
+      return toDict(rec);
+    }
+
+    applyRouteRecord(rec, route);
+    if (roadDamage) {
+      const tenderCandidate = canSearchTenderCatalog(route)
+        ? await matchTenderAt(rec.address, route, rec.lat, rec.lng).catch(() => null) : null;
+      const tender = normaliseTenderMatch(tenderCandidate, route);
+      applyTenderRecord(rec, tender);
+      const complaint = buildComplaintOutputs({
+        size: rec.size, surface_type: rec.surface_type,
+        measurement_provenance: rec.measurement_provenance,
+        measurement_confidence: rec.measurement_confidence,
+        description: rec.description,
+      }, rec.lat, rec.lng, rec.address, route.officer_name, tender, route, {
+        captured_at: rec.captured_at || rec.created_at,
+        gps_accuracy: rec.gps_accuracy,
+        photo_provenance: rec.capture_source === "manual_import"
+          ? "User-selected/imported photo" : "Pothole Reporter camera evidence",
+      });
+      Object.assign(rec, complaint);
+    } else {
+      const [subject, body] = draftCivicComplaint(rec.issue_type, rec.lat, rec.lng,
+        rec.address, route.officer_name, route, rec.capture_source, rec.location_source);
+      rec.email_subject = subject;
+      rec.email_body = body;
+    }
+    rec.complaint_template_version = COMPLAINT_TEMPLATE_VERSION;
+    rec.status = "draft";
+    rec.unrouted_reason = null;
+    rec.unrouted_body = null;
+    await putReport(rec);
+    return toDict(rec);
+  }
+
+  async function refreshAndPersistOfficialHandoff(rec) {
+    if (conditionStatus(rec) === "fixed") {
+      throw new Error("This pothole was verified fixed on a later drive, so its old handoff cannot be refreshed.");
+    }
+    const verified = await openOfficialHandoff(rec);
+    return mutateReportAtomically(rec.id, (current) => {
+      if (conditionStatus(current) === "fixed") {
+        throw new Error("This pothole was verified fixed on a later drive, so its old handoff cannot be refreshed.");
+      }
+      applyVerifiedHandoff(current, verified);
+    });
+  }
+
+  function getRepairTargetIds() {
+    return idb().then((d) => new Promise((resolve, reject) => {
+      const tx = d.transaction("reports", "readonly");
+      const ids = [];
+      let selectedBytes = 0;
+      let failure = null;
+      const scan = tx.objectStore("reports").openCursor(null, "prev");
+      scan.onsuccess = () => {
+        const cursor = scan.result;
+        if (!cursor || ids.length >= MAX_REPAIR_TARGETS) return;
+        const report = cursor.value;
+        const id = Number(report && report.id);
+        const photoBytes = repairTargetPhotoBytes(fullFramePhoto(report));
+        if (Number.isSafeInteger(id) && id > 0 && eligibleRepairTarget(report)
+            && Number.isFinite(photoBytes) && photoBytes > 0
+            && photoBytes <= MAX_REPAIR_TARGET_IMAGE_BYTES
+            && selectedBytes <= MAX_REPAIR_TARGET_TOTAL_BYTES - photoBytes) {
+          ids.push(id);
+          selectedBytes += photoBytes;
+        }
+        cursor.continue();
+      };
+      scan.onerror = () => { failure = scan.error; };
+      tx.oncomplete = () => failure ? reject(storageError(failure)) : resolve(ids);
+      const died = () => reject(storageError(failure || tx.error));
+      tx.onabort = died;
+      tx.onerror = () => {};
+    }));
+  }
+
+  async function getRepairTargetBatch(ids) {
+    if (!Array.isArray(ids) || !ids.length || ids.length > MAX_REPAIR_TARGET_BATCH_SIZE
+        || ids.some((id) => !Number.isSafeInteger(id) || id <= 0)
+        || new Set(ids).size !== ids.length) {
+      throw new Error("Repair target batch must contain one or two unique report ids.");
+    }
+    // At most two records and two photos exist in this call at any time.
+    const reports = await Promise.all(ids.map((id) => getReport(id)));
+    const targets = [];
+    for (let index = 0; index < ids.length; index++) {
+      const report = reports[index];
+      if (!report || Number(report.id) !== ids[index] || !eligibleRepairTarget(report)) {
+        throw new Error("Repair history changed while its native cache was being refreshed.");
+      }
+      const photoBytes = repairTargetPhotoBytes(fullFramePhoto(report));
+      if (!Number.isFinite(photoBytes) || photoBytes <= 0
+          || photoBytes > MAX_REPAIR_TARGET_IMAGE_BYTES) {
+        throw new Error("A repair target photo exceeds the 4 MB native cache limit.");
+      }
+      targets.push({
+        id: report.id,
+        lat: report.lat,
+        lng: report.lng,
+        gps_accuracy: report.gps_accuracy,
+        heading: Number.isFinite(report.heading) ? report.heading : null,
+        capture_source: report.capture_source || null,
+        photo_data_url: await blobToDataUrl(fullFramePhoto(report)),
+        last_damage_observed_at: eventTime(report),
+        damage_type: storedDamageType(report),
+        condition_status: conditionStatus(report),
+      });
+    }
+    return targets;
+  }
+
+  function repairConditionFor(observation) {
+    if (!observation || observation.current_condition !== "repaired"
+        || observation.same_location_visible !== true
+        || observation.completed_repair_visible !== true
+        || observation.image_quality !== "usable") return null;
+    if (observation.assessment === "clear") return "fixed";
+    if (observation.assessment === "probable") return "repair_review";
+    return null;
+  }
+
+  async function findRepairCandidate(observation) {
+    if (!observation || !finiteCoord(observation.lat) || !finiteCoord(observation.lng)) return null;
+    const latitudeBand = REPAIR_RADIUS_M / 110900;
+    const nearby = await op("readonly", (store) => store.index("by_lat").getAll(
+      IDBKeyRange.bound(observation.lat - latitudeBand, observation.lat + latitudeBand)));
+    return findRepairCandidateFromReports(observation, nearby);
+  }
+
+
+
+  const REPAIR_SCHEMA_VERSION = 1;
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  const MAX_REPAIR_TARGETS = 2000;
+
+  function applyRouteRecord(rec, route) {
+    for (const field of ROUTE_RECORD_FIELDS) {
+      rec[field] = route[field] === undefined ? null : route[field];
+    }
+  }
+
+  function fullFramePhoto(report) {
+    if (!report) return null;
+    if (report.photo_full) return report.photo_full;
+    if (isManualCaptureSource(report.capture_source)) return report.photo || null;
+    // v13 is the first Drive contract that guarantees every working and evidence image is
+    // a complete frame. v16 remains valid after the confirmation-policy upgrade.
+    // Older Web Drive rows may store a crop in `photo`, so fail closed.
+    return (report.prompt_version === PROMPT_VERSION
+      || report.prompt_version === LEGACY_NATIVE_V16_PROMPT_VERSION
+      || report.prompt_version === LEGACY_NATIVE_V15_PROMPT_VERSION
+      || report.prompt_version === LEGACY_NATIVE_V13_PROMPT_VERSION)
+      ? report.photo || null : null;
+  }
+
+  async function matchTenderAt(address, route, lat, lng, provisional = null) {
+    if (!canSearchTenderCatalog(route)) return null;
+    const lower = startLowerCatalogMatches(address, route);
+    const highwayP = route.region === "national-highway"
+      ? optionalCatalogResult(matchHighwayContract(address, route)) : Promise.resolve(null);
+    const karnatakaP = provisional ? optionalCatalogResult(provisional)
+      : (route.routing_pack_state_code === "KA" || route.contract_state_code === "KA")
+        ? optionalCatalogResult((async () => {
+        const where = await jurisdictionOf(lat, lng);
+        return where && where.kind === "town" && where.lgd
+          ? matchTender(address, where.lgd) : null;
+      })()) : Promise.resolve(null);
+    const highway = await highwayP;
+    if (highway) return highway;
+    const karnataka = await karnatakaP;
+    if (karnataka) return karnataka;
+    return preferredLowerCatalogMatch(lower);
+  }
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  const MAX_REPAIR_TARGET_BATCH_SIZE = 2;
+
+  const MAX_REPAIR_TARGET_IMAGE_BYTES = 4 * 1024 * 1024;
+
+  const MAX_REPAIR_TARGET_TOTAL_BYTES = 512 * 1024 * 1024;
+
+  const TEMPORARY_DRIVABLE_SURFACE = "temporary_drivable_surface";
+
+  function applyTenderRecord(rec, tender) {
+    for (const [recordField, tenderField] of Object.entries(TENDER_RECORD_FIELDS)) {
+      rec[recordField] = tender && tender[tenderField] !== undefined
+        ? tender[tenderField] : null;
+    }
+    rec.tender_scope_verified = !!(tender && tender.scope_verified);
+    rec.tender_segment_verified = !!(tender && tender.segment_verified);
+    rec.tender_award_verified = !!(tender && tender.award_verified);
+    rec.tender_dlp_verified = !!(tender && tender.dlp_verified);
+    rec.tender_responsibility_active_verified = !!(
+      tender && tender.responsibility_active_verified);
+    rec.tender_unambiguous = !!(tender && tender.unambiguous);
+  }
+
+  function applyVerifiedHandoff(rec, verified) {
+    for (const field of VERIFIED_HANDOFF_FIELDS) {
+      rec[field] = verified[field] === undefined ? null : verified[field];
+    }
+    refreshGeneratedComplaintFields(rec);
+    return rec;
+  }
+
+  async function decodeRepairEvidence(value) {
+    let blob = null;
+    if (typeof Blob !== "undefined" && value instanceof Blob) {
+      blob = value;
+    } else if (typeof value === "string"
+        && /^data:image\/(?:jpeg|png|webp);base64,/i.test(value)) {
+      try {
+        const response = await fetch(value);
+        if (!response.ok) return null;
+        blob = await response.blob();
+      } catch (_) { return null; }
+    }
+    const type = String(blob && blob.type || "").toLowerCase();
+    if (!blob || blob.size < REPAIR_EVIDENCE_MIN_BYTES || blob.size > REPAIR_EVIDENCE_MAX_BYTES
+        || !REPAIR_EVIDENCE_TYPES.has(type)) return null;
+    let header;
+    try { header = new Uint8Array(await blob.slice(0, 12).arrayBuffer()); }
+    catch (_) { return null; }
+    const jpeg = header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
+    const png = header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4e
+      && header[3] === 0x47 && header[4] === 0x0d && header[5] === 0x0a
+      && header[6] === 0x1a && header[7] === 0x0a;
+    const webp = header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46
+      && header[3] === 0x46 && header[8] === 0x57 && header[9] === 0x45
+      && header[10] === 0x42 && header[11] === 0x50;
+    if ((type === "image/jpeg" && !jpeg) || (type === "image/png" && !png)
+        || (type === "image/webp" && !webp)) return null;
+    let width = 0, height = 0;
+    if (typeof createImageBitmap === "function") {
+      let bitmap = null;
+      try {
+        bitmap = await createImageBitmap(blob);
+        width = bitmap.width; height = bitmap.height;
+      } catch (_) { return null; }
+      finally { if (bitmap && bitmap.close) bitmap.close(); }
+    } else {
+      const url = URL.createObjectURL(blob);
+      try {
+        const dimensions = await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve([img.naturalWidth, img.naturalHeight]);
+          img.onerror = () => reject(new Error("Repair evidence is not a decodable image."));
+          img.src = url;
+        });
+        width = dimensions[0]; height = dimensions[1];
+      } catch (_) { return null; }
+      finally { URL.revokeObjectURL(url); }
+    }
+    if (!Number.isInteger(width) || !Number.isInteger(height)
+        || width < REPAIR_EVIDENCE_MIN_DIMENSION || height < REPAIR_EVIDENCE_MIN_DIMENSION
+        || width > REPAIR_EVIDENCE_MAX_DIMENSION || height > REPAIR_EVIDENCE_MAX_DIMENSION
+        || width * height > REPAIR_EVIDENCE_MAX_PIXELS) return null;
+    return blob;
+  }
+
+  function eligibleRepairTarget(report) {
+    if (!acceptedReport(report) || conditionStatus(report) === "fixed"
+        || report.debug_capture || report.dedupe_eligible === false || !fullFramePhoto(report)
+        || report.capture_source === "manual_import"
+        || !finiteCoord(report.lat) || !finiteCoord(report.lng)
+        || !Number.isFinite(eventTime(report))
+        || !Number.isFinite(report.gps_accuracy) || report.gps_accuracy < 0
+        || report.gps_accuracy > REPAIR_MAX_ACCURACY_M) return false;
+    return normaliseIssueType(report.issue_type) === "road_damage";
+  }
+
+  const normaliseManualCaptureSource = (value) => value === "manual_camera"
+    ? "manual_camera" : value === "manual_import" ? "manual_import" : "manual";
+
+  async function openOfficialHandoff(rec) {
+    if (conditionStatus(rec) === "fixed") {
+      throw new Error("This pothole was verified fixed on a later drive, so its old handoff cannot be opened.");
+    }
+    if (!isOfficialHandoff(rec)) throw new Error("This report has no official app or portal handoff.");
+    // v1.14 BMC records did not persist pack metadata. Keep them usable, but never trust
+    // the URL saved in the report: reload the current app-pinned pack and find the same
+    // stable authority ID inside its freshly validated registry.
+    const legacyBmc = rec.delivery_channel === "bmc_quickfix";
+    const authorityId = legacyBmc ? "mh-bmc" : rec.authority_id;
+    if (authorityId === "in-national-highway") {
+      return openNationalHighwayHandoff(rec);
+    }
+    if (normaliseIssueType(rec.issue_type) === "road_damage") {
+      const highway = await nationalHighwayRoute(
+        rec.lat, rec.lng, rec.gps_accuracy, rec.heading, rec.speed_mps);
+      if (highway && highway.routed !== true) {
+        throw new Error(
+          "The road class is currently uncertain at this coordinate, so the app will not open a possibly wrong civic route. Try again with routing data available."
+        );
+      }
+      if (highway && highway.authority_id === "in-national-highway") {
+        const geo = await reverseGeocode(rec.lat, rec.lng).catch(() => null);
+        const stateHint = stateCodeForGeocode(geo)
+          || (/^[A-Z]{2}$/.test(String(rec.routing_pack_state_code || ""))
+            ? rec.routing_pack_state_code : null);
+        const contractStateCode = await exactPinnedContractStateCode(
+          stateHint, rec.lat, rec.lng, rec.gps_accuracy);
+        return routeForIssue({
+          ...toDict(rec), ...highway,
+          contract_state_code: contractStateCode,
+          tender_eligible: !!contractStateCode,
+        }, rec.issue_type);
+      }
+    }
+    if (/^ka-lgd-[0-9]+$/.test(String(authorityId || ""))) {
+      return openBengaluruHandoff(rec);
+    }
+    if (authorityId === "in-tn-cm-helpline") {
+      const migrated = await migrateLegacyTamilNaduHandoff(rec);
+      if (!migrated) {
+        throw new Error("This saved Tamil Nadu report could not be safely upgraded to the current state route.");
+      }
+      return migrated;
+    }
+    if (authorityId === "in-ap-puramithra") {
+      const migrated = await migrateLegacyAndhraPradeshHandoff(rec);
+      if (!migrated) {
+        throw new Error("This saved Andhra Pradesh report could not be safely upgraded to the current state route.");
+      }
+      return migrated;
+    }
+    const packId = routingPackForAuthority(authorityId, rec.routing_pack_id || null);
+    if (rec.routing_pack_id && rec.routing_pack_id !== packId) {
+      throw new Error("This saved report's authority does not match its verified routing provenance.");
+    }
+    const pack = packId ? await loadStatePack(packId) : null;
+    const current = pack && Array.isArray(pack.authorities)
+      ? pack.authorities.find((authority) => authority.id === authorityId) : null;
+    if (!current) {
+      throw new Error("This saved report's verified official handoff is unavailable. Connect and try again.");
+    }
+    const binding = await savedOfficialRouteBinding(rec, packId, authorityId, pack);
+    if (!binding) {
+      throw new Error("This saved report's authority does not match its verified routing provenance.");
+    }
+    const verified = routeForIssue({
+      ...toDict(rec),
+      officer_name: `${current.handoff_name}, ${current.name}`,
+      authority_id: current.id,
+      authority_name: current.name,
+      authority_registry_version: AUTHORITY_REGISTRY_VERSION,
+      routing_source: rec.routing_source || binding.routing_source,
+      region: binding.region,
+      handoff_name: current.handoff_name,
+      handoff_url: current.handoff_url,
+      handoff_package: current.handoff_package || null,
+      alternate_handoff_name: current.alternate_handoff_name || null,
+      alternate_handoff_url: current.alternate_handoff_url || null,
+      whatsapp_url: current.whatsapp_url || null,
+      helpline: current.helpline || null,
+      requires_official_reference: true,
+      ownership_unverified: true,
+      tender_eligible: false,
+      ...statePackProvenance(packId),
+    }, rec.issue_type);
+    if (!verified.handoff_url || !String(verified.handoff_url).startsWith("https://")) {
+      throw new Error("The verified official handoff for this saved report is unavailable.");
+    }
+    return verified;
+  }
+
+  const repairProvenanceIsExact = (observation) => {
+    if (!observation || typeof observation !== "object") return false;
+    const model = observation.detection_model;
+    const detail = observation.image_detail;
+    return typeof model === "string" && model.length > 0 && ALLOWED_MODELS.has(model)
+      && typeof detail === "string" && detail.length > 0 && ALLOWED_DETAILS.has(detail)
+      && normaliseDetail(detail, model) === detail
+      && typeof observation.description === "string"
+      && observation.description.trim().length > 0
+      && observation.prompt_version === NATIVE_REPAIR_CONTRACT_VERSION
+      && Number.isInteger(observation.schema_version)
+      && observation.schema_version === REPAIR_SCHEMA_VERSION;
+  };
+
+  function repairTargetPhotoBytes(photo) {
+    if (typeof photo === "string") {
+      const match = photo.match(/^data:image\/(?:jpeg|jpg|png|webp|gif);base64,([A-Za-z0-9+/]*={0,2})$/i);
+      if (!match) return NaN;
+      const payload = match[1];
+      const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+      return Math.floor(payload.length * 3 / 4) - padding;
+    }
+    return photo && Number.isFinite(photo.size) ? Number(photo.size) : NaN;
+  }
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  const REPAIR_EVIDENCE_MAX_BYTES = 8 * 1024 * 1024;
+
+  const REPAIR_EVIDENCE_MAX_DIMENSION = 8192;
+
+  const REPAIR_EVIDENCE_MAX_PIXELS = 40 * 1024 * 1024;
+
+  const REPAIR_EVIDENCE_MIN_BYTES = 256;
+
+  const REPAIR_EVIDENCE_MIN_DIMENSION = 32;
+
+  const REPAIR_EVIDENCE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+  const NATIVE_REPAIR_CONTRACT_VERSION = "road-repair-v1";
+
+  const VERIFIED_HANDOFF_FIELDS = [
+    "officer_name", "authority_id", "authority_name", "authority_registry_version",
+    "routing_source", "region", "handoff_name", "handoff_url", "handoff_package",
+    "alternate_handoff_name", "alternate_handoff_url", "whatsapp_url", "helpline",
+    "requires_official_reference", "routing_pack_id", "routing_pack_version",
+    "routing_pack_sha256", "routing_pack_state_code", "routing_match_field",
+    "routing_match_value", "highway_ref", "contract_state_code",
+    "ownership_unverified", "tender_eligible",
+    "geographic_authority_id", "geographic_authority_name",
+    "intake_authority_id", "intake_authority_name",
+    "road_owner_id", "road_owner_name", "road_owner_status", "road_owner_evidence",
+  ];
+
+  const isOfficialHandoff = (rec) => !!rec && OFFICIAL_HANDOFF_CHANNELS.has(rec.delivery_channel);
+
+  async function matchHighwayContract(address, route) {
+    const stateCode = route && route.contract_state_code;
+    if (!route || route.region !== "national-highway" || route.tender_eligible !== true
+        || !stateCode || !route.highway_ref) return null;
+    const pack = await loadHighwayContractPack(stateCode);
+    const ranked = highwayContractCandidates(pack && pack.contracts, route.highway_ref, address);
+    if (!ranked.length) return null;
+    const { record, matching_refs: matchingRefs, locality_hits: localityHits } = ranked[0];
+    const lifecycleNote = record.lifecycle === "procurement_notice"
+      ? "Open procurement notice; no contractor or award is asserted"
+      : `Official project lifecycle: ${record.lifecycle_status}`;
+    return {
+      tender_number: record.reference_value,
+      reference_label: record.reference_label,
+      contractor: record.contractor,
+      title: record.title,
+      published: record.published_at || record.start_date,
+      source_name: record.source_name,
+      source_url: record.source_url,
+      lifecycle: record.lifecycle,
+      lifecycle_status: record.lifecycle_status,
+      match_basis: `State/UT ${stateCode}; mapped ${matchingRefs.join(" / ")}`
+        + (localityHits.length ? `; title/address ${localityHits.join(", ")}` : ""),
+      candidate_status: "candidate",
+      scope_status: "carriageway_scope_present",
+      scope_verified: true,
+      // The source publishes a highway/package chainage, but the OSM route geometry has
+      // no authoritative chainage origin. Do not claim this GPS point lies in that range.
+      segment_status: "unverified_chainage",
+      segment_verified: false,
+      award_status: record.award_verified ? "verified_by_source_record" : "unverified",
+      award_verified: record.award_verified,
+      dlp_status: "unverified",
+      dlp_verified: false,
+      note: `${record.reference_label}: ${record.reference_value}. ${lifecycleNote}.`,
+      ...contractPackProvenance(stateCode),
+    };
+  }
+
+  async function migrateLegacyAndhraPradeshHandoff(rec) {
+    const region = rec && LEGACY_ANDHRA_PRADESH_TOP50_REGIONS[rec.region];
+    const match = String(rec && rec.routing_match_value || "")
+      .match(/^(city|municipality): (.+)$/);
+    const aliases = region && new Set(region.aliases.map(normaliseAuthorityValue));
+    if (!region || !match || !aliases.has(normaliseAuthorityValue(match[2]))
+        || rec.authority_id !== "in-ap-puramithra"
+        || rec.routing_pack_id !== "in-top50-routing"
+        || rec.routing_pack_version !== 1
+        || rec.routing_pack_sha256 !== LEGACY_ANDHRA_PRADESH_TOP50_SHA256
+        || rec.routing_pack_state_code !== "IN"
+        || rec.routing_source !== "nominatim_structured_city"
+        || rec.routing_match_field !== "structured_place"
+        || !Number.isFinite(rec.lat) || !Number.isFinite(rec.lng)
+        || !Number.isFinite(rec.gps_accuracy) || rec.gps_accuracy < 0
+        || rec.gps_accuracy > 30
+        || !accuracyCircleWithinEnvelope(
+          rec.lat, rec.lng, rec.gps_accuracy, region.envelope)) {
+      return null;
+    }
+    const current = await andhraPradeshRouteFromGeocode(
+      null, rec.lat, rec.lng, rec.gps_accuracy);
+    if (!current || !current.routed
+        || current.authority_id !== "ap-statewide-unverified"
+        || current.routing_pack_id !== "in-ap-routing") return null;
+    return routeForIssue({ ...toDict(rec), ...current }, rec.issue_type);
+  }
+
+  async function migrateLegacyTamilNaduHandoff(rec) {
+    const region = rec && LEGACY_TAMIL_NADU_TOP50_REGIONS[rec.region];
+    const match = String(rec && rec.routing_match_value || "")
+      .match(/^(city|municipality): (.+)$/);
+    const aliases = region && new Set(region.aliases.map(normaliseAuthorityValue));
+    if (!region || !match || !aliases.has(normaliseAuthorityValue(match[2]))
+        || rec.authority_id !== "in-tn-cm-helpline"
+        || rec.routing_pack_id !== "in-top50-routing"
+        || rec.routing_pack_version !== 1
+        || rec.routing_pack_sha256 !== LEGACY_TAMIL_NADU_TOP50_SHA256
+        || rec.routing_pack_state_code !== "IN"
+        || rec.routing_source !== "nominatim_structured_city"
+        || rec.routing_match_field !== "structured_place"
+        || !Number.isFinite(rec.lat) || !Number.isFinite(rec.lng)
+        || !Number.isFinite(rec.gps_accuracy) || rec.gps_accuracy < 0
+        || rec.gps_accuracy > 30
+        || !accuracyCircleWithinEnvelope(
+          rec.lat, rec.lng, rec.gps_accuracy, region.envelope)) {
+      return null;
+    }
+    const current = await tamilNaduRouteFromGeocode(
+      null, rec.lat, rec.lng, rec.gps_accuracy);
+    if (!current || !current.routed
+        || current.authority_id !== "tn-statewide-unverified"
+        || current.routing_pack_id !== "in-tn-state-routing") return null;
+    return routeForIssue({ ...toDict(rec), ...current }, rec.issue_type);
+  }
+
+  async function openBengaluruHandoff(rec) {
+    if (normaliseIssueType(rec && rec.issue_type) === "road_damage") {
+      throw new Error("Bengaluru road reports use the verified municipal email route.");
+    }
+    const match = String(rec.authority_id || "").match(/^ka-lgd-([0-9]+)$/);
+    if (!match || rec.routing_pack_id !== "in-ka-routing"
+        || rec.routing_pack_state_code !== "KA"
+        || rec.routing_match_field !== "lgd"
+        || String(rec.routing_match_value || "") !== match[1]) {
+      throw new Error("This saved Bengaluru report has incomplete routing provenance.");
+    }
+    const pack = await loadStatePack("in-ka-routing");
+    const entry = pack && pack.payload && pack.payload.bodies
+      ? pack.payload.bodies[match[1]] : null;
+    if (!entry || !BENGALURU_AUTHORITY_NAMES.has(normaliseAuthorityValue(entry.name))
+        || normaliseAuthorityValue(rec.authority_name) !== normaliseAuthorityValue(entry.name)) {
+      throw new Error("This saved report no longer matches a verified Bengaluru civic body.");
+    }
+    // Re-check the live civic boundary before launching the generic city service. This
+    // prevents a locally altered saved record from borrowing a Bengaluru handoff while
+    // retaining unrelated coordinates or another body's LGD code.
+    const current = await kgisCivicJurisdiction(rec.lat, rec.lng);
+    if (!current || current.kind !== "town" || String(current.lgd || "") !== match[1]) {
+      throw new Error("This saved report no longer matches the Bengaluru civic jurisdiction.");
+    }
+    const verified = routeForIssue({
+      ...toDict(rec),
+      routed: true,
+      officer_name: `Civic complaint desk, ${entry.name}`,
+      officer_email: entry.email,
+      authority_id: `ka-lgd-${match[1]}`,
+      authority_name: entry.name,
+      authority_registry_version: AUTHORITY_REGISTRY_VERSION,
+      delivery_channel: "email",
+      region: "karnataka",
+      routing_source: "kgis",
+      routing_match_field: "lgd",
+      routing_match_value: match[1],
+      ownership_unverified: true,
+      requires_official_reference: false,
+      tender_eligible: true,
+      ...statePackProvenance("in-ka-routing"),
+    }, rec.issue_type);
+    if (!verified.handoff_url || !verified.handoff_url.startsWith("https://")) {
+      throw new Error("The verified Bengaluru official handoff is unavailable.");
+    }
+    return verified;
+  }
+
+  async function openNationalHighwayHandoff(rec) {
+    if (!rec || rec.authority_id !== "in-national-highway") {
+      throw new Error("This report is not bound to the National Highway handoff.");
+    }
+    const provenance = ["routing_pack_id", "routing_pack_version", "routing_pack_sha256",
+      "routing_pack_state_code"];
+    const present = provenance.filter((field) => rec[field] !== undefined
+      && rec[field] !== null && rec[field] !== "");
+    if (present.length !== provenance.length
+        || !/^in-nh-e[0-9]{3}n[0-9]{2}$/.test(String(rec.routing_pack_id || ""))
+        || rec.routing_pack_state_code !== "IN"
+        || !Number.isInteger(rec.routing_pack_version) || rec.routing_pack_version < 1
+        || !/^[0-9a-f]{64}$/.test(String(rec.routing_pack_sha256 || ""))) {
+      throw new Error("This saved highway report has incomplete routing provenance.");
+    }
+    const current = await nationalHighwayRoute(
+      rec.lat, rec.lng, rec.gps_accuracy, rec.heading, rec.speed_mps);
+    if (!current || !current.routed || current.authority_id !== "in-national-highway"
+        || current.region !== "national-highway" || !current.highway_ref) {
+      throw new Error("This saved report no longer matches a verified National Highway tile.");
+    }
+    const oldRefs = new Set(String(rec.highway_ref || "").split(" / ").filter(Boolean));
+    const currentRefs = String(current.highway_ref).split(" / ").filter(Boolean);
+    if (oldRefs.size && !currentRefs.some((ref) => oldRefs.has(ref))) {
+      throw new Error("This saved report's highway reference changed; review the location again.");
+    }
+    return {
+      ...toDict(rec), ...current,
+      contract_state_code: rec.contract_state_code || null,
+      tender_eligible: !!rec.contract_state_code,
+    };
+  }
+
+  async function preferredLowerCatalogMatch(matches) {
+    const agreement = await matches.agreement;
+    return agreement || await matches.notice;
+  }
+
+  function routingPackForAuthority(authorityId, preferredPackId = null) {
+    const id = String(authorityId || "");
+    if (PACK_ID_BY_AUTHORITY.has(id)) {
+      const installed = PACK_ID_BY_AUTHORITY.get(id);
+      if (preferredPackId && installed.has(preferredPackId)) return preferredPackId;
+      if (installed.size === 1) return [...installed][0];
+      return null;
+    }
+    const match = id.match(/^([a-z]{2})-/);
+    if (!match) return null;
+    const stateCode = match[1].toUpperCase();
+    const candidates = Object.entries(SUPPORTED_STATE_PACKS)
+      .filter(([, spec]) => spec.kind === "routing" && spec.state_code === stateCode)
+      .map(([packId]) => packId);
+    if (preferredPackId && candidates.includes(preferredPackId)) return preferredPackId;
+    return candidates.length === 1 ? candidates[0] : null;
+  }
+
+  async function savedOfficialRouteBinding(rec, packId, authorityId, pack) {
+    const binding = currentOfficialRouteBinding(packId, authorityId, pack, rec.region);
+    if (!binding) return null;
+    const provenanceFields = [
+      "routing_pack_id", "routing_pack_version", "routing_pack_sha256",
+      "routing_pack_state_code",
+    ];
+    const present = provenanceFields.filter((field) => rec[field] !== undefined
+      && rec[field] !== null && rec[field] !== "");
+    // Old reports predate pack provenance and are upgraded after validation. Newer
+    // records must retain the complete binding; a partial mix is not trustworthy.
+    if (present.length && present.length !== provenanceFields.length) return null;
+    const municipal = MUNICIPAL_CITY_CONFIGS[packId];
+    if (municipal && present.length !== provenanceFields.length) return null;
+    const newNeutralRoute = packId === "in-pb-routing"
+      || packId === "in-tn-state-routing" || packId === "in-ap-routing"
+      || packId === "in-tg-state-routing" || packId === "in-ka-state-routing"
+      || packId === "in-kl-routing" || packId === "in-up-routing"
+      || packId === "in-cg-routing" || packId === "in-rj-routing"
+      || packId === "in-ga-routing" || packId === "in-mp-routing"
+      || packId === "in-br-routing" || packId === "in-od-routing"
+      || packId === "in-top50-routing"
+      || !!REMAINING_STATE_ROUTE_CONFIGS[packId];
+    if (newNeutralRoute && present.length !== provenanceFields.length) return null;
+    // The statewide West Bengal route did not exist before this pack release, so there
+    // is no legitimate provenance-free legacy record to upgrade.
+    if (authorityId === "wb-statewide-unverified"
+        && present.length !== provenanceFields.length) return null;
+    if (present.length) {
+      const resource = _statePackManifest && _statePackManifest.resources
+        && _statePackManifest.resources[packId];
+      if (!resource || rec.routing_pack_id !== packId
+          || rec.routing_pack_state_code !== resource.state_code
+          || !Number.isInteger(rec.routing_pack_version) || rec.routing_pack_version < 1
+          || rec.routing_pack_version > resource.pack_version
+          || !/^[0-9a-f]{64}$/.test(String(rec.routing_pack_sha256 || ""))) {
+        return null;
+      }
+      if (newNeutralRoute && (rec.routing_pack_version !== resource.pack_version
+          || rec.routing_pack_sha256 !== resource.sha256)) return null;
+      const digestOwner = Object.values(_statePackManifest.resources)
+        .find((item) => item.sha256 === rec.routing_pack_sha256);
+      if (digestOwner && digestOwner.pack_id !== packId) return null;
+    }
+    if (rec.region && rec.region !== binding.region) return null;
+    if (newNeutralRoute && rec.region !== binding.region) return null;
+    const remaining = REMAINING_STATE_ROUTE_CONFIGS[packId];
+    if (remaining
+        && (rec.routing_source !== remaining.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== `${remaining.name} (OpenStreetMap relation ${remaining.relation_id})`)) {
+      return null;
+    }
+    if (packId === "in-wb-routing" && rec.routing_source
+        && rec.routing_source !== binding.routing_source) return null;
+    if (packId === "in-wb-routing" && rec.routing_match_field
+        && rec.routing_match_field !== "boundary") return null;
+    if (authorityId === "wb-kmc" && rec.routing_match_value
+        && rec.routing_match_value !== "wb_municipal_boundary:250299_0000001") return null;
+    if (authorityId === "wb-statewide-unverified"
+        && (rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "West Bengal (OpenStreetMap relation 1960177)")) {
+      return null;
+    }
+    if (packId === "in-pb-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Punjab (OpenStreetMap relation 1942686)")) {
+      return null;
+    }
+    if (packId === "in-tn-state-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Tamil Nadu (OpenStreetMap relation 96905)")) {
+      return null;
+    }
+    if (packId === "in-ap-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Andhra Pradesh (OpenStreetMap relation 2022095)")) {
+      return null;
+    }
+    if (packId === "in-tg-state-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Telangana (OpenStreetMap relation 3250963)")) {
+      return null;
+    }
+    if (packId === "in-ka-state-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Karnataka (OpenStreetMap relation 2019939)")) {
+      return null;
+    }
+    if (packId === "in-kl-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Kerala (OpenStreetMap relation 2018151)")) {
+      return null;
+    }
+    if (packId === "in-up-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Uttar Pradesh (OpenStreetMap relation 1942587)")) {
+      return null;
+    }
+    if (packId === "in-cg-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Chhattisgarh (OpenStreetMap relation 1972004)")) {
+      return null;
+    }
+    if (packId === "in-rj-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Rajasthan (OpenStreetMap relation 1942920)")) {
+      return null;
+    }
+    if (packId === "in-ga-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Goa (OpenStreetMap relation 11251493)")) {
+      return null;
+    }
+    if (packId === "in-mp-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Madhya Pradesh (OpenStreetMap relation 1950071)")) {
+      return null;
+    }
+    if (packId === "in-br-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Bihar (OpenStreetMap relation 1958982)")) {
+      return null;
+    }
+    if (packId === "in-od-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "boundary"
+          || rec.routing_match_value !== "Odisha (OpenStreetMap relation 1984022)")) {
+      return null;
+    }
+    if (packId === "in-top50-routing"
+        && (rec.routing_source !== binding.routing_source
+          || rec.routing_match_field !== "structured_place")) return null;
+    if (municipal && rec.routing_source && rec.routing_source !== binding.routing_source) return null;
+    if (municipal && !await savedMunicipalLocationMatches(rec, municipal, pack)) return null;
+    if (!municipal && !savedNonMunicipalLocationMatches(rec, packId, authorityId, pack)) return null;
+    return binding;
+  }
+
+  function startLowerCatalogMatches(address, route) {
+    // Start both downloads immediately. Awaiting the preferred PMGSY answer first keeps
+    // deterministic result priority without paying two serial network deadlines.
+    return {
+      agreement: optionalCatalogResult(matchRoadAgreement(address, route)),
+      notice: optionalCatalogResult(matchRoadNotice(address, route)),
+    };
+  }
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  const LEGACY_ANDHRA_PRADESH_TOP50_REGIONS = Object.freeze({
+    visakhapatnam: Object.freeze({
+      aliases: Object.freeze(["Visakhapatnam", "Vizag", "Waltair", "విశాఖపట్నం"]),
+      envelope: Object.freeze({
+        min_lng: 83.1321297, min_lat: 17.5335526,
+        max_lng: 83.4521297, max_lat: 17.8535526,
+      }),
+    }),
+    vijayawada: Object.freeze({
+      aliases: Object.freeze(["Vijayawada", "Bezawada", "విజయవాడ"]),
+      envelope: Object.freeze({
+        min_lng: 80.4560469, min_lat: 16.3515306,
+        max_lng: 80.7760469, max_lat: 16.6715306,
+      }),
+    }),
+  });
+
+  const LEGACY_TAMIL_NADU_TOP50_SHA256 =
+    "0250e95980b7c801986a2bf025c82e4b8eb2745fe36dad09fc6dfb2a5a4f8bf5";
+
+  const LEGACY_ANDHRA_PRADESH_TOP50_SHA256 = LEGACY_TAMIL_NADU_TOP50_SHA256;
+
+  const LEGACY_TAMIL_NADU_TOP50_REGIONS = Object.freeze({
+    coimbatore: Object.freeze({
+      aliases: Object.freeze(["Coimbatore", "Kovai", "கோயம்புத்தூர்"]),
+      envelope: Object.freeze({
+        min_lng: 76.8028425, min_lat: 10.8418115,
+        max_lng: 77.1228425, max_lat: 11.1618115,
+      }),
+    }),
+    madurai: Object.freeze({
+      aliases: Object.freeze(["Madurai", "மதுரை"]),
+      envelope: Object.freeze({
+        min_lng: 78.0155927, min_lat: 9.8245041,
+        max_lng: 78.2030091, max_lat: 9.9933722,
+      }),
+    }),
+  });
+
+  function currentOfficialRouteBinding(packId, authorityId, pack, regionId = null) {
+    const remaining = REMAINING_STATE_ROUTE_CONFIGS[packId];
+    if (remaining) {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || authorityId !== remaining.authority_id
+          || region.id !== remaining.region_id
+          || region.authority_id !== authorityId) return null;
+      return { region: remaining.region_id, routing_source: remaining.routing_source };
+    }
+    const municipal = MUNICIPAL_CITY_CONFIGS[packId];
+    if (municipal) {
+      const region = pack && pack.payload && Array.isArray(pack.payload.regions)
+        ? pack.payload.regions.find((item) => item && item.id === municipal.region_id) : null;
+      if (!region || authorityId !== municipal.authority_id
+          || region.authority_id !== authorityId) return null;
+      return { region: municipal.region_id, routing_source: municipal.routing_source };
+    }
+    if (packId === "in-top50-routing") {
+      const region = pack && pack.payload && Array.isArray(pack.payload.regions)
+        ? pack.payload.regions.find((item) => item && item.id === regionId) : null;
+      if (!region || region.authority_id !== authorityId
+          || region.routing_source !== "nominatim_structured_city") return null;
+      return { region: region.id, routing_source: region.routing_source };
+    }
+    if (packId === "in-pb-routing" && authorityId === "pb-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "punjab-state" || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_punjab_state_boundary" };
+    }
+    if (packId === "in-tn-state-routing" && authorityId === "tn-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "tamil-nadu-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_tamil_nadu_state_boundary" };
+    }
+    if (packId === "in-ap-routing" && authorityId === "ap-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "andhra-pradesh-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_andhra_pradesh_state_boundary" };
+    }
+    if (packId === "in-tg-state-routing" && authorityId === "tg-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "telangana-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_telangana_state_boundary" };
+    }
+    if (packId === "in-ka-state-routing" && authorityId === "ka-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "karnataka-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_karnataka_state_boundary" };
+    }
+    if (packId === "in-kl-routing" && authorityId === "kl-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "kerala-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_kerala_state_boundary" };
+    }
+    if (packId === "in-up-routing" && authorityId === "up-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "uttar-pradesh-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_uttar_pradesh_state_boundary" };
+    }
+    if (packId === "in-cg-routing" && authorityId === "cg-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "chhattisgarh-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_chhattisgarh_state_boundary" };
+    }
+    if (packId === "in-rj-routing" && authorityId === "rj-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "rajasthan-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_rajasthan_state_boundary" };
+    }
+    if (packId === "in-ga-routing" && authorityId === "ga-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "goa-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_goa_state_boundary" };
+    }
+    if (packId === "in-mp-routing" && authorityId === "mp-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "madhya-pradesh-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_madhya_pradesh_state_boundary" };
+    }
+    if (packId === "in-br-routing" && authorityId === "br-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "bihar-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_bihar_state_boundary" };
+    }
+    if (packId === "in-od-routing" && authorityId === "od-statewide-unverified") {
+      const region = pack && pack.payload && pack.payload.region;
+      if (!region || region.id !== "odisha-state"
+          || region.authority_id !== authorityId) return null;
+      return { region: region.id, routing_source: "osm_odisha_state_boundary" };
+    }
+    if (packId === "in-dl-routing" && authorityId === "dl-pwd-sewa") {
+      return { region: "delhi", routing_source: "osm_delhi_nct_boundary" };
+    }
+    if (packId === "in-wb-routing" && authorityId === "wb-kmc") {
+      return { region: "kolkata", routing_source: "wb_udma_official_gis" };
+    }
+    if (packId === "in-wb-routing" && authorityId === "wb-statewide-unverified") {
+      return { region: "west-bengal", routing_source: "osm_west_bengal_state_boundary" };
+    }
+    if (packId === "in-mh-routing" && authorityId === "mh-pmc") {
+      return { region: "pune", routing_source: "pmc_official_gis" };
+    }
+    if (packId === "in-mh-routing" && authorityId === "mh-statewide-unverified") {
+      return { region: "maharashtra", routing_source: "osm_maharashtra_state_boundary" };
+    }
+    if (packId === "in-mh-routing" && authorityId.startsWith("mh-")) {
+      return { region: "mmr", routing_source: authorityId === "mh-mmr-unverified"
+        ? "mmr_boundary_fallback" : "osm_ulb_boundary" };
+    }
+    return null;
+  }
+
+  function highwayContractCandidates(records, highwayRef, address = "") {
+    const routeRefs = new Set(highwayRefsOf(highwayRef));
+    if (!routeRefs.size || !Array.isArray(records)) return [];
+    const addressParts = String(address || "").split(",").slice(0, 3).map((part) =>
+      tenderTokens(part).filter((token) => token.length > 2
+        && !HIGHWAY_CONTRACT_LOCATION_STOP.has(token))).filter((part) => part.length);
+    const addressTokens = new Set(addressParts.flat());
+    if (!addressTokens.size) return [];
+    const eligible = [];
+    for (const record of records) {
+      if (!record || record.scope_verified !== true
+          || !tenderCoversCarriageway(record.title, record.reference_value)) continue;
+      const matchingRefs = (record.highway_refs || []).filter((ref) => routeRefs.has(ref));
+      if (matchingRefs.length) eligible.push({ record, matching_refs: matchingRefs });
+    }
+    const titleTokensByRecord = eligible.map(({ record }) =>
+      new Set(tenderTokens(record.title)));
+    const frequencies = new Map();
+    for (const token of addressTokens) {
+      frequencies.set(token, titleTokensByRecord.reduce(
+        (count, tokens) => count + (tokens.has(token) ? 1 : 0), 0));
+    }
+    const scored = [];
+    for (let index = 0; index < eligible.length; index++) {
+      const { record, matching_refs: matchingRefs } = eligible[index];
+      const titleTokens = titleTokensByRecord[index];
+      const localityHits = [...addressTokens].filter((token) => titleTokens.has(token));
+      const normalisedTitle = tenderTokens(record.title).join(" ");
+      const phraseHits = addressParts.filter((part) => part.length >= 2
+        && normalisedTitle.includes(part.join(" ")));
+      const uniqueLongHits = localityHits.filter((token) => token.length >= 6
+        && frequencies.get(token) === 1);
+      // An NH reference identifies a route, not which package covers this point; feeder
+      // roads also cite the NH they meet. Require independent title/address evidence.
+      if (!phraseHits.length && localityHits.length < 2 && !uniqueLongHits.length) continue;
+      let score = matchingRefs.length * 100 + localityHits.length * 8;
+      score += phraseHits.length * 30 + uniqueLongHits.length * 16;
+      if (record.lifecycle === "current_project") score += 30;
+      if (record.award_verified && record.contractor) score += 15;
+      if (/maintenance|o\s*&\s*m|under construction/i.test(record.lifecycle_status)) score += 8;
+      if (record.chainages && record.chainages.length) score += 2;
+      scored.push({ record, matching_refs: matchingRefs, locality_hits: localityHits,
+        phrase_hits: phraseHits, unique_long_hits: uniqueLongHits, score });
+    }
+    scored.sort((left, right) => (right.score - left.score)
+      || (right.phrase_hits.length - left.phrase_hits.length)
+      || (right.locality_hits.length - left.locality_hits.length)
+      || String(left.record.record_id).localeCompare(String(right.record.record_id)));
+    return scored;
+  }
+
+  async function matchRoadAgreement(address, route) {
+    const stateCode = route && route.contract_state_code;
+    if (!route || route.routed !== true || !stateCode
+        || (route.issue_type && route.issue_type !== "road_damage")) return null;
+    const pack = await loadRoadAgreementPack(stateCode);
+    const ranked = roadAgreementCandidates(pack && pack.agreements, address);
+    if (!ranked.length) return null;
+    const best = ranked[0], second = ranked[1];
+    // Two equally supported road records cannot be disambiguated without geometry.
+    if (second && Math.abs(best.score - second.score) < 8
+        && best.phrase_hits.length === second.phrase_hits.length
+        && best.road_hits.length === second.road_hits.length
+        && best.district_hits.length === second.district_hits.length) return null;
+    const record = best.record;
+    const agreement = record.agreement_verified && record.agreement_number
+      && record.agreement_date
+      ? `; agreement ${record.agreement_number} dated ${record.agreement_date}` : "";
+    const evidence = [...new Set([
+      ...best.phrase_hits.map((part) => part.join(" ")),
+      ...best.road_hits, ...best.district_hits,
+    ])];
+    return {
+      tender_number: `${record.reference_value}${agreement}`,
+      reference_label: agreement ? "PMGSY package / agreement" : record.reference_label,
+      contractor: null,
+      title: record.title,
+      published: null,
+      source_name: record.source_name,
+      source_url: record.source_url,
+      lifecycle: "current_project",
+      lifecycle_status: `Source-reported In Progress as retrieved ${record.retrieved_at}; `
+        + "not independently freshness-verified",
+      match_basis: `State/UT ${stateCode}; title/from/to/district evidence ${evidence.join(", ")}`,
+      candidate_status: "candidate",
+      scope_status: "official_road_record",
+      scope_verified: true,
+      segment_status: "unverified_title_match_no_geometry",
+      segment_verified: false,
+      // An agreement number/date does not identify a contractor assignment in this feed.
+      agreement_verified: record.agreement_verified === true,
+      award_status: "unverified_contractor_assignment",
+      award_verified: false,
+      dlp_status: "unverified_no_maintenance_dates",
+      dlp_verified: false,
+      note: `PMGSY road-record candidate ${record.reference_value}${agreement}. `
+        + "No geometry, contractor assignment, completion, maintenance or DLP is asserted.",
+      ...roadAgreementPackProvenance(stateCode),
+    };
+  }
+
+  async function matchRoadNotice(address, route) {
+    const stateCode = route && route.contract_state_code;
+    if (!route || route.routed !== true || !stateCode
+        || (route.issue_type && route.issue_type !== "road_damage")) return null;
+    const pack = await loadRoadNoticePack(stateCode);
+    const ranked = roadNoticeCandidates(pack && pack.notices, address, route);
+    if (!ranked.length) return null;
+    const best = ranked[0];
+    const record = best.record;
+    const source = (pack.sources || []).find((item) => item.source_id === record.source_id);
+    const locationEvidence = [...new Set([...best.phrase_hits.map((part) => part.join(" ")),
+      ...best.token_hits])];
+    const reference = record.tender_reference === record.tender_id
+      ? record.tender_id : `${record.tender_reference} [${record.tender_id}]`;
+    return {
+      tender_number: reference,
+      reference_label: record.tender_reference === record.tender_id
+        ? "Tender ID" : "Tender reference / ID",
+      contractor: null,
+      title: record.title,
+      published: record.published_at,
+      source_name: source ? source.source_name : "Official State/UT e-Procurement portal",
+      // GePNIC detail links contain session-shaped tokens and can expire. Cite the
+      // stable official portal root plus the tender reference/ID above; keep the exact
+      // captured detail URL inside the immutable pack for audit and fresh-link lookup.
+      source_url: source ? source.source_url : record.source_url,
+      lifecycle: "procurement_notice",
+      lifecycle_status: `Open procurement notice; bid closing ${record.closing_at}`,
+      match_basis: `State/UT ${stateCode}`
+        + (best.highway_hits.length ? `; mapped ${best.highway_hits.join(" / ")}` : "")
+        + (locationEvidence.length ? `; title/address ${locationEvidence.join(", ")}` : ""),
+      candidate_status: "candidate",
+      scope_status: "carriageway_scope_present",
+      scope_verified: true,
+      segment_status: "unverified_title_match",
+      segment_verified: false,
+      award_status: "unverified_procurement_notice",
+      award_verified: false,
+      dlp_status: "unverified",
+      dlp_verified: false,
+      note: `Open procurement notice ${record.tender_id}; no award or contractor is asserted.`,
+      ...roadNoticePackProvenance(stateCode),
+    };
+  }
+
+  async function savedMunicipalLocationMatches(rec, config, pack) {
+    const lat = rec.lat, lng = rec.lng, accuracy = rec.gps_accuracy;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)
+        || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 30) return false;
+    const region = pack && pack.payload && Array.isArray(pack.payload.regions)
+      ? pack.payload.regions.find((item) => item && item.id === config.region_id) : null;
+    if (!region) return false;
+    if (config.routing_mode === "official_point_query") {
+      if (rec.routing_match_field !== "official_accuracy_envelope") return false;
+      const result = await officialPointRegionMatch(region, lat, lng, accuracy);
+      return result.kind === "match";
+    }
+    if (config.routing_mode === "boundary") {
+      if (!pointInGeometry(lng, lat, region.geometry)
+          || geometryBoundaryDistanceMeters(lng, lat, region.geometry) <= accuracy) return false;
+      for (const exclusion of region.exclusions) {
+        if (pointInEnvelope(lat, lng, exclusion.bbox)
+            || geometryBoundaryDistanceMeters(lng, lat,
+              envelopeGeometry(exclusion.bbox)) <= accuracy) return false;
+      }
+      return true;
+    }
+    if (!pointInEnvelope(lat, lng, region.envelope)
+        || rec.routing_match_field !== "structured_place") return false;
+    const match = String(rec.routing_match_value || "").match(/^(city|municipality): (.+)$/);
+    const aliases = new Set(config.place_aliases.map(normaliseAuthorityValue));
+    return !!match && aliases.has(normaliseAuthorityValue(match[2]));
+  }
+
+  function savedNonMunicipalLocationMatches(rec, packId, authorityId, pack) {
+    const payload = pack && pack.payload;
+    const remaining = REMAINING_STATE_ROUTE_CONFIGS[packId];
+    if (remaining) {
+      return authorityId === remaining.authority_id
+        && savedBoundaryLocationMatches(rec,
+          payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-pb-routing") {
+      return authorityId === "pb-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-tn-state-routing") {
+      return authorityId === "tn-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-ap-routing") {
+      return authorityId === "ap-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-tg-state-routing") {
+      return authorityId === "tg-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-ka-state-routing") {
+      return authorityId === "ka-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-kl-routing") {
+      return authorityId === "kl-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-up-routing") {
+      return authorityId === "up-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-cg-routing") {
+      return authorityId === "cg-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-rj-routing") {
+      return authorityId === "rj-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-ga-routing") {
+      return authorityId === "ga-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-mp-routing") {
+      return authorityId === "mp-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-br-routing") {
+      return authorityId === "br-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-od-routing") {
+      return authorityId === "od-statewide-unverified"
+        && savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-top50-routing") {
+      return savedMajorCityLocationMatches(rec, pack);
+    }
+    if (packId === "in-dl-routing") {
+      return savedBoundaryLocationMatches(rec, payload && payload.region && payload.region.geometry);
+    }
+    if (packId === "in-wb-routing") {
+      const regions = payload && payload.regions;
+      if (!regions) return false;
+      if (authorityId === "wb-kmc") {
+        return savedBoundaryLocationMatches(rec,
+          regions.kmc && regions.kmc.geometry);
+      }
+      if (authorityId === "wb-statewide-unverified") {
+        const stateMatches = savedBoundaryLocationMatches(rec,
+          regions.west_bengal && regions.west_bengal.geometry);
+        if (!stateMatches) return false;
+        // A statewide fallback report must still be outside KMC by more than its stated
+        // accuracy. Otherwise revalidation could silently change the exact recipient.
+        const accuracy = rec.gps_accuracy;
+        const kmcGeometry = regions.kmc && regions.kmc.geometry;
+        if (!kmcGeometry || pointInGeometry(rec.lng, rec.lat, kmcGeometry)) return false;
+        return geometryBoundaryDistanceMeters(rec.lng, rec.lat, kmcGeometry) > accuracy;
+      }
+      return false;
+    }
+    if (packId !== "in-mh-routing" || !payload || !payload.regions) return false;
+    if (authorityId === "mh-pmc") {
+      return savedBoundaryLocationMatches(rec,
+        payload.regions.pmc && payload.regions.pmc.geometry);
+    }
+    if (authorityId === "mh-statewide-unverified") {
+      return savedBoundaryLocationMatches(rec,
+        payload.regions.maharashtra && payload.regions.maharashtra.geometry);
+    }
+    const mmr = payload.regions.mmr;
+    if (!mmr || !savedBoundaryLocationMatches(rec, mmr.geometry,
+      rec.delivery_channel === "bmc_quickfix")) return false;
+    if (authorityId === "mh-mmr-unverified") return true;
+    const boundary = mmr.authority_boundaries && mmr.authority_boundaries[authorityId];
+    return savedBoundaryLocationMatches(rec, boundary && boundary.geometry,
+      rec.delivery_channel === "bmc_quickfix");
+  }
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  const HIGHWAY_CONTRACT_LOCATION_STOP = new Set([
+    ...TENDER_STOP,
+    ...[...INDIA_STATE_CODE_BY_NAME.keys()].flatMap((name) => tenderTokens(name)),
+    "area", "at", "district", "from", "highway", "junction", "near", "number", "route",
+    "state", "towards", "via",
+  ]);
+
+  const highwayRefsOf = (value) => String(value || "").split(" / ")
+    .map((ref) => ref.trim().toUpperCase()).filter((ref) => HIGHWAY_REF_RE.test(ref));
+
+  function roadAgreementCandidates(records, address) {
+    if (!Array.isArray(records) || !records.length) return [];
+    const addressParts = roadAgreementAddressParts(address);
+    const addressTokens = new Set(addressParts.flat());
+    if (!addressTokens.size) return [];
+    const districtTokensByRecord = records.map((record) => new Set(
+      tenderTokens(record && record.district_name)
+        .filter((token) => token.length >= 3 && !ROAD_NOTICE_STOP.has(token))));
+    const roadTokensByRecord = records.map((record, index) => new Set(tenderTokens([
+      record && record.title, record && record.road_from, record && record.road_to,
+    ].filter(Boolean).join(" ")).filter((token) => token.length >= 3
+      && !ROAD_NOTICE_STOP.has(token) && !districtTokensByRecord[index].has(token))));
+    const frequencies = new Map();
+    for (const token of addressTokens) {
+      frequencies.set(token, roadTokensByRecord.reduce(
+        (count, tokens) => count + (tokens.has(token) ? 1 : 0), 0));
+    }
+    const scored = [];
+    for (let index = 0; index < records.length; index++) {
+      const record = records[index];
+      if (!record || record.lifecycle !== "current_project"
+          || record.lifecycle_status !== "In Progress" || record.scope_verified !== true
+          || record.segment_verified !== false || record.contractor !== null
+          || record.contractor_assignment_verified !== false || record.dlp_verified !== false) {
+        continue;
+      }
+      const roadTokens = roadTokensByRecord[index];
+      const roadHits = [...addressTokens].filter((token) => roadTokens.has(token));
+      const districtTokens = districtTokensByRecord[index];
+      const districtHits = [...addressTokens].filter((token) => districtTokens.has(token));
+      const normalisedRoad = tenderTokens([
+        record.title, record.road_from, record.road_to,
+      ].filter(Boolean).join(" ")).join(" ");
+      const phraseHits = addressParts.filter((part) => {
+        const phrase = part.join(" ");
+        return part.some((token) => !districtTokens.has(token))
+          && phrase.length >= 6 && normalisedRoad.includes(phrase);
+      });
+      const multiTokenPhrase = phraseHits.some((part) => part.length >= 2);
+      const uniqueLongHits = roadHits.filter((token) => token.length >= 6
+        && frequencies.get(token) === 1);
+      // The source has no geometry. A State match or district name alone is never enough:
+      // require an exact multi-word road phrase, two road-name words, or a unique long
+      // road word corroborated by the district in the reverse-geocoded address.
+      const strongLocationEvidence = multiTokenPhrase || roadHits.length >= 2
+        || (uniqueLongHits.length > 0 && districtHits.length > 0);
+      if (!strongLocationEvidence) continue;
+      const rarity = roadHits.reduce((sum, token) => {
+        const frequency = frequencies.get(token) || records.length;
+        return sum + Math.log((records.length + 1) / (frequency + 0.5));
+      }, 0);
+      const score = (multiTokenPhrase ? 80 : 0) + phraseHits.length * 20
+        + roadHits.length * 16 + uniqueLongHits.length * 12
+        + districtHits.length * 10 + rarity;
+      scored.push({ record, score, road_hits: roadHits, district_hits: districtHits,
+        phrase_hits: phraseHits, unique_long_hits: uniqueLongHits });
+    }
+    scored.sort((left, right) => (right.score - left.score)
+      || (right.phrase_hits.length - left.phrase_hits.length)
+      || (right.road_hits.length - left.road_hits.length)
+      || String(left.record.record_id).localeCompare(String(right.record.record_id)));
+    return scored;
+  }
+
+  function roadNoticeCandidates(records, address, route = null, now = Date.now()) {
+    if (!Array.isArray(records) || !records.length) return [];
+    const addressParts = roadNoticeAddressParts(address);
+    const addressTokens = new Set(addressParts.flat());
+    const routeRefs = new Set(highwayRefsOf(route && route.highway_ref));
+    if (!addressTokens.size && !routeRefs.size) return [];
+
+    const titleTokens = records.map((record) => new Set(tenderTokens(record && record.title)));
+    const frequencies = new Map();
+    for (const token of addressTokens) {
+      frequencies.set(token, titleTokens.reduce(
+        (count, tokens) => count + (tokens.has(token) ? 1 : 0), 0));
+    }
+    const routeAuthorityTokens = new Set(tenderTokens(route && route.authority_name)
+      .filter((token) => token.length >= 4 && !ROAD_NOTICE_STOP.has(token)));
+    const scored = [];
+    for (let index = 0; index < records.length; index++) {
+      const record = records[index];
+      if (!record || record.lifecycle !== "procurement_notice" || record.scope !== "road_surface"
+          || record.segment_verified !== false || record.award_verified !== false
+          || record.dlp_verified !== false
+          || !Number.isFinite(Date.parse(String(record.closing_at || "")))
+          || Date.parse(record.closing_at) < now
+          || !tenderCoversCarriageway(record.title, record.tender_reference)) continue;
+      const tokens = titleTokens[index];
+      const tokenHits = [...addressTokens].filter((token) => tokens.has(token));
+      const phraseHits = addressParts.filter((part) => {
+        const phrase = part.join(" ");
+        return phrase.length >= 6
+          && tenderTokens(record.title).join(" ").includes(phrase);
+      });
+      const rareHits = tokenHits.filter((token) => token.length >= 6
+        && frequencies.get(token) > 0 && frequencies.get(token) <= 2);
+      const noticeRefs = highwayRefsInNotice(`${record.title} ${record.tender_reference}`);
+      const highwayHits = [...routeRefs].filter((ref) => noticeRefs.has(ref));
+      // One common locality word is too weak for a nationwide title index. Admit an
+      // ordinary-road candidate only for a phrase, two distinct address words, or one
+      // long word that occurs in at most two notices in this State/UT snapshot.
+      const locationEvidence = phraseHits.length > 0 || tokenHits.length >= 2
+        || rareHits.length > 0;
+      if (!locationEvidence) continue;
+      const organisationTokens = new Set(tenderTokens(record.organisation_chain));
+      const authorityHits = [...routeAuthorityTokens].filter(
+        (token) => organisationTokens.has(token));
+      const rarity = tokenHits.reduce((sum, token) => {
+        const frequency = frequencies.get(token) || records.length;
+        return sum + Math.log((records.length + 1) / (frequency + 0.5));
+      }, 0);
+      const score = highwayHits.length * 100 + phraseHits.length * 30
+        + rareHits.length * 16 + tokenHits.length * 8 + rarity + authorityHits.length * 3;
+      scored.push({ record, score, token_hits: tokenHits, phrase_hits: phraseHits,
+        rare_hits: rareHits, highway_hits: highwayHits, authority_hits: authorityHits });
+    }
+    scored.sort((left, right) => (right.score - left.score)
+      || (right.phrase_hits.length - left.phrase_hits.length)
+      || (right.token_hits.length - left.token_hits.length)
+      || String(left.record.record_id).localeCompare(String(right.record.record_id)));
+    return scored;
+  }
+
+  function savedBoundaryLocationMatches(rec, geometry, allowMissingAccuracy = false) {
+    const lat = rec.lat, lng = rec.lng, accuracy = rec.gps_accuracy;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)
+        || !pointInGeometry(lng, lat, geometry)) return false;
+    if (!Number.isFinite(accuracy)) return allowMissingAccuracy;
+    return accuracy >= 0 && accuracy <= 30
+      && geometryBoundaryDistanceMeters(lng, lat, geometry) > accuracy;
+  }
+
+  function savedMajorCityLocationMatches(rec, pack) {
+    const region = pack && pack.payload && Array.isArray(pack.payload.regions)
+      ? pack.payload.regions.find((item) => item && item.id === rec.region) : null;
+    if (!region || region.authority_id !== rec.authority_id
+        || rec.routing_source !== region.routing_source
+        || rec.routing_match_field !== "structured_place"
+        || !Number.isFinite(rec.lat) || !Number.isFinite(rec.lng)
+        || !Number.isFinite(rec.gps_accuracy) || rec.gps_accuracy < 0
+        || rec.gps_accuracy > 30
+        || !accuracyCircleWithinEnvelope(
+          rec.lat, rec.lng, rec.gps_accuracy, region.envelope)) {
+      return false;
+    }
+    const match = String(rec.routing_match_value || "").match(/^(city|municipality): (.+)$/);
+    const aliases = new Set(region.place_aliases.map(normaliseAuthorityValue));
+    return !!match && aliases.has(normaliseAuthorityValue(match[2]));
+  }
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  const ROAD_NOTICE_STOP = new Set([...TENDER_STOP,
+    "area", "avenue", "bazaar", "bazar", "bridge", "chowk", "circle", "colony",
+    "district", "extension", "galli", "lane", "locality", "market", "municipal",
+    "municipality", "nagar", "near", "number", "path", "place", "sector", "state",
+    "village", "zone"]);
+
+  function highwayRefsInNotice(value) {
+    const refs = new Set();
+    const pattern = /\bN([HE])\s*[-:]?\s*([0-9]{1,4}[A-Z]{0,3})\b/gi;
+    for (const match of String(value || "").matchAll(pattern)) {
+      refs.add(`N${match[1].toUpperCase()}-${match[2].toUpperCase()}`);
+    }
+    return refs;
+  }
+
+  function roadAgreementAddressParts(address) {
+    return String(address || "").split(",").slice(0, 4).map((part) =>
+      tenderTokens(part).filter((token) => token.length >= 3
+        && !/^\d{5,6}$/.test(token) && !ROAD_NOTICE_STOP.has(token)))
+      .filter((tokens) => tokens.length);
+  }
+
+  function roadNoticeAddressParts(address) {
+    // Nominatim's compact address ends with the city. A city name is shared by hundreds
+    // of unrelated notices and once made Kanjur, Mumbai select a Pune road whose title
+    // merely contained "old Mumbai-Pune". Road plus immediate locality are the evidence.
+    return String(address || "").split(",").slice(0, 2).map((part) =>
+      tenderTokens(part).filter((token) => token.length >= 3
+        && !/^\d{5,6}$/.test(token) && !ROAD_NOTICE_STOP.has(token)))
+      .filter((tokens) => tokens.length);
+  }
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  const ROUTE_RECORD_FIELDS = Object.freeze([
+    "officer_name", "officer_email", "authority_id", "authority_name",
+    "authority_registry_version", "delivery_channel", "ward_code", "routing_source",
+    "routing_match_field", "routing_match_value", "highway_ref", "contract_state_code",
+    "routing_pack_id", "routing_pack_version", "routing_pack_sha256",
+    "routing_pack_state_code", "region", "ownership_unverified", "handoff_name",
+    "handoff_url", "handoff_package", "alternate_handoff_name",
+    "alternate_handoff_url", "whatsapp_url", "helpline", "requires_official_reference",
+    "tender_eligible",
+  ]);
+
+  const TENDER_RECORD_FIELDS = Object.freeze({
+    tender_number: "tender_number", tender_reference_label: "reference_label",
+    tender_title: "title", contractor: "contractor", tender_note: "note",
+    tender_published: "published", tender_organisation: "organisation",
+    tender_detail_url: "detail_url", tender_bid_closing: "bid_closing",
+    tender_bid_opening: "bid_opening", tender_project_start: "project_start",
+    tender_project_completion: "project_completion", tender_agreement_number: "agreement_number",
+    tender_agreement_date: "agreement_date", tender_package_reference: "package_reference",
+    tender_highway_reference: "highway_reference", tender_published_chainage: "published_chainage",
+    tender_road_from: "road_from", tender_road_to: "road_to", tender_source_name: "source_name",
+    tender_source_url: "source_url", tender_lifecycle: "lifecycle",
+    tender_lifecycle_status: "lifecycle_status", tender_match_basis: "match_basis",
+    tender_candidate_status: "candidate_status", tender_scope_status: "scope_status",
+    tender_segment_status: "segment_status", tender_award_status: "award_status",
+    tender_dlp_status: "dlp_status", tender_responsibility_valid_from: "responsibility_valid_from",
+    tender_responsibility_valid_until: "responsibility_valid_until",
+    tender_responsible_authority_id: "responsible_authority_id",
+    tender_road_owner_id: "road_owner_id", tender_verification_evidence: "verification_evidence",
+    tender_pack_id: "tender_pack_id", tender_pack_version: "tender_pack_version",
+    tender_pack_sha256: "tender_pack_sha256", tender_pack_state_code: "tender_pack_state_code",
+  });
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  const LEGACY_NATIVE_V13_PROMPT_VERSION = "pothole-binary-v13";
+  const LEGACY_NATIVE_V15_PROMPT_VERSION = "pothole-binary-v15";
+  const LEGACY_NATIVE_V16_PROMPT_VERSION = "pothole-binary-v16";
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  async function emailAttachmentBase64(photo) {
+    const blob = await dataUrlToBlob(photo);
+    if (!blob || typeof blob === "string") {
+      throw new Error("The saved evidence photo could not be read for attachment.");
+    }
+    // The Capacitor bridge must briefly hold the base64 string in memory. Keep the
+    // complete edge-to-edge scene, but resize/compress the email copy so a high-megapixel
+    // camera image cannot freeze or kill the WebView while opening the composer.
+    const dataUrl = await toDataUrl(blob, 1600, 0.82, false);
+    const base64 = dataUrl && dataUrl.split(",")[1];
+    if (!base64) throw new Error("The evidence attachment could not be prepared.");
+    return base64;
+  }
+
 
   window.StandaloneAPI = { __pure, handle, prewarm, prepareComplaint };
 

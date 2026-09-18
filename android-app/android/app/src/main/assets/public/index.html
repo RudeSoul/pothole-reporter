@@ -85,9 +85,9 @@
   <div id="banner" class="banner"></div>
 
   <div id="home">
-    <button class="primary" id="captureBtn">&#128247; &nbsp;Report road damage</button>
+    <button class="primary" id="driveBtn">&#128663; &nbsp;Drive mode</button>
+    <button class="primary" id="captureBtn" style="background:#26272c;color:#f2f2f4;margin-top:-8px">&#128247; &nbsp;Report one pothole</button>
     <button class="ghost" id="dashBtn" style="width:100%;margin-bottom:14px">&#128506;&#65039; &nbsp;Public pothole map</button>
-    <button class="primary" id="driveBtn" style="background:#26272c;color:#f2f2f4;margin-top:-8px">&#128663; &nbsp;Drive mode</button>
     <div class="card hidden" id="feedbackNudge">
       <div class="meta" id="feedbackNudgeText">You have made a few reports. How is it going? Two minutes of feedback shapes the next version.</div>
       <div class="btn-row" style="margin-top:8px">
@@ -96,7 +96,7 @@
       </div>
     </div>
     <input type="file" id="fileInput" accept="image/*" capture="environment" class="hidden">
-    <div class="card" id="videoImportCard">
+    <div class="card hidden" id="videoImportCard" aria-hidden="true">
       <button class="ghost" id="videoImportBtn" style="width:100%">&#127909; &nbsp;Import Meta glasses / dashcam video</button>
       <div class="meta" id="videoImportHint" style="margin-top:8px"></div>
       <div id="nativeVideoImports" class="hidden" style="margin-top:10px"></div>
@@ -226,12 +226,12 @@
       <label id="detailLabel">Image detail</label>
       <select id="setDetail"></select>
       <div class="meta" id="accuracyNote"></div>
-      <label id="captureSourceLabel" for="setCaptureSource">Drive video source</label>
-      <select id="setCaptureSource">
+      <label id="captureSourceLabel" class="hidden" for="setCaptureSource">Drive video source</label>
+      <select id="setCaptureSource" class="hidden" aria-hidden="true">
         <option id="phoneCameraOption" value="phone_camera">Phone camera</option>
         <option id="dashcamOption" value="dashcam">Dashcam</option>
       </select>
-      <div class="meta" id="captureSourceNote">The selected source is used the next time Drive starts.</div>
+      <div class="meta hidden" id="captureSourceNote">The selected source is used the next time Drive starts.</div>
       <div id="dashcamSettings" class="hidden">
         <label id="dashcamRtspLabel" for="setDashcamRtspUrl">Dashcam RTSP URL</label>
         <input type="password" id="setDashcamRtspUrl" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="dashcamRtspNote" placeholder="rtsp://192.168.1.1:554/live">
@@ -343,11 +343,8 @@ const LEGACY_SETTINGS_KEYS = [
   "keep_frames", "record_video", "drive_limit_minutes", "app_lang", "data_notice_version",
   CAPTURE_SOURCE_KEY, DASHCAM_RTSP_URL_KEY,
 ];
-const normaliseDriveCaptureSource = (value) => value === DASHCAM_CAPTURE_SOURCE
-  ? DASHCAM_CAPTURE_SOURCE : PHONE_CAPTURE_SOURCE;
-const savedDriveCaptureSource = () => normaliseDriveCaptureSource(
-  localStorage.getItem(CAPTURE_SOURCE_KEY)
-);
+const normaliseDriveCaptureSource = () => PHONE_CAPTURE_SOURCE;
+const savedDriveCaptureSource = () => PHONE_CAPTURE_SOURCE;
 function validateDashcamRtspUrl(rawValue) {
   const value = String(rawValue || "").trim();
   if (!value || /[\s\\\u0000-\u001f\u007f#]/u.test(value)) return null;
@@ -2115,7 +2112,7 @@ function unroutedHelp(r) {
 function detectionVerdict(r) {
   if (r.status === "review") return t("verdict_review");
   if (r.status === "rejected") return t("verdict_rejected");
-  const binary = t("verdict_detected");
+  const binary = t("verdict_detected", { type: tDamage(r), assessment: t(`assessment_${assessment(r) || "damaged"}`) });
   return r.size ? `${binary} · ${tSize(r.size)}` : binary;
 }
 
