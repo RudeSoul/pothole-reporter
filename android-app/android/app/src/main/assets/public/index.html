@@ -1333,6 +1333,63 @@ function chip(status, report) {
 
 const physicalCondition = (report) => report && report.condition_status === "fixed"
   ? "fixed" : report && report.condition_status === "repair_review" ? "repair_review" : "open";
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  const isRoadReport = () => true;
+  const tIssue = () => t("issue_road_damage");
+
+  function canRetryRouting(r) {
+  if (!Number.isFinite(r.lat) || !Number.isFinite(r.lng)) return false;
+  const reasons = isRoadReport(r)
+    ? ["jurisdiction_unavailable", "road_class_unknown", "no_address_for_body"]
+    : ["jurisdiction_unavailable", "no_address_for_body"];
+  return reasons.includes(r.unrouted_reason);
+}
+
+  function repairEvidenceHtml(r) {
+  const condition = physicalCondition(r);
+  if (condition === "open" || !r.repair_photo_url) return "";
+  const fixed = condition === "fixed";
+  return `<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+      <label>${escapeHtml(t("repair_evidence_label"))}</label>
+      <img class="big-photo" src="${safePhotoSrc(repairPhotoSrc(r))}" alt="" style="max-height:220px;cursor:default">
+      <div class="verdict" style="color:${fixed ? "var(--ok)" : "#d4b8ff"}">${escapeHtml(
+        fixed ? t("verdict_fixed") : t("verdict_repair_review"))}</div>
+      ${r.repair_description ? `<div class="meta">${escapeHtml(r.repair_description)}</div>` : ""}
+      <div class="meta" style="margin-top:6px">${escapeHtml(fixed
+        ? t("fixed_local_note") : t("repair_review_help"))}</div>
+      <div class="btn-row">
+        ${fixed ? "" : `<button class="send" id="confirmFixedBtn">${escapeHtml(t("confirm_fixed_btn"))}</button>`}
+        <button class="ghost" id="reopenConditionBtn">${escapeHtml(t("reopen_btn"))}</button>
+      </div>
+    </div>`;
+}
+
+  function wireConditionActions(r) {
+  const change = async (condition) => {
+    try {
+      const updated = await api(`/api/reports/${r.id}/condition`, {
+        method: "POST", body: JSON.stringify({ condition_status: condition }),
+      });
+      await loadReports();
+      openDetail(updated, loadReports.latest || [updated]);
+    } catch (e) { alert(e.message); }
+  };
+  const confirmFixed = $("confirmFixedBtn");
+  if (confirmFixed) confirmFixed.onclick = () => change("fixed");
+  const reopen = $("reopenConditionBtn");
+  if (reopen) reopen.onclick = () => change("open");
+}
+
+  let nativeInitialRestorePending = Boolean(window.Capacitor && Capacitor.isNativePlatform &&
+  Capacitor.isNativePlatform());
+
+  let nativeInitialRestorePromise = Promise.resolve();
+
+  let nativePauseControlPending = false;
+
+  let nativeVideoControlPending = false;
+
 function conditionChip(report) {
   const condition = physicalCondition(report);
   if (!isRoadReport(report) || condition === "open") return "";
@@ -2206,6 +2263,13 @@ function openDetail(r, list) {
         await api(`/api/reports/${r.id}`, { method: "DELETE" });
       }
     } catch (e) { alert(e.message); return; }
+    let cleanupError = null;
+    try {
+      if (window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.DriveMode
+          && typeof Capacitor.Plugins.DriveMode.clearRepairTarget === "function") {
+        await Capacitor.Plugins.DriveMode.clearRepairTarget({ id: r._nativeId || r.id });
+      }
+    } catch (e) { cleanupError = e; }
     await loadReports(); show("home");
     if (cleanupError) {
       alert(`The report was deleted, but its native repair cache will be retried later: ${cleanupError.message || cleanupError}`);
@@ -6073,11 +6137,27 @@ async function analyseFootage(driveId, driveRec) {
   const idStart = /^\d{12,}$/.test(String(driveId)) ? Number(driveId) / 1000 : NaN;
   const sourceStartS = Number.isFinite(recordedStart) && recordedStart > 0 ? recordedStart : idStart;
   const duplicateIds = new Set();
-  let found = 0, done = 0, elapsed = 0;
-  let failed = 0, lastErr = "";
+  let found = 0, extracted = 0, checked = 0, done = 0, elapsed = 0;
+  let failed = 0, lastErr = "", aborted = false;
   let unreadableClips = 0;
   const manifest = [];
   let written = 0, writeFailed = false;
+
+  // The drive's analysis summary is persisted so a reopened drive shows what really
+  // happened instead of recounting from scratch.
+  async function persistFootageAnalysis(analysis) {
+    await api(`/api/drives/${encodeURIComponent(driveId)}/analysis`, {
+      method: "POST",
+      body: JSON.stringify({
+        started_at: Number.isFinite(sourceStartS) ? sourceStartS : null,
+        checked: analysis.checked, found, already: duplicateIds.size,
+        planned: analysis.planned, extracted: analysis.extracted,
+        failed: analysis.failed, skipped: analysis.skipped,
+        unreadable_clips: analysis.unreadableClips, complete: analysis.complete,
+        already_ids: [...duplicateIds],
+      }),
+    }).catch(() => {});
+  }
 
   // Open every clip first, one Blob at a time, so the total is known before the first
   // frame is checked. Keeping all recorded Blobs in one array made long drives exhaust
@@ -6284,9 +6364,7 @@ async function analyseFootage(driveId, driveRec) {
         const atAbs = Number.isFinite(clip.sourceOffsetS) ? clip.sourceOffsetS + at : elapsed + at;
         const pos = gpsAt(track, atAbs);
         const fd = new FormData();
-        burst.frames.forEach((frame, index) =>
-          fd.append("photo", frame.blob, `vod-burst-${index + 1}.jpg`));
-        fd.append("primary_index", String(burst.primaryIndex));
+        fd.append("photo", blob, `vod-frame-${idx + 1}.jpg`);
         if (pos) { fd.append("lat", String(pos.lat)); fd.append("lng", String(pos.lng)); }
         fd.append("drive_id", String(driveId));
         fd.append("capture_source", "drive_vod");
@@ -6557,6 +6635,7 @@ const mapColor = () => "#ff7a1a";
 
 function drawMap(pins, shared = false, unavailable = false) {
   const host = $("map");
+  const generation = ++mapDrawGeneration;
   const complaintReports = pins.reduce(
     (sum, pin) => sum + publicCount(pin.complaint_count || pin.seen_count), 0);
   $("mapNote").textContent = unavailable ? t("public_map_unavailable") : (shared
