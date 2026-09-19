@@ -44,6 +44,20 @@ const SLOW = new Set([
   "full_frame_invariant_test.py",
 ]);
 
+async function refuseIfPortBusy(port) {
+  const inUse = await new Promise((done) => {
+    const probe = createServer();
+    probe.once("error", () => done(true));
+    probe.once("listening", () => probe.close(() => done(false)));
+    probe.listen(port);
+  });
+  if (inUse) {
+    console.error(`Port ${port} is already serving something else. Stop it first: `
+      + `the suites would load that document root instead of docs/.`);
+    process.exit(2);
+  }
+}
+
 function staticServer(root, port) {
   const types = {
     ".html": "text/html", ".js": "text/javascript", ".json": "application/json",
@@ -199,6 +213,7 @@ async function once() {
   // docs/ is the shipped web app: the same index.html and standalone.js as static/,
   // plus the data packs the routing suites need. Serving static/ made every pack fetch
   // 404 and looked like a routing bug.
+  await refuseIfPortBusy(PORT);
   const server = await staticServer(`${repoRoot}/docs`, PORT);
   const startedAt = Date.now();
   console.log(`Running ${list.length} checks with ${workers} workers on port ${PORT}\n`);
