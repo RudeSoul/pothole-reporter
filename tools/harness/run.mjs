@@ -9,7 +9,7 @@
 //   node tools/harness/run.mjs --until-green   re-run until EVERY check passes
 //   node tools/harness/run.mjs --baseline      write baseline.json instead of judging
 //
-// It serves static/ once for every browser test rather than once per test, and runs
+// It serves docs/ (the shipped web app) once for every browser test, and runs
 // them across CPU workers, because a suite nobody waits for is a suite nobody runs.
 
 import { execFile, spawn } from "node:child_process";
@@ -151,7 +151,10 @@ function tasks(group) {
 async function once() {
   const group = value("only", null);
   const list = tasks(group);
-  const server = await staticServer(`${repoRoot}/static`, PORT);
+  // docs/ is the shipped web app: the same index.html and standalone.js as static/,
+  // plus the data packs the routing suites need. Serving static/ made every pack fetch
+  // 404 and looked like a routing bug.
+  const server = await staticServer(`${repoRoot}/docs`, PORT);
   const startedAt = Date.now();
   console.log(`Running ${list.length} checks with ${workers} workers on port ${PORT}\n`);
   let results;

@@ -5502,6 +5502,57 @@
       return routeForIssue(unroutedRoute("location_uncertain"), issueType);
     }
 
+    // A server-resolved jurisdiction is authoritative: the central resolver has already
+    // run the highway and civic-ownership checks with its own bounded tolerances. The
+    // phone must not repeat them, both to avoid duplicating public GIS traffic and
+    // because a blocked local check would otherwise refuse a road the server verified.
+    if (authoritativeJurisdiction) {
+      const central = routeWhereFromCentral(authoritativeJurisdiction);
+      if (!central) return routeForIssue(unroutedRoute("jurisdiction_unavailable"), issueType);
+      if (central.kind === "outside_state") {
+        return routeForIssue(unroutedRoute("outside_area"), issueType);
+      }
+      if (["national_highway", "state_highway", "district_highway"].includes(central.kind)) {
+        return routeForIssue(unroutedRoute(central.kind, central.name), issueType);
+      }
+      if (central.kind === "rural") {
+        return routeForIssue(unroutedRoute("rural_road", central.name), issueType);
+      }
+      if (central.kind !== "town") {
+        return routeForIssue(unroutedRoute("road_class_unknown"), issueType);
+      }
+      // bodies() answers null when its State pack is unavailable; that is "we do not
+      // know this body's address", not "there is no such body".
+      const centralRegistry = await bodies();
+      if (!centralRegistry) {
+        return routeForIssue(unroutedRoute("jurisdiction_unavailable", central.name), issueType);
+      }
+      const centralEntry = central.lgd ? centralRegistry[central.lgd] : null;
+      if (!centralEntry || !centralEntry.email) {
+        return routeForIssue(unroutedRoute("no_address_for_body", central.name), issueType);
+      }
+      const centralTitle = centralEntry.officer
+        || OFFICER_TITLES[centralEntry.type || central.type] || "Chief Officer";
+      return routeForIssue({
+        routed: true,
+        officer_name: `${centralTitle}, ${centralEntry.name}`
+          + (centralEntry.short ? ` (${centralEntry.short})` : ""),
+        officer_email: centralEntry.email,
+        authority_id: `lgd-${central.lgd}`,
+        authority_name: centralEntry.name,
+        authority_registry_version: AUTHORITY_REGISTRY_VERSION,
+        delivery_channel: "email",
+        ward_code: null,
+        routing_source: "central",
+        routing_match_field: "lgd",
+        routing_match_value: central.lgd,
+        // The server proved the containing body, not which agency maintains the segment.
+        ownership_unverified: true,
+        requires_official_reference: false,
+        tender_eligible: true,
+      }, issueType);
+    }
+
     const geo = geoOrAddress && typeof geoOrAddress === "object" ? geoOrAddress : null;
     const geocodeStateCode = stateCodeForGeocode(geo);
     const exactContractStateP = issueType === "road_damage" && geocodeStateCode
@@ -5732,14 +5783,26 @@
         ? routeWhereFromCentral(authoritativeJurisdiction)
         : await jurisdictionOf(lat, lng);
     }
-    catch (e) { return [null, null, "road_class_unknown"]; }
+    catch (e) { return routeForIssue(unroutedRoute("road_class_unknown"), issueType); }
 
-    if (where.kind === "outside_state") return [null, null, "outside_area"];
-    if (where.kind === "national_highway") return [null, null, "national_highway", where.name];
-    if (where.kind === "state_highway") return [null, null, "state_highway", where.name];
-    if (where.kind === "district_highway") return [null, null, "district_highway", where.name];
-    if (where.kind === "road_class_unknown") return [null, null, "road_class_unknown"];
-    if (where.kind === "rural") return [null, null, "rural_road", where.name];
+    if (where.kind === "outside_state") {
+      return routeForIssue(karnatakaFallback || unroutedRoute("outside_area"), issueType);
+    }
+    if (where.kind === "national_highway") {
+      return routeForIssue(unroutedRoute("national_highway", where.name), issueType);
+    }
+    if (where.kind === "state_highway") {
+      return routeForIssue(unroutedRoute("state_highway", where.name), issueType);
+    }
+    if (where.kind === "district_highway") {
+      return routeForIssue(unroutedRoute("district_highway", where.name), issueType);
+    }
+    if (where.kind === "road_class_unknown") {
+      return routeForIssue(karnatakaFallback || unroutedRoute("road_class_unknown"), issueType);
+    }
+    if (where.kind === "rural") {
+      return routeForIssue(karnatakaFallback || unroutedRoute("rural_road", where.name), issueType);
+    }
 
     const registry = await bodies();
     const entry = where.lgd && registry[where.lgd];
@@ -8629,9 +8692,15 @@
       officerEmail = null;
     }
     let unroutedReason = null, unroutedBody = null;
+    let route = null;
     if (!officerEmail) {
-      [officerName, officerEmail, unroutedReason, unroutedBody] =
-        await routeOfficer(address, lat, lng, authoritativeJurisdiction);
+      // routeOfficer answers with a route object; destructuring it as an array made
+      // every send throw "object is not iterable" before the draft could open.
+      route = await routeOfficer(address, lat, lng, authoritativeJurisdiction) || {};
+      officerName = route.officer_name || null;
+      officerEmail = route.officer_email || null;
+      unroutedReason = route.unrouted_reason || null;
+      unroutedBody = route.authority_name || null;
     }
     if (!officerEmail) {
       throw complaintRouteError(unroutedReason || "road_class_unknown", unroutedBody, {
@@ -9269,7 +9338,63 @@
                    draftEmail, dataUrlToBlob, photoToBase64, toDict, listDict,
                    warrantyFor, shortlistFor, matchTenderFor: matchTender,
                    centralReportIsConfirmed,
-                   canonicalServiceRequest };
+                   canonicalServiceRequest,
+                   // The merge truncated this list, so every test that reaches into
+                   // __pure saw undefined. These all exist above.
+                   ANDHRA_PRADESH_STATE_AUTHORITY, ANDHRA_PRADESH_STATE_GEOMETRY_SHA256,
+                   AUTHORITY_REGISTRY_VERSION, BENGALURU_AUTHORITY_NAMES,
+                   CHHATTISGARH_STATE_AUTHORITY, CHHATTISGARH_STATE_GEOMETRY_SHA256,
+                   CIVIC_HANDOFF_OVERRIDES, DELHI_GEOMETRY_SHA256, DELHI_PWD_AUTHORITY,
+                   GENERAL_CIVIC_AUTHORITY_IDS, ISSUE_TYPES, KARNATAKA_STATE_AUTHORITY,
+                   KARNATAKA_STATE_GEOMETRY_SHA256, KERALA_STATE_AUTHORITY,
+                   KERALA_STATE_GEOMETRY_SHA256, KMC_AUTHORITY, MAHARASHTRA_STATE_AUTHORITY,
+                   MAHARASHTRA_STATE_GEOMETRY_SHA256, MMR_AUTHORITIES,
+                   MUNICIPAL_CITY_CONFIGS, OFFICIAL_AUTHORITIES,
+                   OPTIONAL_CATALOG_TIMEOUT_MS, PUNJAB_STATE_AUTHORITY,
+                   PUNJAB_STATE_GEOMETRY_SHA256, RAJASTHAN_STATE_AUTHORITY,
+                   RAJASTHAN_STATE_GEOMETRY_SHA256, REMAINING_STATE_ROUTE_CONFIGS,
+                   TAMIL_NADU_STATE_AUTHORITY, TAMIL_NADU_STATE_GEOMETRY_SHA256,
+                   TELANGANA_STATE_AUTHORITY, TELANGANA_STATE_GEOMETRY_SHA256,
+                   UTTAR_PRADESH_STATE_AUTHORITY, UTTAR_PRADESH_STATE_GEOMETRY_SHA256,
+                   WEST_BENGAL_STATE_AUTHORITY, WEST_BENGAL_STATE_GEOMETRY_SHA256,
+                   accuracyCircleWithinEnvelope, andhraPradeshCoverage,
+                   andhraPradeshRouteFromGeocode, authorityComplaintProfile,
+                   buildComplaintOutputs, catalogResourceWithinReview, chhattisgarhCoverage,
+                   chhattisgarhRouteFromGeocode, complaintBodyWithFooter,
+                   complaintOutputsForRecord, contractVerificationFor, delhiCoverage,
+                   delhiRouteFromGeocode, evidenceForReport, exactPinnedContractStateCode,
+                   fullFramePhoto, geometryBoundaryDistanceMeters, getContractPackManifest,
+                   getHighwayPackManifest, getRoadAgreementManifest, getRoadNoticeManifest,
+                   getStatePackManifest, gpsAccuracyEnvelope, highwayContractCandidates,
+                   inDelhiEnvelope, karnatakaStateCoverage, karnatakaStateRouteFromGeocode,
+                   keralaCoverage, keralaRouteFromGeocode, kolkataCoverage,
+                   kolkataRouteFromGeocode, loadHighwayContractPack, loadRoadAgreementPack,
+                   loadRoadNoticePack, loadStatePack, maharashtraCoverage,
+                   maharashtraRouteFromGeocode, majorCityCoverage,
+                   majorCityRouteFromGeocode, matchHighwayTile, matchRoadAgreement,
+                   matchRoadNotice, matchTenderAt, migrateLegacyAndhraPradeshHandoff,
+                   migrateLegacyComplaintRecord, migrateLegacyTamilNaduHandoff,
+                   mumbaiFromGeocode, mumbaiWardFromName, municipalCityCoverage,
+                   municipalCityRouteFromGeocode, nationalHighwayRoute,
+                   normaliseAuthorityValue, normaliseIssueType, normaliseTenderMatch,
+                   odishaRouteFromGeocode, openNationalHighwayHandoff, pointInGeometry,
+                   pruneStatePacks, punjabCoverage, punjabRouteFromGeocode,
+                   rajasthanCoverage, rajasthanRouteFromGeocode,
+                   remainingStateRouteFromGeocode, resetContractPackMemory,
+                   resetRoadAgreementPackMemory, resetRoadNoticePackMemory,
+                   resetStatePackMemory, resolvePackUrl, roadAgreementCandidates,
+                   roadNoticeCandidates, routeForIssue, routeOfficer,
+                   savedMunicipalLocationMatches, savedOfficialRouteBinding,
+                   separateRoadResponsibility, stateCodeForGeocode,
+                   summarizeFootageAnalysis, tamilNaduCoverage, tamilNaduRouteFromGeocode,
+                   telanganaCoverage, telanganaRouteFromGeocode, tenderCoversCarriageway,
+                   trustedContractStateCode, uttarPradeshCoverage,
+                   uttarPradeshRouteFromGeocode, validMmrAuthorityBoundaries,
+                   validateAuthorityRegistry, validateMajorCityPayload,
+                   validateOfficialHandoffRegistry, validateRoadNoticePack,
+                   verifiedBdaResponsibility, verifiedContractForComplaint, vodBurstTimes,
+                   vodSampleTimes
+                   };
 
   // Restored from the last coherent production file: the v1.38 merge dropped these
   // definitions while their call sites stayed, so these paths threw on first use.
