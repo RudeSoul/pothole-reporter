@@ -29,7 +29,7 @@ const value = (name, fallback) => {
 };
 
 const python = `${repoRoot}/.venv/bin/python`;
-const PORT = Number(process.env.HARNESS_PORT || 8799);
+const PORT = Number(process.env.HARNESS_PORT || 8765);
 const workers = Number(value("workers", Math.max(2, Math.min(6, availableParallelism() - 2))));
 const timeoutMs = Number(value("timeout", 240)) * 1000;
 
@@ -50,7 +50,12 @@ function staticServer(root, port) {
     ".webm": "video/webm", ".gpx": "application/gpx+xml", ".css": "text/css",
   };
   const server = createServer((request, response) => {
-    const path = decodeURIComponent(new URL(request.url, "http://x").pathname);
+    let path = decodeURIComponent(new URL(request.url, "http://x").pathname);
+    // The hosted site exposes the app under /web-app/ as well as at the root; five
+    // suites request it that way.
+    if (path === "/web-app" || path.startsWith("/web-app/")) {
+      path = path.slice("/web-app".length) || "/";
+    }
     const file = resolve(root, `.${path === "/" ? "/index.html" : path}`);
     if (!file.startsWith(root) || !existsSync(file)) {
       response.writeHead(404).end("not found");

@@ -5484,11 +5484,11 @@
   // The v1.38 merge left this function's body ahead of its signature: it reads the
   // geocode object, GPS accuracy, heading and speed that the newer call path supplies.
   // Callers pass an address or geocode plus an optional server-resolved jurisdiction.
-  async function routeOfficer(geoOrAddress, lat, lng, authoritativeJurisdiction = null,
-                              gpsAccuracy = undefined, heading = undefined,
-                              speed = undefined) {
-    // Complaint filing covers road damage only; the multi-issue client was removed.
-    const issueType = "road_damage";
+  async function routeOfficer(geoOrAddress, lat, lng, gpsAccuracy = undefined,
+                              heading = undefined, speed = undefined,
+                              requestedIssueType = "road_damage",
+                              authoritativeJurisdiction = null) {
+    const issueType = normaliseIssueType(requestedIssueType);
     if (lat == null || lng == null || Number.isNaN(lat) || Number.isNaN(lng)) {
       return routeForIssue(unroutedRoute("no_location"), issueType);
     }
@@ -5984,6 +5984,14 @@
 
   const conditionStatus = (r) => r && (r.condition_status === "fixed"
     || r.condition_status === "repair_review") ? r.condition_status : "open";
+
+  // Restored from the last coherent production file: the v1.38 merge dropped these
+  // definitions while their call sites stayed, so these paths threw on first use.
+  function candidateLeadIsUnambiguous(ranked, minimumGap) {
+    if (!Array.isArray(ranked) || !ranked.length) return false;
+    return !ranked[1]
+      || Number(ranked[0].score) - Number(ranked[1].score) >= minimumGap;
+  }
 
   function roadEventMatch(candidate, prior) {
     if (!candidate.dedupe_eligible || !acceptedReport(prior)
@@ -8385,10 +8393,11 @@
     const routingJurisdiction = usingSharedVision()
       ? (centralJurisdiction || { road_ownership: "unknown" }) : null;
     const route = (accepted && !deferEnrichment
-      ? await routeOfficer((geo && geo.full) || address, lat, lng, routingJurisdiction,
+      ? await routeOfficer((geo && geo.full) || address, lat, lng,
           Number.isFinite(gpsAccuracyRaw) ? gpsAccuracyRaw : undefined,
           normalizedHeading == null ? undefined : normalizedHeading,
-          Number.isFinite(speedRaw) ? speedRaw : undefined)
+          Number.isFinite(speedRaw) ? speedRaw : undefined,
+          "road_damage", routingJurisdiction)
       : null) || {};
     const officerName = route.officer_name || null;
     const officerEmail = route.officer_email || null;
@@ -8696,7 +8705,8 @@
     if (!officerEmail) {
       // routeOfficer answers with a route object; destructuring it as an array made
       // every send throw "object is not iterable" before the draft could open.
-      route = await routeOfficer(address, lat, lng, authoritativeJurisdiction) || {};
+      route = await routeOfficer(address, lat, lng, undefined, undefined, undefined,
+        "road_damage", authoritativeJurisdiction) || {};
       officerName = route.officer_name || null;
       officerEmail = route.officer_email || null;
       unroutedReason = route.unrouted_reason || null;
@@ -9393,7 +9403,8 @@
                    validateAuthorityRegistry, validateMajorCityPayload,
                    validateOfficialHandoffRegistry, validateRoadNoticePack,
                    verifiedBdaResponsibility, verifiedContractForComplaint, vodBurstTimes,
-                   vodSampleTimes
+                   vodSampleTimes,
+                   biharCoverage, biharRouteFromGeocode, goaCoverage, goaRouteFromGeocode, madhyaPradeshCoverage, madhyaPradeshRouteFromGeocode, odishaCoverage, pinnedStateCoverage, remainingStateCoverage, westBengalCoverage
                    };
 
   // Restored from the last coherent production file: the v1.38 merge dropped these

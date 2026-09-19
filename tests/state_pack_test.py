@@ -160,7 +160,7 @@ HOOKS_READY = """
 
 IDB_HELPERS = r"""
 const openPackDb = () => new Promise((resolve, reject) => {
-  const request = indexedDB.open("potholes", 6);
+  const request = indexedDB.open("potholes");
   request.onerror = () => reject(request.error);
   request.onsuccess = () => resolve(request.result);
 });

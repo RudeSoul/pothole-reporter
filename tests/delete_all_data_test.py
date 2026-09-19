@@ -23,7 +23,7 @@ with sync_playwright() as playwright:
         """async () => {
           await StandaloneAPI.handle("/api/reports", {method: "DELETE"});
           const db = await new Promise((resolve, reject) => {
-            const request = indexedDB.open("potholes", 6);
+            const request = indexedDB.open("potholes");
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
           });
@@ -130,7 +130,7 @@ with sync_playwright() as playwright:
     failure_result = failure_page.evaluate(
         """async () => {
           const db = await new Promise((resolve, reject) => {
-            const request = indexedDB.open("potholes", 6);
+            const request = indexedDB.open("potholes");
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
           });
