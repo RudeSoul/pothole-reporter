@@ -116,6 +116,11 @@ function tasks(group) {
     });
     all.push({
       group: "static",
+      name: "__pure exports every helper",
+      command: ["node", "tools/harness/sync-pure-exports.mjs", "--check"],
+    });
+    all.push({
+      group: "static",
       name: "llm contract is current",
       command: ["node", "llm/generate.mjs", "--check"],
     });
