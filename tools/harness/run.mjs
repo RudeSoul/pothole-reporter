@@ -5,7 +5,8 @@
 //   node tools/harness/run.mjs                 static gates + flow tests (the fast set)
 //   node tools/harness/run.mjs --all           everything, including the slow suites
 //   node tools/harness/run.mjs --only flow     one group: static, flow, server, python,
-//                                             browsers (firefox/webkit), emulator
+//                                             browsers (firefox/webkit), emulator,
+//                                             devices (AWS Device Farm, opt-in)
 //   node tools/harness/run.mjs --loop          re-run until no regressions remain
 //   node tools/harness/run.mjs --until-green   re-run until EVERY check passes
 //   node tools/harness/run.mjs --baseline      write baseline.json instead of judging
@@ -139,6 +140,15 @@ function tasks(group) {
       name: "central service unit tests",
       command: ["npm", "test", "--silent"],
       cwd: `${repoRoot}/infra/aws-central`,
+    });
+  }
+  // Real phones in AWS Device Farm. Opt-in: it needs AWS credentials and spends
+  // device-minutes, so it never runs as part of --all.
+  if (group === "devices") {
+    all.push({
+      group: "devices",
+      name: "aws device farm (Top Devices pool)",
+      command: ["bash", "tools/harness/devicefarm-run.sh"],
     });
   }
   // The packaged app on a real Android WebView: the only check that would have caught
