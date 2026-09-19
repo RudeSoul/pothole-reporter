@@ -17,42 +17,60 @@ FOOTER = (
 JS = r"""
 (() => {
   const P = StandaloneAPI.__pure;
-  const a = { is_pothole: true, size: "medium", confidence: 0.8, description: "d" };
-  const tender = { tender_number: "DMA/1", contractor: "ACME", title: "Road work",
-                   published: "01-02-2026", warranty: "within the defect liability period",
-                   warranty_code: "dlp" };
-  const out = {};
-  const [, councilBody] = P.draftEmail(a, 12.9, 77.6, "Main Road, Channagiri, 577213",
-                                       "Chief Officer, Channagiri", tender);
-  const [, corpBody] = P.draftEmail(a, 12.9, 77.6, "17th Main, HSR Layout, Bengaluru",
-                                    "Commissioner, Bengaluru South City Corporation", tender);
-  out.council = councilBody;
-  out.corporation = corpBody;
-  // and the no-contract case, which most complaints are
-  const [, noTender] = P.draftEmail(a, 12.9, 77.6, "Main Road, Channagiri, 577213",
-                                    "Chief Officer, Channagiri", null);
-  out.noTender = noTender;
-  out.english = { subject: P.draftEmail(a, 12.9, 77.6,
-    "Main Road, Channagiri, 577213", "Chief Officer, Channagiri", tender)[0],
-    withTender: councilBody, noTender };
-
-  // draftEmail reads the language at call time, so the same production helper can be
-  // checked in both shipped languages without maintaining a second test implementation.
-  localStorage.setItem("app_lang", "kn");
-  const [knSubject, knTender] = P.draftEmail(a, 12.9, 77.6,
-    "ಮುಖ್ಯ ರಸ್ತೆ, ಚನ್ನಗಿರಿ, 577213", "ಮುಖ್ಯ ಅಧಿಕಾರಿ, ಚನ್ನಗಿರಿ", tender);
-  const [, knNoTender] = P.draftEmail(a, 12.9, 77.6,
-    "ಮುಖ್ಯ ರಸ್ತೆ, ಚನ್ನಗಿರಿ, 577213", "ಮುಖ್ಯ ಅಧಿಕಾರಿ, ಚನ್ನಗಿರಿ", null);
-  out.kannada = { subject: knSubject, withTender: knTender, noTender: knNoTender };
-  localStorage.removeItem("app_lang");
-
-  out.types = {};
-  for (const type of ["pothole_cavity", "failed_patch", "surface_breakup", "rut_or_depression"]) {
-    const [subject, body] = P.draftEmail({ damage_type:type, size:"medium", description:"d" },
-      12.9, 77.6, "Main Road, Channagiri, 577213", "Chief Officer, Channagiri", null);
-    out.types[type] = {subject, body};
-  }
-  return out;
+  const assessment = P.binaryAssessment({
+    is_pothole: true,
+    looks_like_speed_breaker: false,
+    image_quality: "usable",
+    surface_type: "bituminous_asphalt",
+    on_drivable_surface: true,
+    has_localized_cavity: true,
+    has_unambiguous_lower_interior: true,
+    has_broken_edge_or_rim: true,
+    has_depth_or_surface_loss: true,
+    temporal_consistency: "single_view",
+    size: "medium",
+    description: "A localized cavity with material loss",
+  }, false, 1);
+  const route = {
+    routed: true,
+    authority_id: "ka-lgd-305852",
+    authority_name: "Bengaluru South City Corporation",
+    officer_name: "Commissioner, Bengaluru South City Corporation",
+    routing_source: "Karnataka GIS municipal boundary",
+    routing_match_field: "town_lgd_code",
+    routing_match_value: "305852",
+    handoff_name: "Namma Bengaluru (Sahaaya 2.0)",
+    region: "karnataka",
+    routing_pack_state_code: "KA",
+    contract_state_code: "KA",
+    tender_eligible: true,
+  };
+  const tender = {
+    tender_number: "BBMP/2025-26/RD/WORK-42",
+    title: "Resurfacing of 17th Main Road in HSR Layout",
+    contractor: "ACME Roads Pvt Ltd",
+    published: "01-02-2026",
+    source_name: "Karnataka Public Procurement Portal (KPPP) snapshot",
+    source_url: "https://kppp.karnataka.gov.in/",
+    tender_pack_id: "in-ka-tenders",
+    tender_pack_version: 1,
+    tender_pack_sha256: "a".repeat(64),
+    tender_pack_state_code: "KA",
+  };
+  const evidence = {
+    captured_at: 1787625000,
+    gps_accuracy: 8,
+    photo_provenance: "Pothole Reporter camera evidence",
+  };
+  return {
+    matched: P.buildComplaintOutputs(assessment, 12.912345, 77.612345,
+      "17th Main Road, HSR Layout, Bengaluru", route.officer_name, tender, route, evidence),
+    noCandidate: P.buildComplaintOutputs(assessment, 12.912345, 77.612345,
+      "17th Main Road, HSR Layout, Bengaluru", route.officer_name, null, route, evidence),
+    rejectedScope: P.normaliseTenderMatch({...tender,
+      tender_number: "BBMP/2023-24/OW/WORK_INDENT2505",
+      title: "Construction of drain and footpath"}, route),
+  };
 })()
 """
 
@@ -61,56 +79,6 @@ def require(failures, condition, message):
     if not condition:
         failures.append(message)
 
-for phrase in ("city corporation", "the city"):
-    if phrase in council:
-        fails.append(f'a letter to a Chief Officer says "{phrase}", but that body is not a corporation')
-if "Chief Officer, Channagiri" not in council:
-    fails.append("the greeting does not address the routed officer")
-if "probable" not in council.lower():
-    fails.append("the contract claim lost its hedge")
-if "ACME" not in council:
-    fails.append("the contractor is not named when one is recorded")
-if "publication date does not establish" not in council.lower():
-    fails.append("English complaint does not explicitly disclaim current contractor liability")
-for claim in ("within the defect liability period", "within the maintenance period",
-              "at no additional cost"):
-    if claim in council.lower():
-        fails.append(f"English complaint makes an unsupported liability claim: {claim!r}")
-
-# A matched tender may be useful context, but the app must not hint that one was found
-# when resolution returned null. Check the whole conditional paragraph rather than just
-# one contractor name: that catches a stale number, title, date, or boilerplate claim.
-for language, values in (("English", r["english"]), ("Kannada", r["kannada"])):
-    with_tender = values["withTender"]
-    no_tender = values["noTender"]
-    for token in ("DMA/1", "Road work", "ACME", "01-02-2026"):
-        if token not in with_tender:
-            fails.append(f"{language} matched-tender complaint omits {token!r}")
-        if token in no_tender:
-            fails.append(f"{language} no-tender complaint leaks {token!r}")
-    if language == "English":
-        if "tender DMA/1" not in with_tender or "probably" not in with_tender.lower():
-            fails.append("English tender wording lost the exact number or its probability hedge")
-        if "tender" in no_tender.lower():
-            fails.append("English no-tender complaint says a tender was found")
-        for phrase in ("Public procurement records", "probable record match", "tender documents"):
-            if phrase in no_tender:
-                fails.append(f"English no-tender complaint contains conditional wording: {phrase!r}")
-    else:
-        if "ಟೆಂಡರ್ DMA/1" not in with_tender or "ಸಂಭಾವ್ಯ" not in with_tender:
-            fails.append("Kannada tender wording lost the exact number or its probability hedge")
-        if "ಟೆಂಡರ್" in no_tender:
-            fails.append("Kannada no-tender complaint says a tender was found")
-        if "ಪ್ರಕಟಣೆ ದಿನಾಂಕವು" not in with_tender or "ಸ್ಥಾಪಿಸುವುದಿಲ್ಲ" not in with_tender:
-            fails.append("Kannada complaint does not explicitly disclaim current contractor liability")
-        if "ಹೆಚ್ಚುವರಿ ವೆಚ್ಚವಿಲ್ಲದೆ" in with_tender:
-            fails.append("Kannada complaint makes an unsupported no-additional-cost claim")
-
-for language, values in (("English", r["english"]), ("Kannada", r["kannada"])):
-    combined = values["subject"] + "\n" + values["withTender"]
-    for token in ("12.900000", "77.600000", "https://maps.google.com/?q=12.900000,77.600000"):
-        if token not in combined:
-            fails.append(f"{language} complaint omits location evidence {token!r}")
 
 def main():
     failures = []

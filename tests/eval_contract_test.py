@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline guard that the evaluator represents the generated production contract."""
-import importlib.util, json, pathlib, sys, tempfile
+import importlib.util, json, pathlib, re, sys, tempfile
 from PIL import Image
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent

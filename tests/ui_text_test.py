@@ -60,7 +60,7 @@ for name in ("static/index.html", "android-app/www/index.html", "docs/index.html
         if "ಕರ್ನಾಟಕ" not in kn[1]:
             fails.append(f"{name}: Kannada out-of-coverage text does not mention Karnataka")
     else:
-        for language, note in zip(("English", "Kannada", "Marathi", "Bengali"), notes):
+        for language, note in zip(("English", "Kannada", "Marathi", "Bengali"), settings_notes):
             if "OpenAI" not in note:
                 fails.append(f"{name}: {language} settings note does not mention OpenAI")
             if "GitHub Pages" not in note:

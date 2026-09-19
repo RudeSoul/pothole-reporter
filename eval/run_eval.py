@@ -4,7 +4,7 @@
 Production transforms and request semantics are mirrored here. Repetitions stay nested
 under their source event; they are never presented as additional ground truth.
 """
-import argparse, base64, hashlib, io, json, math, os, subprocess, sys
+import argparse, base64, hashlib, io, json, math, os, re, subprocess, sys
 import urllib.request
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -108,35 +108,63 @@ def normalise_config(model, detail):
     return model, detail
 
 
+DRIVE_DEFAULT_DETAIL = "original"
+
+
 def detection_enhancement_plan(image):
     """Return the integer enhancement plan shared with Android and the Web runtime."""
     pixels = image.load()
-    step = max(1, math.floor(math.sqrt(
-        (image.width * image.height) / LUMINANCE_CONFIG["targetSamples"])))
-    total = count = clipped_dark = clipped_bright = 0
+    step = max(1, math.floor(math.sqrt((image.width * image.height) / 12000)))
+    luminance_sum = sample_count = dark_count = bright_count = 0
     for y in range(0, image.height, step):
         for x in range(0, image.width, step):
             red, green, blue = pixels[x, y]
-            luminance = .2126 * red + .7152 * green + .0722 * blue
-            total += luminance
-            count += 1
-            clipped_dark += luminance < LUMINANCE_CONFIG["darkPixelThreshold"]
-            clipped_bright += luminance > LUMINANCE_CONFIG["brightPixelThreshold"]
-    mean = total / max(1, count)
-    dark = clipped_dark / max(1, count)
-    bright = clipped_bright / max(1, count)
-    if (mean >= LUMINANCE_CONFIG["meanThreshold"]
-            or bright >= LUMINANCE_CONFIG["brightFractionThreshold"]):
-        return image, {"luminance": mean, "dark": dark, "bright": bright,
-                       "enhanced": False}
-    lift = min(LUMINANCE_CONFIG["maximumLift"],
-               max(LUMINANCE_CONFIG["minimumLift"],
-                   LUMINANCE_CONFIG["targetMean"]
-                   / max(LUMINANCE_CONFIG["meanFloor"], mean)))
-    image = ImageEnhance.Brightness(image).enhance(lift)
-    image = ImageEnhance.Contrast(image).enhance(LUMINANCE_CONFIG["contrast"])
-    return image, {"luminance": mean, "dark": dark, "bright": bright,
-                   "enhanced": True, "brightness": lift}
+            luminance = 2126 * red + 7152 * green + 722 * blue
+            luminance_sum += luminance
+            sample_count += 1
+            dark_count += luminance < 120000
+            bright_count += luminance > 2450000
+
+    enhanced = (luminance_sum < 720000 * sample_count
+                and bright_count * 100 < 8 * sample_count)
+    gain_numerator = gain_denominator = 1
+    if enhanced:
+        gain_numerator = 935000 * sample_count
+        gain_denominator = max(luminance_sum, 350000 * sample_count)
+        if gain_numerator * 1000 < 1265 * gain_denominator:
+            gain_numerator, gain_denominator = 1265, 1000
+        elif gain_numerator * 1000 > 1815 * gain_denominator:
+            gain_numerator, gain_denominator = 1815, 1000
+
+    return {
+        "enhanced": enhanced,
+        "sample_count": sample_count,
+        "luminance_sum": luminance_sum,
+        "dark_count": dark_count,
+        "bright_count": bright_count,
+        "gain_numerator": gain_numerator,
+        "gain_denominator": gain_denominator,
+        "luminance": luminance_sum / max(1, 10000 * sample_count),
+        "dark": dark_count / max(1, sample_count),
+        "bright": bright_count / max(1, sample_count),
+    }
+
+
+def apply_detection_enhancement(image, plan):
+    """Apply Android's exact black-pivot rational gain through an integer RGB LUT."""
+    if not plan["enhanced"]:
+        return image
+    numerator = plan["gain_numerator"]
+    denominator = plan["gain_denominator"]
+    lookup = [min(255, (2 * channel * numerator + denominator) // (2 * denominator))
+              for channel in range(256)]
+    return image.point(lookup * 3)
+
+
+def adaptive_lift(image):
+    """Enhance the already-resized full frame with the cross-runtime pixel kernel."""
+    plan = detection_enhancement_plan(image)
+    return apply_detection_enhancement(image, plan), plan
 
 
 def encode_view(path, max_dim, quality, band, enhance):
