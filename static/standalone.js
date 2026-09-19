@@ -6592,6 +6592,19 @@
     // into outward copy even while segment, award and DLP were unverified. IndexedDB
     // survives app upgrades, so remove that entire generated allegation from every unsent
     // draft. Candidate metadata may remain on the local report for research/audit.
+    // Older drafts named a probable tender, its title and the recorded bidder in prose.
+    // None of that was verified against this exact road, and the draft may still be
+    // unsent, so replace the whole attribution paragraph with the fail-closed status
+    // rather than leaving a contractor accused in outgoing mail.
+    const attribution = String(rec.tender_number || "").trim();
+    if (attribution) {
+      const named = paragraphs.findIndex((paragraph) => paragraph.includes(attribution));
+      if (named >= 0) {
+        paragraphs[named] = `CONTRACT VERIFICATION\nStatus: ${NO_VERIFIED_CONTRACT}`;
+        recognised = true;
+      }
+    }
+
     const candidateBlock = paragraphs.findIndex((paragraph) =>
       /^CONTRACT CANDIDATE(?:\n|$)/.test(paragraph));
     if (candidateBlock >= 0) {
