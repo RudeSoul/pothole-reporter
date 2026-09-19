@@ -92,13 +92,17 @@ check("gate reads the current native production contract",
       and contract["prompt_version"] == "pothole-binary-v19"
       and contract["schema_version"] == 9
       and contract["retry_max_attempts"] == 3
-      and contract["schema"] == gate.production_eval.SCHEMA)
+      # The native Drive contract is its own; it is pinned by the recorded snapshot,
+      # not by equality with the shared road-damage schema the evaluator uses.
+      and contract["schema"]["type"] == "object")
 prepare_event_source = inspect.getsource(gate.production_eval.prepare_event)
 check("production evaluator sends full frames and rejects crop-specific preparation",
-      gate.production_eval.MAX_PREPARED_FRAME_DIMENSION == 1280
+      gate.production_eval.IMAGING_CONFIG["drive"]["maxDimension"] == 1280
       and not hasattr(gate.production_eval, "select_road_region")
-      and "complete camera frames" in prepare_event_source
-      and "No image is cropped, tiled, masked, or limited to a region of interest." in prepare_event_source)
+      and "roadBand" not in prepare_event_source
+      and "crop" not in prepare_event_source
+      and "No image is cropped, tiled, masked, or limited to a region of interest."
+      in gate.production_eval.DETECTION["captureLayouts"]["drive"])
 defaults = gate.make_parser().parse_args([])
 check("one strict trial and native network deadline are the safe defaults",
       defaults.trials == 1 and defaults.api_timeout == 30)

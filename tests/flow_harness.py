@@ -209,6 +209,9 @@ NATIVE_STUB = r"""
 """
 
 
+BROWSER = os.environ.get("POTHOLE_TEST_BROWSER", "chromium")
+
+
 def open_flow(playwright, *, fresh=False, native=True, storage=None, headless=True):
     """Open the app the way a tester's phone does, with errors recorded.
 
@@ -216,15 +219,20 @@ def open_flow(playwright, *, fresh=False, native=True, storage=None, headless=Tr
     """
     # A synthetic camera lets the default (WebView) Drive path run for real in CI: the
     # preview, the frame grab and the stop sequence are all exercised without hardware.
-    browser = playwright.chromium.launch(headless=headless, args=[
-        "--disable-web-security",
-        "--use-fake-device-for-media-stream",
-        "--use-fake-ui-for-media-stream",
-    ])
-    context = browser.new_context(viewport={"width": 390, "height": 844},
-                                  permissions=["camera", "geolocation"],
-                                  geolocation={"latitude": 12.9716, "longitude": 77.5946},
-                                  locale="en-IN")
+    engine = getattr(playwright, BROWSER)
+    # Chromium takes flags for a synthetic camera; Firefox and WebKit have their own
+    # defaults, so the same flows run on all three without Chromium-only switches.
+    args = ["--disable-web-security", "--use-fake-device-for-media-stream",
+            "--use-fake-ui-for-media-stream"] if BROWSER == "chromium" else []
+    browser = engine.launch(headless=headless, args=args)
+    context_options = {"viewport": {"width": 390, "height": 844},
+                       "geolocation": {"latitude": 12.9716, "longitude": 77.5946},
+                       "locale": "en-IN"}
+    # Only Chromium implements the "camera" permission name; the others grant capture
+    # through their own launch defaults.
+    context_options["permissions"] = ["camera", "geolocation"] if BROWSER == "chromium" \
+        else ["geolocation"]
+    context = browser.new_context(**context_options)
     prelude = [f'localStorage.setItem("service_url", {json.dumps(SERVICE)});']
     if not fresh:
         prelude += [

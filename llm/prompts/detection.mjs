@@ -11,9 +11,14 @@ Classify visible damage to the road surface or track. A road may be asphalt, con
 First identify the actual road or track boundary. Edge damage counts only when the visible cavity, breakup, rut, or depression physically affects that road surface. Rubble, excavated soil, building work, or damage to a footpath, gutter, drain, shoulder, or plot beyond an intact road boundary does not become road damage merely because it is adjacent to the road.
 
 Do not classify an intact footpath, kerb, drain, manhole, speed breaker, shadow, stain, water patch, loose roadside debris, or damage confined outside the road as road damage. Use the structured-output field descriptions for the exact definitions and examples.`,
+  // The detector is told what it is looking at: one whole frame. The native contract
+  // and AGENTS.md carry the same sentence, so a crop cannot be introduced on one side
+  // of the app without contradicting the prompt on the other.
   captureLayouts: Object.freeze({
-    manual: "\nCapture source: one user-framed image.",
-    drive: "\nCapture source: one automatically selected Drive Mode frame.",
+    manual: "\nCapture source: one user-framed image."
+      + " No image is cropped, tiled, masked, or limited to a region of interest.",
+    drive: "\nCapture source: one automatically selected Drive Mode frame."
+      + " No image is cropped, tiled, masked, or limited to a region of interest.",
   }),
   languageSuffixes: Object.freeze({
     en: "",

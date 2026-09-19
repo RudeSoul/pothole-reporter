@@ -195,12 +195,13 @@ def load_event(path, source_mode="live"):
         if run_eval.sha(raw) != image.get("sha256"):
             raise ValueError(f"{path.name}: SHA-256 mismatch for {filename}")
         views.append(data_url(raw))
-    final_image = len(images)
-    note = ("\n- Capture layout: image 1 is downscaled full-frame context from the "
-            f"sharpest selected frame. Images 2-{final_image} are complete camera frames "
-            f"in chronological order; chronological frame {primary + 1} is the sharpest. "
+    # The shipped contract sends one image per detection, so the prepared corpus is
+    # replayed the same way: the sharpest complete frame, and nothing beside it. The
+    # other prepared frames stay on disk as evidence of what the burst contained.
+    note = ("\n- Capture layout: one complete camera frame, the sharpest of the "
+            f"{len(images)} prepared for this event. "
             "No image is cropped, tiled, masked, or limited to a region of interest.")
-    return manifest, manifest_bytes, views, note
+    return manifest, manifest_bytes, [views[primary]], note
 
 
 def main():
@@ -265,7 +266,7 @@ def main():
                 "event": event,
                 "trial": trial,
                 "primary_index": manifest["primary_index"],
-                "decision": run_eval.decision(result, "drive", len(prepared[event][2]) - 1),
+                "decision": run_eval.native_decision(result, "drive", len(prepared[event][2])),
                 "cached": cached,
                 "request_hash": request_hash,
                 **result,

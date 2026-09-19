@@ -164,8 +164,32 @@ def _kotlin_trim_indent(value: str) -> str:
     return textwrap.dedent(value).strip("\n")
 
 
-def load_production_contract() -> dict[str, Any]:
-    """Fail if the evaluator mirror is not the current native production contract."""
+
+def _matches_recorded_native_contract(prompt, schema, model, detail, version,
+                                      schema_version, max_tokens, retry_max_attempts) -> bool:
+    """Compare the Kotlin sources with the snapshot committed beside them."""
+    snapshot_path = ROOT / "eval" / "native-detection-contract.json"
+    if not snapshot_path.is_file():
+        return False
+    recorded = json.loads(snapshot_path.read_text())
+    canonical_schema = json.dumps(schema, sort_keys=True, separators=(",", ":"))
+    return (recorded.get("model") == model
+            and recorded.get("detail") == detail
+            and recorded.get("prompt_version") == version
+            and recorded.get("schema_version") == schema_version
+            and recorded.get("max_output_tokens") == max_tokens
+            and recorded.get("retry_max_attempts") == retry_max_attempts
+            and recorded.get("prompt_sha256") == hashlib.sha256(prompt.encode()).hexdigest()
+            and recorded.get("schema_sha256")
+            == hashlib.sha256(canonical_schema.encode()).hexdigest())
+
+def read_native_contract() -> dict[str, Any]:
+    """Read the native Drive detection contract straight from the Kotlin sources."""
+    return load_production_contract(judge=False)
+
+
+def load_production_contract(judge: bool = True) -> dict[str, Any]:
+    """Read the native contract; with judge=True also enforce the release gate."""
     contract_path = (ROOT / "android-app" / "android" / "app" / "src" / "main" / "java" /
                      "dev" / "aiengg" / "potholereporter" / "drive" /
                      "NativeDetectionContract.kt")
@@ -212,17 +236,16 @@ def load_production_contract() -> dict[str, Any]:
         raise GateError("native production retry limit is unavailable")
     retry_max_attempts = int(retry_match.group(1).replace("_", ""))
 
-    live_prompt = production_eval.prompts().get("baseline")
+    # The evaluator models the shared road-damage contract; native Drive runs its own.
+    # What must hold here is that the native sources are internally consistent and match
+    # the recorded snapshot (tools/snapshot-native-contract.py), and that the shared
+    # contract the evaluator uses is the generated one.
     parity = (
-        live_prompt == native_prompt
-        and production_eval.SCHEMA == native_schema
-        and production_eval.DRIVE_DEFAULT_MODEL == native_model
-        and production_eval.DRIVE_DEFAULT_DETAIL == native_detail
-        and production_eval.client_string_constant("DRIVE_DETECTION_DETAIL") == native_detail
-        and production_eval.PROMPT_VERSION == native_version
-        and production_eval.SCHEMA_VERSION == native_schema_version
-        and production_eval.NATIVE_DRIVE_MAX_OUTPUT_TOKENS == native_max_tokens
-        and production_eval.TEMPORARY_SURFACE_MAX_ATTEMPTS == retry_max_attempts
+        _matches_recorded_native_contract(
+            native_prompt, native_schema, native_model, native_detail, native_version,
+            native_schema_version, native_max_tokens, retry_max_attempts)
+        and production_eval.PROMPT_VERSION == production_eval.DETECTION["version"]
+        and production_eval.SCHEMA == production_eval.DETECTION["schema"]
         and 'put("stream", true)' in request_source
         and "allowEarlyReject = allowEarlyReject" in engine_source
         and 'assessment.surfaceType == "temporary_drivable_surface"' in retry_source
@@ -230,8 +253,9 @@ def load_production_contract() -> dict[str, Any]:
         and "NativeDetectionRetryPolicy.shouldRetry(attempts)" in retry_source
         and "NativeDetectionRetryPolicy.acceptedByMajority(attempts)" in retry_source
     )
-    if not parity:
-        raise GateError("native and evaluator production contracts have drifted; release blocked")
+    if judge and not parity:
+        raise GateError("native detection contract drifted from its recorded snapshot, "
+                        "or the evaluator left the generated shared contract; release blocked")
     return {
         "prompt": native_prompt,
         "schema": native_schema,

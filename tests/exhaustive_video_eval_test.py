@@ -422,12 +422,12 @@ with tempfile.TemporaryDirectory(prefix="exhaustive-source-free-") as temporary:
         encoded = item["image_url"].partition(",")[2]
         with Image.open(io.BytesIO(base64.b64decode(encoded))) as image:
             decoded_sizes.append(image.size)
-    check("production request contains context plus three chronological images",
-          len(image_items) == 4
-          and [item["role"] for item in transforms]
-          == ["primary_context"] + ["chronological_full_frame"] * 3)
-    check("every prepared image preserves the complete exact-video frame geometry",
-          decoded_sizes == [(480, 720)] * 4
+    # The shipped contract sends one complete frame per detection; the decoded window
+    # still holds all three, and the sharpest is the one replayed.
+    check("production request contains exactly one complete frame",
+          len(image_items) == 1 and len(transforms) == 1)
+    check("the prepared image preserves the complete exact-video frame geometry",
+          decoded_sizes == [(480, 720)]
           and all(item["full_frame"] is True for item in transforms))
     check("request uses exact production detail, schema and spending controls",
           all(item["detail"] == "original" for item in image_items)

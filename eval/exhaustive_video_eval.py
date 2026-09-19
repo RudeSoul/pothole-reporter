@@ -714,14 +714,16 @@ def build_production_request(frame_paths: list[Path], contract: dict[str, Any]
     views, transforms, note = production_eval.prepare_event(entry, Path("/"), "drive")
     prompt = production_eval.effective_prompt(contract["prompt"], "drive", note)
     request = production_eval.build_request(
-        views, prompt, contract["model"], contract["detail"], mode="drive")
+        views, prompt, contract["model"], contract["detail"], mode="drive",
+        schema=contract["schema"], max_output_tokens=contract["max_output_tokens"],
+        reasoning_effort="low")
     images = [item for item in request["input"][0]["content"]
               if item.get("type") == "input_image"]
-    if (len(images) != 4 or len(transforms) != 4
+    # The shipped contract sends exactly one complete frame per detection: the sharpest
+    # of the decoded window. The other two frames stay in the corpus as evidence.
+    if (len(images) != 1 or len(transforms) != 1
             or any(item.get("detail") != contract["detail"] for item in images)
-            or any(transform.get("full_frame") is not True for transform in transforms)
-            or [transform.get("role") for transform in transforms]
-            != ["primary_context"] + ["chronological_full_frame"] * 3
+            or transforms[0].get("full_frame") is not True
             or request.get("model") != contract["model"]
             or request.get("reasoning") != {"effort": "low"}
             or request.get("store") is not False

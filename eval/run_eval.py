@@ -90,14 +90,11 @@ def prompts():
 
 def effective_prompt(base_prompt, mode, layout_note=""):
     """Mirror the shipped mode-specific prompt assembly exactly."""
-    photo_scope = client_template_constant("PHOTO_ONLY_PROMPT_SUFFIX") \
-        if mode == "manual" else ""
-    return base_prompt + photo_scope + layout_note
+    return base_prompt + layout_note
 
 
 def effective_prompt_version(mode):
-    return client_string_constant("PHOTO_PROMPT_VERSION") if mode == "manual" \
-        else PROMPT_VERSION
+    return PROMPT_VERSION
 
 
 def normalise_config(model, detail):
@@ -109,6 +106,8 @@ def normalise_config(model, detail):
 
 
 DRIVE_DEFAULT_DETAIL = "original"
+# The native Drive request budget, mirrored from NativeDetectionContract.kt.
+NATIVE_DRIVE_MAX_OUTPUT_TOKENS = 1536
 
 
 def detection_enhancement_plan(image):
@@ -167,7 +166,12 @@ def adaptive_lift(image):
     return apply_detection_enhancement(image, plan), plan
 
 
-def encode_view(path, max_dim, quality, band, enhance):
+def positive_half_up(value):
+    """Match Kotlin roundToInt and JavaScript Math.round for positive dimensions."""
+    return math.floor(value + .5)
+
+
+def encode_view(path, max_dim, quality, enhance):
     from PIL import Image
     image = Image.open(path).convert("RGB")
     source = {"width": image.width, "height": image.height}
@@ -204,18 +208,73 @@ def entry_mode(entry):
     return "drive" if "dashcam" in str(entry.get("source", "")).lower() else "manual"
 
 
+# The 2-of-3 temporary-surface policy the app runs on device. The evaluator has to
+# execute the same attempt accounting or its numbers do not describe production.
+TEMPORARY_SURFACE_MAX_ATTEMPTS = 3
+
+
+def temporary_surface_vote_eligible(result, mode="drive"):
+    """Whether one complete decision may participate in the bounded temporary vote."""
+    return (mode == "drive"
+            and result.get("looks_like_speed_breaker") is False
+            and result.get("image_quality") == "usable"
+            and result.get("surface_type") == "temporary_drivable_surface"
+            and result.get("on_drivable_surface") is True
+            and result.get("temporal_consistency") == "consistent")
+
+
+def run_bounded_detection_policy(get_assessment, mode="drive", source_view_count=3):
+    """Execute the native/Web 2-of-3 policy with exact attempt accounting.
+
+    The first request is allowed to raise because no detector decision exists. Once
+    an eligible temporary-surface decision exists, a failed confirmation is a
+    conservative reject, exactly like the native service.
+    """
+    attempts_started = 1
+    attempts = [get_assessment()]
+    confirmation_failed = False
+    while should_retry_temporary_surface(attempts, mode, source_view_count):
+        attempts_started += 1
+        try:
+            attempts.append(get_assessment())
+        except Exception:
+            confirmation_failed = True
+            break
+
+    first_is_eligible = temporary_surface_vote_eligible(attempts[0], mode)
+    if not first_is_eligible:
+        final_decision = native_decision(attempts[0], mode, source_view_count)
+    elif confirmation_failed:
+        final_decision = "reject"
+    elif confirms_temporary_surface(attempts, mode, source_view_count):
+        final_decision = "accept"
+    else:
+        # This includes two NO votes, a 2-of-3 NO majority, and any subsequent
+        # ineligible/safety-gate result. All are fail-closed in production.
+        final_decision = "reject"
+    assessment = _final_detection_policy_assessment(
+        attempts, final_decision, mode, source_view_count)
+    return DetectionPolicyOutcome(
+        assessment=assessment,
+        decision=final_decision,
+        assessments=tuple(attempts),
+        attempts_started=attempts_started,
+        confirmation_failed=confirmation_failed,
+    )
+
+
 def prepare_event(entry, root, mode):
     config = IMAGING_CONFIG[mode]
     selected = entry_image(entry)
     view, meta = encode_view(
         root / selected, config["maxDimension"],
-        round(config["jpegQuality"] * 100), config["roadBand"],
-        config["adaptiveBrightness"])
+        round(config["jpegQuality"] * 100), config["adaptiveBrightness"])
     transform = {"selected_image": selected, **meta}
     return [view], [transform], DETECTION["captureLayouts"][mode]
 
 
-def build_request(views, prompt, model, detail, mode="drive"):
+def build_request(views, prompt, model, detail, mode="drive", *,
+                  schema=None, max_output_tokens=None, reasoning_effort=None):
     model, detail = normalise_config(model, detail)
     content = [
         {"type": "input_image", "image_url": url, "detail": detail}
@@ -224,26 +283,29 @@ def build_request(views, prompt, model, detail, mode="drive"):
     if len(content) != 1:
         raise ValueError("road-damage-v5 requests must contain exactly one image")
     content.append({"type": "input_text", "text": prompt})
-    return {
+    # A native Drive replay carries the on-device contract's schema, effort and token
+    # budget; everything else uses the generated shared contract. The request used to be
+    # returned before these were applied, so a Drive replay was never the shipped shape.
+    request = {
         "model": model,
         "store": RUNTIME_CONFIG["storeResponses"],
-        "reasoning": {"effort": MODEL_CONFIG["reasoningEffortByModel"].get(
+        "reasoning": {"effort": reasoning_effort or MODEL_CONFIG["reasoningEffortByModel"].get(
             model, MODEL_CONFIG["defaultReasoningEffort"])},
         "input": [{"role": DETECTION["role"], "content": content}],
         "text": {"format": {"type": "json_schema", "name": SCHEMA_NAME,
-                              "schema": SCHEMA,
-                              "strict": RUNTIME_CONFIG["strictStructuredOutputs"]},
+                            "schema": schema if schema is not None else SCHEMA,
+                            "strict": RUNTIME_CONFIG["strictStructuredOutputs"]},
                  "verbosity": RUNTIME_CONFIG["textVerbosity"]},
     }
     if mode == "drive":
         # Match the shipped native streaming request. An eval completion that needs
         # more output than production permits is not a valid production result.
-        request["max_output_tokens"] = NATIVE_DRIVE_MAX_OUTPUT_TOKENS
+        request["max_output_tokens"] = max_output_tokens or NATIVE_DRIVE_MAX_OUTPUT_TOKENS
         request["stream"] = True
     return request
 
 
-def decision(result, mode="drive", source_view_count=3):
+def native_decision(result, mode="drive", source_view_count=3):
     if not result or result.get("is_pothole") is not True:
         return "reject"
     if result.get("looks_like_speed_breaker") is not False:
@@ -293,7 +355,7 @@ def should_retry_temporary_surface(attempts, mode="drive", source_view_count=3):
     if (not attempts or len(attempts) >= TEMPORARY_SURFACE_MAX_ATTEMPTS
             or any(not temporary_surface_vote_eligible(item, mode) for item in attempts)):
         return False
-    accepts = sum(decision(item, mode, source_view_count) == "accept" for item in attempts)
+    accepts = sum(native_decision(item, mode, source_view_count) == "accept" for item in attempts)
     rejects = len(attempts) - accepts
     return accepts < 2 and rejects < 2
 
@@ -302,7 +364,7 @@ def confirms_temporary_surface(attempts, mode="drive", source_view_count=3):
     """Require a strict two-YES majority from complete eligible temporary decisions."""
     return (len(attempts) >= 2
             and all(temporary_surface_vote_eligible(item, mode) for item in attempts)
-            and sum(decision(item, mode, source_view_count) == "accept"
+            and sum(native_decision(item, mode, source_view_count) == "accept"
                     for item in attempts) >= 2)
 
 
@@ -320,7 +382,7 @@ class DetectionPolicyOutcome:
 def _final_detection_policy_assessment(attempts, final_decision, mode,
                                        source_view_count):
     matching = [item for item in attempts
-                if decision(item, mode, source_view_count) == final_decision]
+                if native_decision(item, mode, source_view_count) == final_decision]
     if matching:
         return matching[-1]
     # A failed or ineligible confirmation after one or more YES results is the
@@ -604,7 +666,7 @@ def main():
                          "image": entry["path"], "label": entry["label"],
                          "labelled_by": entry.get("labelled_by"), "trial": trial,
                          "accuracy_eligible": entry.get("accuracy_eligible", True),
-                         "decision": decision(result, args.mode, len(entry_paths(entry))), "cached": cached,
+                         "decision": native_decision(result, args.mode, len(entry_paths(entry))), "cached": cached,
                          "request_hash": cache_keys[-1], "request_hashes": cache_keys,
                          "attempts": len(cache_keys), "transforms": transforms, **result})
             if index % 25 == 0:

@@ -7854,9 +7854,23 @@
   //
   // Records written before this change hold a data URL string. Everything that reads a
   // photo accepts either, so nothing has to be migrated or rewritten.
+  // WebKit refuses to put a Blob in an object store ("Error preparing Blob/File data"),
+  // so evidence is stored as bytes plus its media type and rebuilt into a Blob on read.
+  // Every engine supports that, and existing Blob rows still load.
+  const storedPhoto = (value) => !!value && typeof value === "object"
+    && !(value instanceof Blob) && value.bytes instanceof ArrayBuffer;
+  const photoBlob = (value) => {
+    if (!value) return null;
+    if (value instanceof Blob) return value;
+    if (storedPhoto(value)) return new Blob([value.bytes], { type: value.type || "image/jpeg" });
+    return value;
+  };
   const dataUrlToBlob = async (u) => {
     if (!u || typeof u !== "string") return u || null;
-    try { return await (await fetch(u)).blob(); } catch (e) { return u; }
+    try {
+      const blob = await (await fetch(u)).blob();
+      return { bytes: await blob.arrayBuffer(), type: blob.type || "image/jpeg" };
+    } catch (e) { return u; }
   };
   async function imageHash(dataUrl) {
     const value = String(dataUrl || "");
@@ -7890,7 +7904,8 @@
   // Older builds used "sent" after merely opening the mail composer. Preserve those
   // records, but never present that unverified state as successful delivery.
   const publicEmailStatus = (status) => status === "sent" ? "queued" : status;
-  const toDict = (r) => ({ ...r, status: publicEmailStatus(r.status), photo_url: r.photo });
+  const toDict = (r) => ({ ...r, status: publicEmailStatus(r.status),
+                          photo_url: photoBlob(r.photo) });
   // The list never renders the evidence copy, so it never receives it.
   const listDict = (r) => { const d = toDict(r); delete d.photo_full; return d; };
 
@@ -8169,19 +8184,20 @@
       ctx.getImageData(0, 0, width, height).data, width, height);
   }
 
-  async function toDataUrl(blob, maxDim, quality = 0.85, boost = false, band = 1) {
+  // Detection sees the complete frame, edge to edge. There is deliberately no source
+  // rectangle here: a band, crop or region of interest must never reach the detector
+  // (AGENTS.md), and leaving the machinery in place is how one comes back.
+  async function toDataUrl(blob, maxDim, quality = 0.85, boost = false) {
     const bmp = await createImageBitmap(blob, { imageOrientation: "from-image" });
     let c = null;
     try {
-      const sx = 0, sw = bmp.width;
-      const sh = Math.max(1, Math.round(bmp.height * band));
-      const sy = bmp.height - sh;
+      const sw = bmp.width, sh = bmp.height;
       const scale = Math.min(1, maxDim / Math.max(sw, sh));
       c = document.createElement("canvas");
       c.width = Math.round(sw * scale);
       c.height = Math.round(sh * scale);
       const ctx = c.getContext("2d");
-      ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, c.width, c.height);
+      ctx.drawImage(bmp, 0, 0, sw, sh, 0, 0, c.width, c.height);
       // Enhancement follows the pixels, not the wall clock. Fixed evening hours boosted
       // bright street-lit frames and amplified noise. Preserve the original evidence copy;
       // this is only the small image used for detection.
@@ -8292,12 +8308,12 @@
     if (driveMode) {
       const driveInput = IMAGING_CONFIG.drive;
       dataUrl = await toDataUrl(photo, driveInput.maxDimension, driveInput.jpegQuality,
-        driveInput.adaptiveBrightness, driveInput.roadBand);
+        driveInput.adaptiveBrightness);
       imageInputs = [{ url: dataUrl }];
     } else {
       const manualInput = IMAGING_CONFIG.manual;
       dataUrl = await toDataUrl(photo, manualInput.maxDimension, manualInput.jpegQuality,
-        manualInput.adaptiveBrightness, manualInput.roadBand);
+        manualInput.adaptiveBrightness);
       imageInputs = [{ url: dataUrl }];
     }
     const shortOf = (g) => (g && g.short) || null;
@@ -9754,8 +9770,10 @@
     return { name: `${issueStem}-${safeId}.jpg`, base64, text: meta };
   }
 
-  const blobToDataUrl = async (v) => {
-    if (!v) return null;
+  const blobToDataUrl = async (value) => {
+    if (!value) return null;
+    if (typeof value === "string") return value;
+    const v = photoBlob(value);
     if (typeof v === "string") return v;
     return await new Promise((resolve, reject) => {
       const fr = new FileReader();
@@ -11404,7 +11422,10 @@
   // Restored from the last coherent production file: the v1.38 merge dropped these
   // definitions while their call sites stayed, so these paths threw on first use.
   async function emailAttachmentBase64(photo) {
-    const blob = await dataUrlToBlob(photo);
+    // Stored evidence is bytes plus a media type; a data URL still arrives from the
+    // native bridge, so accept both.
+    const blob = typeof photo === "string" ? photoBlob(await dataUrlToBlob(photo))
+      : photoBlob(photo);
     if (!blob || typeof blob === "string") {
       throw new Error("The saved evidence photo could not be read for attachment.");
     }
@@ -11552,8 +11573,8 @@
                    maharashtraRouteFromGeocode, majorCityCoverage, majorCityRouteFromGeocode,
                    mapStatus, markProjectServiceAvailable, markProjectServiceUnavailable,
                    matchHighwayContract, matchHighwayTile, matchRoadAgreement, matchRoadNotice,
-                   matchTender, matchTenderAt, matchTenderFor: matchTender,
-                   matchedMmrAuthorities, matchesEverySameDriveSighting, materialPavementRe,
+                   matchTender, matchTenderAt, matchTenderFor: matchTender, matchedMmrAuthorities,
+                   matchesEverySameDriveSighting, materialPavementRe,
                    migrateLegacyAndhraPradeshHandoff, migrateLegacyComplaintDrafts,
                    migrateLegacyComplaintRecord, migrateLegacyTamilNaduHandoff, mixedRoadScope,
                    mumbaiFromGeocode, mumbaiWardFromName, municipalCityCoverage,
@@ -11567,7 +11588,7 @@
                    officialIndianPublicRecordUrl, officialPointRegionMatch, op,
                    openBengaluruHandoff, openEmailDraft, openNationalHighwayHandoff,
                    openOfficialHandoff, optionalCatalogResult, outerStateBoundaryGeometry,
-                   partialAssessment, peekReject, peekVerdict, photoToBase64,
+                   partialAssessment, peekReject, peekVerdict, photoBlob, photoToBase64,
                    pinnedStateCoverage, pinnedStateRoute, pmsg, pointInEnvelope,
                    pointInGeometry, pointInPolygon, pointInRing, pointOnSegment,
                    pointToHighwaySegment, pointToSegmentMeters, preferredLowerCatalogMatch,
@@ -11596,7 +11617,7 @@
                    sha256HexBytes, sha256HexText, shortlistFor, signedServicePost, sizeConflict,
                    startLowerCatalogMatches, stateCodeForGeocode, statePackCacheKey,
                    statePackProvenance, statusError, storageError, storedComplaintLanguage,
-                   storedDamageType, storedSightings, structuredPlaceMatch,
+                   storedDamageType, storedPhoto, storedSightings, structuredPlaceMatch,
                    summarizeFootageAnalysis, surfaceTreatmentRe, tamilNaduCoverage,
                    tamilNaduRouteFromGeocode, telanganaCoverage, telanganaRouteFromGeocode,
                    temporarySurfaceNeedsConfirmation, temporarySurfaceVoteEligible,

@@ -140,6 +140,21 @@ function tasks(group) {
       cwd: `${repoRoot}/infra/aws-central`,
     });
   }
+  // The flow suites also run on Firefox and WebKit: a tester's WebView is not Chromium,
+  // and an engine-specific break in signup, drive or reporting must fail here.
+  if (group === "browsers" || flag("all")) {
+    for (const engine of ["firefox", "webkit"]) {
+      for (const name of readdirSync(`${repoRoot}/tests`).sort()) {
+        if (!name.startsWith("flow_") || !name.endsWith("_test.py")) continue;
+        all.push({
+          group: "browsers",
+          name: `${name} [${engine}]`,
+          command: [python, `tests/${name}`],
+          env: { POTHOLE_TEST_APP: `http://localhost:${PORT}/`, POTHOLE_TEST_BROWSER: engine },
+        });
+      }
+    }
+  }
   if (!group || group === "flow" || group === "python") {
     const wanted = group === "flow"
       ? (name) => name.startsWith("flow_")

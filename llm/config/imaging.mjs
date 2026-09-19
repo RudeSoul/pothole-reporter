@@ -3,13 +3,11 @@ export const imagingConfig = Object.freeze({
   manual: Object.freeze({
     maxDimension: 2_000,
     jpegQuality: 0.85,
-    roadBand: 1,
     adaptiveBrightness: true,
   }),
   drive: Object.freeze({
     maxDimension: 1_280,
     jpegQuality: 0.85,
-    roadBand: 1,
     adaptiveBrightness: true,
   }),
   acceptedEvidence: Object.freeze({

@@ -84,9 +84,12 @@ require("manual camera disables interactive cropping",
 require("Web preprocessing draws the entire source into an aspect-preserving target",
         "const scale = Math.min(1, maxDim / Math.max(sw, sh));" in client
         and "ctx.drawImage(bmp, 0, 0, sw, sh, 0, 0, c.width, c.height);" in client)
-require("preview quality selection also scores the entire camera frame",
-        "ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight, 0, 0, width, height);"
-        in web)
+# Burst scoring is gone: capture takes one frame, and the preview grab hands over the
+# whole thing at the camera's own resolution, with no source rectangle.
+require("preview capture hands over the entire camera frame",
+        "target.width = video.videoWidth;" in web
+        and "target.height = video.videoHeight;" in web
+        and 'target.getContext("2d").drawImage(video, 0, 0, target.width, target.height);' in web)
 require("saved-video replay extracts complete frames",
         'canvas.getContext("2d").drawImage(v, 0, 0, canvas.width, canvas.height);' in web)
 require("native preparation starts from full bitmap dimensions",
@@ -97,15 +100,18 @@ require("native inference sends a complete view for every chronological frame",
         and "prepareDetectionFrameDataUrl(" in engine)
 
 layout_rule = "No image is cropped, tiled, masked, or limited to a region of interest."
+contract_json = read("llm/generated/contract.json")
+generated_client = read("static/llm-contract.generated.js")
+# One generated contract feeds the browser, the evaluator and the server, so the rule is
+# asserted where it is now defined rather than inside each runtime's source.
 require("detection prompts disclose and enforce the complete-frame layout",
-        layout_rule in client and layout_rule in detect_contract and layout_rule in evaluator_source)
-require("repair prompts enforce complete current frames",
-        "No current image is cropped, tiled, masked, or limited" in client
-        and "No current image is cropped, tiled, masked, or limited" in repair_contract)
-require("Web repair preserves every current frame in camera-time order",
-        "const MAX_REPAIR_IMAGES = 5;" in client
-        and "const current = fullViews.filter(Boolean);" in client
-        and "...current.map((url) => ({ url }))" in client)
+        layout_rule in contract_json and layout_rule in generated_client
+        and layout_rule in detect_contract)
+# Repair verification belongs to the native service; the browser bundle must carry no
+# repair prompt at all, which timeout_contract_test and llm_contract_parity_test enforce.
+require("repair prompts enforce complete current frames natively, and only natively",
+        "No current image is cropped, tiled, masked, or limited" in repair_contract
+        and "REPAIR_PROMPT" not in client)
 
 spec = importlib.util.spec_from_file_location("full_frame_eval", ROOT / "eval" / "run_eval.py")
 road_eval = importlib.util.module_from_spec(spec)
@@ -119,7 +125,7 @@ with tempfile.TemporaryDirectory() as tmp:
     draw.rectangle((0, 500, 999, 999), fill=(0, 0, 255))
     draw.rectangle((1000, 500, 1999, 999), fill=(255, 255, 0))
     source.save(source_path)
-    encoded, metadata = road_eval.encode_view(source_path, 1000, 95, False)
+    encoded, metadata = road_eval.encode_view(source_path, 1000, 95, enhance=False)
     decoded = Image.open(io.BytesIO(base64.b64decode(encoded.split(",", 1)[1]))).convert("RGB")
 
     require("evaluator preserves the full 2:1 field of view when downscaling",

@@ -1,0 +1,10 @@
+{
+  "detail": "original",
+  "max_output_tokens": 1536,
+  "model": "gpt-5.6",
+  "prompt_sha256": "1fa7ce079c2e5bb761cb2594b4637b878efc3f2a52b02bee22089b800151f184",
+  "prompt_version": "pothole-binary-v19",
+  "retry_max_attempts": 3,
+  "schema_sha256": "ce502b75fc9b69884991a2f14f5531eee4627f66ebf02a8ea9f31a4ddaf673fd",
+  "schema_version": 9
+}
