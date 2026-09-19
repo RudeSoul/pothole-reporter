@@ -4,7 +4,8 @@
 //
 //   node tools/harness/run.mjs                 static gates + flow tests (the fast set)
 //   node tools/harness/run.mjs --all           everything, including the slow suites
-//   node tools/harness/run.mjs --only flow     one group: static, flow, server, python
+//   node tools/harness/run.mjs --only flow     one group: static, flow, server, python,
+//                                             browsers (firefox/webkit), emulator
 //   node tools/harness/run.mjs --loop          re-run until no regressions remain
 //   node tools/harness/run.mjs --until-green   re-run until EVERY check passes
 //   node tools/harness/run.mjs --baseline      write baseline.json instead of judging
@@ -138,6 +139,15 @@ function tasks(group) {
       name: "central service unit tests",
       command: ["npm", "test", "--silent"],
       cwd: `${repoRoot}/infra/aws-central`,
+    });
+  }
+  // The packaged app on a real Android WebView: the only check that would have caught
+  // a bundle whose script died at load. Skips itself when no device is attached.
+  if (group === "emulator" || flag("all")) {
+    all.push({
+      group: "emulator",
+      name: "android emulator smoke (fresh install reaches Home)",
+      command: ["bash", "tools/harness/emulator-smoke.sh"],
     });
   }
   // The flow suites also run on Firefox and WebKit: a tester's WebView is not Chromium,

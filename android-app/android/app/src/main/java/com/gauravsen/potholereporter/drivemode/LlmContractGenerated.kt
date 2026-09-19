@@ -29,7 +29,6 @@ object LlmContractGenerated {
     const val MANUAL_JPEG_QUALITY = 85
     const val DRIVE_MAX_DIMENSION = 1280
     const val DRIVE_JPEG_QUALITY = 85
-    const val DRIVE_ROAD_BAND = undefined
     const val DRIVE_ADAPTIVE_BRIGHTNESS = true
     const val LUMINANCE_TARGET_SAMPLES = 12000
     const val LUMINANCE_MEAN_THRESHOLD = 72f

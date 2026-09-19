@@ -24,7 +24,6 @@ object FrameCompressor {
         require(primaryJpeg.isNotEmpty()) { "Primary frame must not be empty" }
         val analysisJpeg = processImage(
             jpegBytes = primaryJpeg,
-            band = LlmContractGenerated.DRIVE_ROAD_BAND.toFloat(),
             maxDim = LlmContractGenerated.DRIVE_MAX_DIMENSION,
             quality = LlmContractGenerated.DRIVE_JPEG_QUALITY,
             boost = LlmContractGenerated.DRIVE_ADAPTIVE_BRIGHTNESS,
@@ -43,7 +42,6 @@ object FrameCompressor {
 
     private fun processImage(
         jpegBytes: ByteArray,
-        band: Float,
         maxDim: Int,
         quality: Int,
         boost: Boolean
@@ -52,14 +50,9 @@ object FrameCompressor {
         requireNotNull(originalBitmap) { "Failed to decode JPEG" }
 
         try {
-            // 1. Crop to bottom band
-            val cropHeight = (originalBitmap.height * band).toInt()
-            val startY = originalBitmap.height - cropHeight
-            val croppedBitmap = if (band < 1.0f) {
-                Bitmap.createBitmap(originalBitmap, 0, startY, originalBitmap.width, cropHeight)
-            } else {
-                originalBitmap
-            }
+            // The detector sees the complete frame. There is deliberately no band, crop
+            // or region of interest here (AGENTS.md): downscale and compress only.
+            val croppedBitmap = originalBitmap
 
             try {
                 // 2. Scale down so largest dimension doesn't exceed maxDim
