@@ -9404,7 +9404,8 @@
                    validateOfficialHandoffRegistry, validateRoadNoticePack,
                    verifiedBdaResponsibility, verifiedContractForComplaint, vodBurstTimes,
                    vodSampleTimes,
-                   biharCoverage, biharRouteFromGeocode, goaCoverage, goaRouteFromGeocode, madhyaPradeshCoverage, madhyaPradeshRouteFromGeocode, odishaCoverage, pinnedStateCoverage, remainingStateCoverage, westBengalCoverage
+                   biharCoverage, biharRouteFromGeocode, goaCoverage, goaRouteFromGeocode, madhyaPradeshCoverage, madhyaPradeshRouteFromGeocode, odishaCoverage, pinnedStateCoverage, remainingStateCoverage, westBengalCoverage,
+                   candidateLeadIsUnambiguous,
                    };
 
   // Restored from the last coherent production file: the v1.38 merge dropped these
@@ -10432,6 +10433,9 @@
     const pack = await loadHighwayContractPack(stateCode);
     const ranked = highwayContractCandidates(pack && pack.contracts, route.highway_ref, address);
     if (!ranked.length) return null;
+    // No authoritative geometry connects the phone's point to a published chainage.
+    // Suppress near-ties instead of presenting a deterministic but arbitrary package.
+    if (!candidateLeadIsUnambiguous(ranked, 20)) return null;
     const { record, matching_refs: matchingRefs, locality_hits: localityHits } = ranked[0];
     const lifecycleNote = record.lifecycle === "procurement_notice"
       ? "Open procurement notice; no contractor or award is asserted"
@@ -10982,8 +10986,9 @@
       const uniqueLongHits = localityHits.filter((token) => token.length >= 6
         && frequencies.get(token) === 1);
       // An NH reference identifies a route, not which package covers this point; feeder
-      // roads also cite the NH they meet. Require independent title/address evidence.
-      if (!phraseHits.length && localityHits.length < 2 && !uniqueLongHits.length) continue;
+      // roads also cite the NH they meet. A single place word is never enough, even when
+      // unique in this snapshot: require a multi-word phrase or two address words.
+      if (!phraseHits.length && localityHits.length < 2) continue;
       let score = matchingRefs.length * 100 + localityHits.length * 8;
       score += phraseHits.length * 30 + uniqueLongHits.length * 16;
       if (record.lifecycle === "current_project") score += 30;
@@ -11058,6 +11063,9 @@
     const ranked = roadNoticeCandidates(pack && pack.notices, address, route);
     if (!ranked.length) return null;
     const best = ranked[0];
+    // A near-tie means the address did not identify one notice; naming either would be
+    // an arbitrary claim about who is responsible.
+    if (!candidateLeadIsUnambiguous(ranked, 12)) return null;
     const record = best.record;
     const source = (pack.sources || []).find((item) => item.source_id === record.source_id);
     const locationEvidence = [...new Set([...best.phrase_hits.map((part) => part.join(" ")),

@@ -21,9 +21,11 @@ CASES = r"""
   ok("full frame: Drive prompt reasons about the complete field of view",
      P.DETECT_PROMPT.includes("leaving the final full frame")
        && !P.DETECT_PROMPT.includes("leaving the final crop"));
-  ok("full frame: repair prompt requires complete current frames",
-     P.REPAIR_PROMPT.includes("complete current camera frame")
-       && P.REPAIR_PROMPT.includes("No current image is cropped, tiled, masked"));
+  // Repair verification is the native service's contract: the browser bundle carries no
+  // repair prompt at all, which timeout_contract_test and llm_contract_parity_test both
+  // enforce. Its full-frame wording is checked on the native side.
+  ok("full frame: the browser bundle carries no repair model contract",
+     !("REPAIR_PROMPT" in P) && !("REPAIR_SCHEMA" in P));
   eq("full frame: current Drive evidence may use its complete working frame",
      P.fullFramePhoto({photo:"current", capture_source:"drive_live",
        prompt_version:P.PROMPT_VERSION}), "current");
