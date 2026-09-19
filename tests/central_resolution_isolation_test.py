@@ -67,12 +67,6 @@ with sync_playwright() as playwright:
       const headerOf = (options, name) => new Headers(options && options.headers || {}).get(name);
       window.fetch = async (input, options = {}) => {
         const url = input && input.url ? input.url : String(input);
-        if (url.endsWith("karnataka-bodies.json")) {
-          return response({ bodies: { "999001": {
-            name: "Test City Corporation", type: "CC", officer: "Commissioner",
-            email: "commissioner@example.gov.in",
-          } } });
-        }
         if (!url.startsWith(serviceUrl)) return originalFetch(input, options);
         const path = new URL(url).pathname;
         if (path === "/v1/health") {
@@ -110,7 +104,7 @@ with sync_playwright() as playwright:
             request_id: "tender-B", reason: null,
             jurisdiction: {
               road_ownership: "municipal", address: "Test Road, Test City",
-              lgd: "999001", town: "Test City Corporation", town_type: "CC",
+              lgd: "248127", town: "Kalaburagi", town_type: "CC",
             },
             tender: {
               tender_number: "T-B", contractor: "Municipal Roads Ltd",
@@ -175,16 +169,16 @@ if highway.get("status") != "unrouted" or highway.get("tender_request_id") != "t
     fails.append(f"highway capture did not retain its exact resolver result: {highway}")
 if municipal.get("road_ownership") != "municipal":
     fails.append(f"municipal capture lost its own ownership: {municipal}")
-if municipal.get("officer_email") != "commissioner@example.gov.in":
+if municipal.get("officer_email") != "ka.kalaburagi.cc@gmail.com":
     fails.append(f"municipal capture was not routed to its verified officer: {municipal}")
-if municipal.get("tender_number") != "T-B" or municipal.get("body_lgd") != "999001":
+if municipal.get("tender_number") != "T-B" or municipal.get("body_lgd") != "248127":
     fails.append(f"municipal capture lost its tender/LGD: {municipal}")
 if municipal.get("status") != "draft" or municipal.get("tender_request_id") != "tender-B":
     fails.append(f"municipal capture did not retain its exact resolver result: {municipal}")
 central = result["centralBodies"]
 if central.get("A", {}).get("lgd_hint") or central.get("A", {}).get("town_hint"):
     fails.append(f"highway shared-map write inherited municipal hints: {central.get('A')}")
-if central.get("B", {}).get("lgd_hint") != "999001":
+if central.get("B", {}).get("lgd_hint") != "248127":
     fails.append(f"municipal shared-map write lost its own LGD hint: {central.get('B')}")
 
 print("  ownership A/B:", highway.get("road_ownership"), municipal.get("road_ownership"))

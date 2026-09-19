@@ -39,7 +39,7 @@ with sync_playwright() as playwright:
                     "jurisdiction": {
                         "lat": body.get("lat"), "lng": body.get("lng"),
                         "address": "Cache Test Road, Test City", "road_ownership": "municipal",
-                        "lgd": "999001", "town": "Test City Corporation", "town_type": "CC",
+                        "lgd": "248127", "town": "Kalaburagi", "town_type": "CC",
                     },
                     "tender": None, "reason": "no_tender_match",
                 }, 200
@@ -61,8 +61,8 @@ with sync_playwright() as playwright:
         url = route.request.url
         if url == APP + "karnataka-bodies.json":
             route.fulfill(status=200, content_type="application/json", body=json.dumps({
-                "bodies": {"999001": {"name": "Test City Corporation", "type": "CC",
-                    "officer": "Commissioner", "email": "commissioner@example.gov.in"}}
+                "bodies": {"248127": {"name": "Kalaburagi", "type": "CC",
+                    "officer": "Commissioner", "email": "ka.kalaburagi.cc@gmail.com"}}
             }))
         elif url.startswith(APP) or url.startswith("data:") or url.startswith("blob:"):
             route.continue_()
@@ -91,12 +91,12 @@ with sync_playwright() as playwright:
         preparationCalls.push(report.id);
         if (report.id === "native_88") throw new Error("synthetic ownership rejection");
         return {
-          to: "commissioner@example.gov.in",
+          to: "ka.kalaburagi.cc@gmail.com",
           officer_name: "Commissioner, Test City",
           subject: "Road damage on Test Road",
           body: "Please inspect the attached road damage.",
           address: "Test Road, Test City",
-          body_lgd: "999001",
+          body_lgd: "248127",
           body_name: "Test City",
           road_ownership: "municipal",
           road_ownership_source: "central_v1",
@@ -153,13 +153,13 @@ with sync_playwright() as playwright:
 
         // Simulate a fresh Activity/history load containing what the bridge persisted.
         const reloaded = {
-          ...nativeReport(77), email_to: "commissioner@example.gov.in",
+          ...nativeReport(77), email_to: "ka.kalaburagi.cc@gmail.com",
           officer_title: "Commissioner, Test City",
           email_subject: "Road damage on Test Road",
           email_body: "Please inspect the attached road damage.",
           tender_resolution_checked_at: persistedAt,
           road_ownership: "municipal",
-          address: "Test Road, Test City", body_lgd: "999001", body_name: "Test City",
+          address: "Test Road, Test City", body_lgd: "248127", body_name: "Test City",
           tender_number: "T-77", contractor: "Road Works Ltd",
           tender_note: "Probable match",
         };
@@ -261,7 +261,7 @@ if result["preparationCalls"] != ["native_77", "native_88", "native_89"]:
     fails.append(f"native complaint enrichment repeated: {result['preparationCalls']}")
 if len(result["saved"]) != 3:
     fails.append(f"prepared native complaint was persisted {len(result['saved'])} times")
-elif any(item.get("id") != 77 or item.get("emailTo") != "commissioner@example.gov.in"
+elif any(item.get("id") != 77 or item.get("emailTo") != "ka.kalaburagi.cc@gmail.com"
          for item in result["saved"]):
     fails.append(f"native persistence payload was incomplete: {result['saved'][0]}")
 elif result["saved"][0].get("roadOwnership") != "municipal":

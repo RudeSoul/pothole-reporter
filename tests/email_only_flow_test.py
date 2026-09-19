@@ -18,7 +18,7 @@ from playwright.sync_api import sync_playwright
 
 APP = os.environ.get("POTHOLE_TEST_APP", "http://localhost:8765/")
 SERVICE = "https://email-flow.test"
-RECIPIENT = "commissioner@example.gov.in"
+RECIPIENT = "ka.kalaburagi.cc@gmail.com"
 TENDER_NUMBER = "TEST-TENDER-42"
 NATIVE_TENDER_NUMBER = "NATIVE-TENDER-77"
 
@@ -65,7 +65,7 @@ def central_service(route, request):
             "jurisdiction": {
                 "lat": body.get("lat"), "lng": body.get("lng"),
                 "address": "Test Road, Central Ward, Test City, 560001",
-                "lgd": "999001", "town": "Test City Corporation",
+                "lgd": "248127", "town": "Kalaburagi",
                 "source": "kgis", "address_source": "nominatim",
                 "road_ownership": "municipal",
             },
@@ -86,7 +86,7 @@ def central_service(route, request):
                 "damage_type": body.get("damage_type"), "size": body.get("size"),
                 "first_seen_at": body.get("observed_at"),
                 "last_seen_at": body.get("observed_at"), "seen_count": 1,
-                "lgd": "999001", "town": "Test City Corporation",
+                "lgd": "248127", "town": "Kalaburagi",
             },
         }, 201, "req-report")
     elif path == "/v1/map":
@@ -99,8 +99,8 @@ def support_services(route, request):
     target = request.url
     if target.endswith("/karnataka-bodies.json"):
         route.fulfill(status=200, content_type="application/json", body=json.dumps({"bodies": {
-            "999001": {
-                "name": "Test City Corporation", "type": "CC",
+            "248127": {
+                "name": "Kalaburagi", "type": "CC",
                 "officer": "Commissioner", "email": RECIPIENT,
             }
         }}))
@@ -117,8 +117,8 @@ def support_services(route, request):
     elif "Admin_Dynamic_New" in target:
         route.fulfill(status=200, content_type="application/json", body=json.dumps({"features": [{
             "attributes": {
-                "KGISTownName": "Test City Corporation", "Town_Type": "CC",
-                "LGD_TownCode": "999001",
+                "KGISTownName": "Kalaburagi", "Town_Type": "CC",
+                "LGD_TownCode": "248127",
             }
         }]}))
     elif "GP_Boundary" in target:
@@ -192,7 +192,7 @@ with sync_playwright() as p:
     report = page.evaluate(CREATE_AND_OPEN)
     if report["status"] != "draft":
         fails.append(f"accepted routed report was not a draft: {report}")
-    if report["officer_name"] != "Commissioner, Test City Corporation":
+    if report["officer_name"] != "Commissioner, Kalaburagi":
         fails.append(f"wrong authority title/name: {report['officer_name']!r}")
     if report["officer_email"] != RECIPIENT:
         fails.append(f"wrong routed recipient: {report['officer_email']!r}")
@@ -270,7 +270,7 @@ with sync_playwright() as p:
           size: "medium", description: "A pothole is visible in the traffic lane.",
           decision: "accept", lat: 12.9716, lng: 77.5946, gps_accuracy: 4,
           address: "Native Test Road, Central Ward, Test City, 560001",
-          body_lgd: "999001", body_name: "Test City Corporation",
+          body_lgd: "248127", body_name: "Kalaburagi",
           road_ownership: "municipal",
           tender_number: tenderNumber, contractor: "Native Roads Example Ltd",
           tender_resolution_checked_at: 1788500000, has_photo: true,
@@ -380,19 +380,21 @@ else:
         fails.append(f"composer recipient was {draft.get('to')!r}, expected {[RECIPIENT]!r}")
     subject = draft.get("subject") or ""
     body = draft.get("body") or ""
-    if "Pothole complaint: medium pothole" not in subject or "Test Road" not in subject:
-        fails.append(f"composer subject omits pothole type, size, or road: {subject!r}")
+    if "Pothole complaint" not in subject or "Test Road" not in subject:
+        fails.append(f"composer subject omits the defect or the road: {subject!r}")
     for token in (
-        "Dear Commissioner, Test City Corporation",
-        "Location: Test Road, Central Ward, Test City, 560001",
+        "Commissioner, Kalaburagi",
+        "Address / landmark: Test Road, Central Ward, Test City, 560001",
         "Coordinates: 12.971600, 77.594600",
         "https://maps.google.com/?q=12.971600,77.594600",
-        "Damage type: pothole",
-        "Approximate size: medium",
-        TENDER_NUMBER,
+        "Defect decision: Pothole",
+        "App visual size class: medium",
+        "No verified exact-road public contract found",
     ):
         if token not in body:
             fails.append(f"composer body omits {token!r}")
+    if TENDER_NUMBER in body:
+        fails.append("an unverified tender number reached the complaint body")
     attachments = draft.get("attachments") or []
     if len(attachments) != 1:
         fails.append(f"composer has {len(attachments)} attachments instead of one")
@@ -411,18 +413,20 @@ if native_draft.get("to") != [RECIPIENT]:
     fails.append(f"native composer recipient was {native_draft.get('to')!r}")
 native_subject = native_draft.get("subject") or ""
 native_body = native_draft.get("body") or ""
-if "Pothole complaint: medium pothole" not in native_subject or "Native Test Road" not in native_subject:
-    fails.append(f"native composer subject omits pothole type, size, or road: {native_subject!r}")
+if "Pothole complaint" not in native_subject or "Native Test Road" not in native_subject:
+    fails.append(f"native composer subject omits the defect or the road: {native_subject!r}")
 for token in (
-    "Dear Commissioner, Test City Corporation",
-    "Location: Native Test Road, Central Ward, Test City, 560001",
+    "Commissioner, Kalaburagi",
+    "Address / landmark: Native Test Road, Central Ward, Test City, 560001",
     "Coordinates: 12.971600, 77.594600",
-    "Damage type: pothole",
-    "Approximate size: medium",
-    NATIVE_TENDER_NUMBER,
+    "Defect decision: Pothole",
+    "App visual size class: medium",
+    "No verified exact-road public contract found",
 ):
     if token not in native_body:
         fails.append(f"native composer body omits {token!r}")
+if NATIVE_TENDER_NUMBER in native_body:
+    fails.append("an unverified tender number reached the native complaint body")
 native_attachments = native_draft.get("attachments") or []
 if len(native_attachments) != 1 or native_attachments[0].get("name") != "road-damage.jpg":
     fails.append(f"native composer did not attach one road photo: {native_attachments}")

@@ -25,11 +25,18 @@ ACCEPTED = {
 }
 
 # name, lat, lng, central ownership, expected post-tap status/reason, body code/type
+TOWN_BY_LGD = {
+    "305850": "Bengaluru East City Corporation",
+    "252045": "Mysuru",
+    "299417": "M.K.Hubballi",
+    "251979": "Chikkaballapur",
+}
+
 CASES = [
-    ("Bengaluru HSR", 12.9115, 77.6427, "municipal", "queued", None, "1001", "CC"),
-    ("Mysuru city", 12.2958, 76.6394, "municipal", "queued", None, "1002", "CC"),
-    ("Hubballi-Dharwad", 15.3647, 75.1240, "municipal", "queued", None, "1003", "CC"),
-    ("Chikkaballapur CMC", 13.4310, 77.7270, "municipal", "queued", None, "1004", "CMC"),
+    ("Bengaluru HSR", 12.9115, 77.6427, "municipal", "queued", None, "305850", "CC"),
+    ("Mysuru city", 12.2958, 76.6394, "municipal", "queued", None, "252045", "CC"),
+    ("Hubballi-Dharwad", 15.3647, 75.1240, "municipal", "queued", None, "299417", "TP"),
+    ("Chikkaballapur CMC", 13.4310, 77.7270, "municipal", "queued", None, "251979", "CMC"),
     ("NH69 at Chikkaballapur", 13.4355, 77.7315,
      "national_highway", "unrouted", "national_highway", None, None),
     ("rural Magadi taluk", 13.0000, 77.2000,
@@ -39,16 +46,6 @@ CASES = [
     ("no GPS", None, None, None, "unrouted", "no_location", None, None),
 ]
 
-BODIES = {
-    "1001": {"name": "Bengaluru Test Corporation", "type": "CC",
-             "officer": "Commissioner", "email": "bengaluru@example.gov.in"},
-    "1002": {"name": "Mysuru Test Corporation", "type": "CC",
-             "officer": "Commissioner", "email": "mysuru@example.gov.in"},
-    "1003": {"name": "Hubballi-Dharwad Test Corporation", "type": "CC",
-             "officer": "Commissioner", "email": "hubballi@example.gov.in"},
-    "1004": {"name": "Chikkaballapur Test Council", "type": "CMC",
-             "officer": "Chief Officer", "email": "chikkaballapur@example.gov.in"},
-}
 
 case_by_coord = {
     (round(lat, 4), round(lng, 4)): (name, ownership, lgd, town_type)
@@ -97,10 +94,12 @@ def central_service(route, request):
         jurisdiction = {"road_ownership": ownership, "lat": body["lat"], "lng": body["lng"]}
         reason = ownership
         if ownership == "municipal":
-            civic = BODIES[lgd]
+            # The resolver returns the body's LGD code; the app looks the officer up in
+            # the signed State pack, so the fixture only has to name a real code.
+            town = TOWN_BY_LGD[lgd]
             jurisdiction.update({
-                "address": f"Test Road, {civic['name']}", "lgd": lgd,
-                "town": civic["name"], "town_type": town_type,
+                "address": f"Test Road, {town}", "lgd": lgd,
+                "town": town, "town_type": town_type,
             })
             reason = "no_tender_match"
         elif ownership == "national_highway":
@@ -173,8 +172,6 @@ with sync_playwright() as playwright:
     }})();""")
     context.route(f"{SERVICE}/**", central_service)
     context.route("https://api.openai.com/v1/responses", openai_success)
-    context.route("**/karnataka-bodies.json", lambda route: route.fulfill(
-        status=200, content_type="application/json", body=json.dumps({"bodies": BODIES})))
 
     def block_client_gis(route):
         client_gis_leaks.append(route.request.url)
@@ -208,7 +205,9 @@ with sync_playwright() as playwright:
         else:
             if not result["email"] or result["blocked"]:
                 fails.append(f"{name}: verified municipal point was not sendable: {result}")
-            expected_title = "Chief Officer" if town_type == "CMC" else "Commissioner"
+            # City corporations are headed by a Commissioner; councils, town municipal
+            # councils and town panchayats by a Chief Officer.
+            expected_title = "Commissioner" if town_type == "CC" else "Chief Officer"
             if expected_title.lower() not in (result["officer"] or "").lower():
                 fails.append(f"{name}: wrong officer class: {result['officer']!r}")
     context.close()

@@ -6971,8 +6971,11 @@
       separated.routing_match_field && separated.routing_match_value
         ? `${separated.routing_match_field}=${separated.routing_match_value}` : null]
       .filter(Boolean).join("; ") || "Not recorded";
+    // A complaint is addressed to the officer who can act on it when the registry names
+    // one; the body's name alone reads as "Dear Kalaburagi".
+    const officerName = conciseRouteLabel(separated.officer_name) || intakeName;
     return { route: separated, profile, intakeName, intakeId, geographicName,
-      ownerVerified, ownerName, clue };
+      officerName, ownerVerified, ownerName, clue };
   }
 
   function assertComplaintInvariants(lat, lng, route) {
@@ -7110,11 +7113,11 @@
     const outputLang = LANG();
     const addressedAuthority = outputLang === "bn"
       && routing.route.authority_id === "wb-kmc"
-      ? "কলকাতা পৌরসংস্থা (KMC)" : routing.intakeName;
+      ? "কলকাতা পৌরসংস্থা (KMC)" : routing.officerName;
     const greeting = outputLang === "kn" ? `ಮಾನ್ಯ ${addressedAuthority} ಅವರಿಗೆ,`
       : outputLang === "mr" ? `प्रति ${addressedAuthority},`
         : outputLang === "bn" ? `মাননীয় ${addressedAuthority},`
-          : `Dear ${routing.intakeName},`;
+          : `Dear ${routing.officerName},`;
     const signoff = outputLang === "kn" ? `ವಂದನೆಗಳು,\n${S.name}`
       : outputLang === "mr" ? `आपला/आपली,\n${S.name}`
         : outputLang === "bn" ? `বিনীত,\n${S.name}`
