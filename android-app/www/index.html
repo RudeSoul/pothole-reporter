@@ -1966,7 +1966,138 @@ async function prefetchManualPosition() {
   return null;
 }
 
-async function handleFile(file) {
+// captureMeta says where the picture came from. A photo taken now may be bound to the
+// current position and time; an imported one may not, because its real time and place
+// are unknown. Binding "here, now" to an old picture would file a false report.
+// The manual photo path opens the device camera directly when one is available, so
+// the photo's time and place are the capture's own. The file picker stays as the
+// browser fallback, and anything it returns is treated as imported.
+function positionFix(position) {
+  if (!position || !position.coords || !Number.isFinite(position.coords.latitude)
+      || !Number.isFinite(position.coords.longitude)) return null;
+  const accuracy = Number(position.coords.accuracy);
+  return {
+    lat: position.coords.latitude, lng: position.coords.longitude,
+    accuracy: Number.isFinite(accuracy) && accuracy >= 0 ? accuracy : null,
+    speed: Number.isFinite(position.coords.speed) ? position.coords.speed : null,
+    heading: Number.isFinite(position.coords.heading) ? position.coords.heading : null,
+    observed_at_ms: Number.isFinite(position.timestamp) ? position.timestamp : Date.now(),
+  };
+}
+
+const REPORT_GPS_TARGET_M = 30;
+const REPORT_GPS_CAPTURE_WINDOW_MS = 5000;
+
+function closestCaptureFix(samples, capturedAtMs) {
+  return samples.filter((fix) => fix.accuracy != null
+      && fix.accuracy <= REPORT_GPS_TARGET_M
+      && Math.abs(fix.observed_at_ms - capturedAtMs) <= REPORT_GPS_CAPTURE_WINDOW_MS)
+    .sort((left, right) => Math.abs(left.observed_at_ms - capturedAtMs)
+      - Math.abs(right.observed_at_ms - capturedAtMs) || left.accuracy - right.accuracy)[0] || null;
+}
+
+function startCapturePositionSampler() {
+  const samples = [];
+  let watchId = null, stopped = false, waiting = null;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    if (watchId != null) {
+      try { navigator.geolocation.clearWatch(watchId); } catch (_) {}
+    }
+  };
+  if (!navigator.geolocation) return { positionAt: async () => null, stop };
+  try {
+    const assignedWatchId = navigator.geolocation.watchPosition((position) => {
+      const fix = positionFix(position);
+      if (!fix || stopped) return;
+      samples.push(fix);
+      if (samples.length > 40) samples.shift();
+      if (waiting) waiting();
+    }, (error) => {
+      if (error && error.code === 1) stop();
+    }, { enableHighAccuracy: true, maximumAge: 0 });
+    watchId = assignedWatchId;
+    // A test double—or an unusual browser implementation—may invoke the error
+    // callback synchronously, before watchPosition returns its id.
+    if (stopped) {
+      try { navigator.geolocation.clearWatch(watchId); } catch (_) {}
+    }
+  } catch (_) { stop(); }
+  return {
+    stop,
+    positionAt: async (capturedAtMs) => {
+      let chosen = closestCaptureFix(samples, capturedAtMs);
+      if (chosen || stopped) { stop(); return chosen; }
+      // The native camera may pause WebView callbacks. Give it a short post-shutter
+      // window, but accept only a timestamped fix close enough to the shutter itself.
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 3000);
+        waiting = () => {
+          if (!closestCaptureFix(samples, capturedAtMs)) return;
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      waiting = null;
+      chosen = closestCaptureFix(samples, capturedAtMs);
+      stop();
+      return chosen;
+    },
+  };
+}
+
+async function beginPotholeCapture() {
+  await requestNativeCapturePermissions();
+  StandaloneAPI.prewarm();
+  const native = window.Capacitor && Capacitor.isNativePlatform
+    && Capacitor.isNativePlatform();
+  const camera = native && Capacitor.Plugins && Capacitor.Plugins.Camera;
+  if (camera && camera.getPhoto) {
+    const positionSampler = startCapturePositionSampler();
+    try {
+      const shot = await camera.getPhoto({
+        quality: 95,
+        allowEditing: false,
+        resultType: "uri",
+        source: "CAMERA",
+        direction: "REAR",
+        correctOrientation: true,
+        saveToGallery: false,
+      });
+      const source = shot.webPath || shot.dataUrl
+        || (shot.path && Capacitor.convertFileSrc ? Capacitor.convertFileSrc(shot.path) : null);
+      if (!source) throw new Error("The camera returned no readable photo.");
+      // Camera.getPhoto resolves immediately after the native camera returns. Bind the
+      // location to that moment, before file I/O adds unrelated delay.
+      const capturedAtMs = Date.now();
+      const response = await fetch(source);
+      if (!response.ok) throw new Error("The camera photo could not be read.");
+      const blob = await response.blob();
+      const format = String(shot.format || "jpeg").replace(/[^a-z0-9]/gi, "") || "jpeg";
+      const file = new File([blob], `pothole-reporter-${capturedAtMs}.${format}`, {
+        type: blob.type || `image/${format}`,
+        lastModified: capturedAtMs,
+      });
+      const position = await positionSampler.positionAt(capturedAtMs);
+      await handleFile(file, { captureSource: "manual_camera", capturedAtMs, position });
+      return;
+    } catch (e) {
+      const cancelled = e && (e.code === "OS-PLUG-CAMR-0006"
+        || /cancel/i.test(String(e.message || e)));
+      if (cancelled) return;
+      alert(t("camera_failed") + (e && (e.message || e)));
+      return;
+    } finally {
+      positionSampler.stop();
+    }
+  }
+  // Browser/PWA compatibility: capture=environment asks for the rear camera where the
+  // browser supports it, but the resulting file is conservatively marked as imported.
+  $("fileInput").click();
+}
+
+async function handleFile(file, captureMeta = {}) {
   if (!file) return;
   if (manualAnalysisActive || importedVideoJob) {
     alert(t("manual_analysis_active"));
@@ -1976,7 +2107,16 @@ async function handleFile(file) {
   manualAnalysisActive = token;
   let previewUrl = null;
   try {
-    const capturedAtMs = Date.now();
+    const captureSource = captureMeta.captureSource === "manual_camera"
+      ? "manual_camera" : "manual_import";
+    const fileTime = Number(file.lastModified);
+    const capturedAtMs = Number.isFinite(captureMeta.capturedAtMs) ? captureMeta.capturedAtMs
+      : captureSource === "manual_camera" ? Date.now()
+        : (Number.isFinite(fileTime) && fileTime > 0 && fileTime <= Date.now() + 300000
+            ? fileTime : null);
+    const bindCurrentLocation = captureSource === "manual_camera"
+      || captureMeta.locationConfirmed === true
+      || (captureMeta.locationConfirmed == null && confirm(t("confirm_import_location")));
     clearManualPreview();
     previewUrl = URL.createObjectURL(file);
     manualPreviewUrl = previewUrl;
@@ -1989,9 +2129,12 @@ async function handleFile(file) {
     primedManualPosition = null;
     // Prefetch continues while the external camera is open, but never gets to add its
     // whole timeout after the user returns with a photo.
-    let pos = prefetched ? await positionWithin(prefetched, 750) : null;
+    const suppliedPosition = Object.prototype.hasOwnProperty.call(captureMeta, "position");
+    let pos = !bindCurrentLocation ? null
+      : suppliedPosition ? captureMeta.position
+        : prefetched ? await positionWithin(prefetched, 750) : null;
     if (token !== manualAnalysisSequence) return;
-    if (!pos) {
+    if (!pos && bindCurrentLocation && !suppliedPosition) {
       await requestNativeLocationPermission();
       if (token !== manualAnalysisSequence) return;
       // A first-run location fix must not hold the detector behind a long wait.
@@ -2006,9 +2149,14 @@ async function handleFile(file) {
     $("progressText").textContent = t("working");
     const fd = new FormData();
     fd.append("photo", file);
-    fd.append("captured_at_ms", String(capturedAtMs));
+    // Photo capture files road damage and nothing else; say so explicitly.
+    fd.append("issue_type", "road_damage");
+    fd.append("capture_source", captureSource);
+    if (capturedAtMs != null) fd.append("captured_at_ms", String(capturedAtMs));
     if (pos) {
       fd.append("lat", pos.lat); fd.append("lng", pos.lng);
+      fd.append("location_source", captureSource === "manual_camera"
+        ? "device_gps" : "current_position_confirmed");
       if (pos.accuracy != null) fd.append("gps_accuracy", String(pos.accuracy));
       if (pos.speed != null) fd.append("speed", String(pos.speed));
       if (pos.heading != null) fd.append("heading", String(pos.heading));
@@ -4264,13 +4412,10 @@ $("captureBtn").onclick = async () => {
     return;
   }
   if (visionProvider() !== "personal") void loadHealth();
-  const cameraPermission = requestNativeCameraPermission();
-  await cameraPermission;
-  StandaloneAPI.prewarm();
-  // With permission already granted, acquire GPS while the external camera is open.
-  // Returning from capture normally has a ready fix instead of starting an 8 s wait.
+  // With permission already granted, acquire GPS while the camera is open. Returning
+  // from capture then has a ready fix instead of starting an 8 s wait.
   primedManualPosition = prefetchManualPosition();
-  $("fileInput").click();
+  await beginPotholeCapture();
 }
 
 // ---------- labelling ----------

@@ -48,8 +48,11 @@ const entries = block[1].split(/,(?![^{]*\})/).map((part) => part.trim())
 const aliases = entries.filter((part) => part.includes(":"));
 const exported = new Set(entries.map((part) => part.split(":")[0].trim())
   .filter((part) => /^[A-Za-z_$][\w$]*$/.test(part)));
-// __pure cannot list itself, and window-level entry points are not pure helpers.
-const SKIP = new Set(["__pure"]);
+// __pure cannot list itself. The repair updater is deliberately not a pure API: repair
+// verification belongs to the native service, and unit_test asserts these stay private.
+const SKIP = new Set(["__pure", "findRepairCandidateFromReports", "repairTargetMatch",
+  "clearAbsenceForRepair", "repairConditionFor", "repairEvidenceFromReport",
+  "findRepairCandidate", "applyRepairObservation"]);
 const missing = [...names].filter((name) => !exported.has(name) && !SKIP.has(name)).sort();
 
 if (!missing.length) {

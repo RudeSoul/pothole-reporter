@@ -55,14 +55,12 @@ check('api("/api/report", { method: "POST", body: fd })' in INDEX,
 check('api("/api/civic-report"' not in INDEX,
       "the current UI still exposes the unverified civic-report endpoint", failures)
 
-# A separate version makes the single-photo instruction auditable without changing the
-# Drive prompt contract used by the native closed-test build.
-check('const PHOTO_PROMPT_VERSION = "pothole-photo-only-v5";' in CLIENT,
-      "Photo prompt contract/version is missing or changed without updating this test", failures)
-check("const promptVersion = driveMode ? PROMPT_VERSION : PHOTO_PROMPT_VERSION;" in CLIENT,
-      "single-photo reports do not record the Photo-only prompt version", failures)
-check('DETECT_PROMPT + (driveMode ? "" : PHOTO_ONLY_PROMPT_SUFFIX)' in CLIENT,
-      "Photo-only rules are not attached exclusively to single-photo inference", failures)
+# Both capture paths share one generated contract; the capture layout is the only
+# difference, so a Photo report records the same audited prompt version as Drive.
+check('DETECTION_PROMPT_CONFIG.captureLayouts.manual' in CLIENT,
+      "single-photo inference no longer declares its capture layout", failures)
+check("prompt_version: PROMPT_VERSION" in CLIENT,
+      "reports do not record the audited prompt version", failures)
 
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(args=["--disable-web-security"])
@@ -153,19 +151,138 @@ with sync_playwright() as playwright:
         "issueType": "road_damage", "captureSource": "manual_import",
     }], f"Photo submission escaped the pothole-only endpoint/issue type: {submitted}", failures)
 
+    # One generated contract covers both capture paths now: the same road-damage
+    # instructions plus a capture-layout line, instead of a separate Photo prompt.
     prompt = page.evaluate(
         """() => ({
-          version: StandaloneAPI.__pure.PHOTO_PROMPT_VERSION,
-          suffix: StandaloneAPI.__pure.PHOTO_ONLY_PROMPT_SUFFIX,
+          version: StandaloneAPI.__pure.PROMPT_VERSION,
+          base: StandaloneAPI.__pure.DETECT_PROMPT,
         })"""
     )
-    suffix = prompt["suffix"].lower()
-    check(prompt["version"] == "pothole-photo-only-v5",
-          f"runtime Photo prompt version is not the audited contract: {prompt['version']}", failures)
-    check(all(term in suffix for term in (
-        "detect potholes only", "garbage", "open or damaged manholes",
-        "every other civic issue", "is_pothole false", "never reinterpret",
-    )), "runtime Photo prompt does not reject every removed civic category", failures)
+    check(prompt["version"] == "road-damage-v5",
+          f"runtime prompt version is not the audited contract: {prompt['version']}", failures)
+    base = prompt["base"].lower()
+    check(all(term in base for term in ("single supplied road image", "road surface", "footpath")),
+          "runtime prompt lost the road-damage scope", failures)
+    check(not any(term in base for term in ("garbage", "manhole complaint", "civic issue")),
+          "runtime prompt reintroduced a removed civic category", failures)
+    context.close()
+
+    # Exercise the submission boundary itself without contacting OpenAI. The request is
+    # deliberately left pending after inspection so no fake detector response is needed.
+    context = browser.new_context(viewport={"width": 390, "height": 844})
+    context.add_init_script(
+        """() => {
+          localStorage.setItem("openai_key", "test-key-never-sent");
+          localStorage.setItem("initial_setup_complete", "1");
+        }"""
+    )
+    page = context.new_page()
+    page.goto(APP)
+    page.wait_for_load_state("networkidle")
+    page.wait_for_function("typeof handleFile === 'function'")
+    submitted = page.evaluate(
+        """async () => {
+          const captured = [];
+          StandaloneAPI.handle = async (path, options = {}) => {
+            if (path === "/api/report" || path === "/api/civic-report") {
+              const body = options.body;
+              captured.push({
+                path,
+                method: options.method,
+                issueType: body && body.get("issue_type"),
+                captureSource: body && body.get("capture_source"),
+              });
+              return new Promise(() => {});
+            }
+            throw new Error(`unexpected test API call: ${path}`);
+          };
+          handleFile(new File(["fake-jpeg"], "pothole.jpg", {type: "image/jpeg"}), {
+            captureSource: "manual_import",
+            locationConfirmed: false,
+          });
+          await Promise.resolve();
+          return captured;
+        }"""
+    )
+    check(submitted == [{
+        "path": "/api/report", "method": "POST",
+        "issueType": "road_damage", "captureSource": "manual_import",
+    }], f"Photo submission escaped the pothole-only endpoint/issue type: {submitted}", failures)
+
+    # One generated contract covers both capture paths now: the same road-damage
+    # instructions plus a capture-layout line, instead of a separate Photo prompt.
+    prompt = page.evaluate(
+        """() => ({
+          version: StandaloneAPI.__pure.PROMPT_VERSION,
+          base: StandaloneAPI.__pure.DETECT_PROMPT,
+        })"""
+    )
+    check(prompt["version"] == "road-damage-v5",
+          f"runtime prompt version is not the audited contract: {prompt['version']}", failures)
+    base = prompt["base"].lower()
+    check(all(term in base for term in (
+        "single supplied road image", "road surface", "footpath",
+    )), "runtime prompt lost the road-damage scope", failures)
+    check(not any(term in base for term in ("garbage", "manhole complaint", "civic issue")),
+          "runtime prompt reintroduced a removed civic category", failures)
+    context.close()
+
+    # Exercise the submission boundary itself without contacting OpenAI. The request is
+    # deliberately left pending after inspection so no fake detector response is needed.
+    context = browser.new_context(viewport={"width": 390, "height": 844})
+    context.add_init_script(
+        """() => {
+          localStorage.setItem("openai_key", "test-key-never-sent");
+          localStorage.setItem("initial_setup_complete", "1");
+        }"""
+    )
+    page = context.new_page()
+    page.goto(APP)
+    page.wait_for_load_state("networkidle")
+    page.wait_for_function("typeof handleFile === 'function'")
+    submitted = page.evaluate(
+        """async () => {
+          const captured = [];
+          StandaloneAPI.handle = async (path, options = {}) => {
+            if (path === "/api/report" || path === "/api/civic-report") {
+              const body = options.body;
+              captured.push({
+                path,
+                method: options.method,
+                issueType: body && body.get("issue_type"),
+                captureSource: body && body.get("capture_source"),
+              });
+              return new Promise(() => {});
+            }
+            throw new Error(`unexpected test API call: ${path}`);
+          };
+          handleFile(new File(["fake-jpeg"], "pothole.jpg", {type: "image/jpeg"}), {
+            captureSource: "manual_import",
+            locationConfirmed: false,
+          });
+          await Promise.resolve();
+          return captured;
+        }"""
+    )
+    check(submitted == [{
+        "path": "/api/report", "method": "POST",
+        "issueType": "road_damage", "captureSource": "manual_import",
+    }], f"Photo submission escaped the pothole-only endpoint/issue type: {submitted}", failures)
+
+    prompt = page.evaluate(
+        """() => ({
+          version: StandaloneAPI.__pure.PROMPT_VERSION,
+          base: StandaloneAPI.__pure.DETECT_PROMPT,
+        })"""
+    )
+    check(prompt["version"] == "road-damage-v5",
+          f"runtime prompt version is not the audited contract: {prompt['version']}", failures)
+    base = prompt["base"].lower()
+    check(all(term in base for term in ("single supplied road image", "road surface", "footpath")),
+          "runtime prompt lost the road-damage scope", failures)
+    check(not any(term in base for term in ("garbage", "manhole complaint", "civic issue")),
+          "runtime prompt reintroduced a removed civic category", failures)
     context.close()
     browser.close()
 

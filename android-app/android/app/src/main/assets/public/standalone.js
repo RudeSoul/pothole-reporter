@@ -831,13 +831,16 @@
     };
   }
 
+  // An early peek speaks the same vocabulary as the final verdict: a decision of
+  // "review" is a review, and the damage type is the one the model actually named.
   const peekVerdict = (partial) => {
     const a = partialAssessment(partial);
     if (!a) return null;
     const decision = decisionFor(a);
-    return { accepted: decision === "accept", review: false,
-             damage_type: decision === "accept" ? "pothole_cavity" : "none",
-             assessment: decision === "accept" ? "clear" : "absent" };
+    const accepted = decision === "accept";
+    return { accepted, review: decision === "review",
+             damage_type: accepted ? a.damage_type : null,
+             assessment: accepted ? "damaged" : "undamaged" };
   };
 
   // True once the response has proved that Drive Mode will not create a complaint.
@@ -5980,8 +5983,6 @@
   }
 
 
-  const clearAbsenceForRepair = (a) => !!a
-
   const conditionStatus = (r) => r && (r.condition_status === "fixed"
     || r.condition_status === "repair_review") ? r.condition_status : "open";
 
@@ -8277,20 +8278,6 @@
       ? ((headingRaw % 360) + 360) % 360 : null;
     const clientObservationId = sourceEventKey
       ? `capture-${await sha256HexText(sourceEventKey)}` : randomId();
-    const repairObservationBase = {
-      capture_source: captureSource,
-      debug_capture: !dedupe,
-      drive_id: driveId,
-      lat, lng,
-      gps_accuracy: Number.isFinite(gpsAccuracyRaw) ? gpsAccuracyRaw : null,
-      speed_mps: Number.isFinite(speedRaw) ? speedRaw : null,
-      heading: normalizedHeading,
-      source_event_key: sourceEventKey,
-      observed_at: Number.isFinite(capturedAtRaw) ? capturedAtRaw / 1000 : Date.now() / 1000,
-    };
-    // Start the local lookup while the pixels are resized.
-    const repairCandidateP = driveMode && captureSource === "drive_live" && dedupe
-      ? findRepairCandidate(repairObservationBase).catch(() => null) : null;
 
     progress(driveMode ? pmsg("capture") : pmsg("compress"));
     // Measured on a real device: a 2000px frame is ~1.1 MB of base64 and every request
@@ -11515,21 +11502,20 @@
                    addReportUnlessDuplicate, allCentralOutbox, allDrives, allReports,
                    allStatePacks, allStoredRecordsAreEmpty, analyzeImage, analyzeViaService,
                    andhraPradeshCoverage, andhraPradeshRouteFromGeocode, applyCentralPothole,
-                   applyDetectionEnhancement, applyRepairObservation, applyRouteRecord,
-                   applyTenderRecord, applyVerifiedHandoff, assertComplaintInvariants,
-                   assessmentOf, authHeaders, authorityComplaintProfile, authorityRoute,
-                   averageLuminance, b64ToBytes, biharCoverage, biharRouteFromGeocode,
-                   binaryAssessment, blobToDataUrl, bmcWardFromBoundary, bodies,
-                   buildComplaintOutputs, buildDetectionRequest, buildTenderMatchRequest,
-                   bytesToB64, bytesToBase64, cachedPackBytes, canSearchTenderCatalog,
-                   candidateLeadIsUnambiguous, canonicalJson, canonicalServiceRequest,
-                   catalogResourceWithinReview, centralPotholeRequest, centralReportIsConfirmed,
-                   chhattisgarhCoverage, chhattisgarhRouteFromGeocode, civicIssueName,
-                   clearAbsenceForRepair, clearAllStoredRecords, clearPackCache,
-                   compatibleDamage, compatibleDraftRoute, complaintBodyWithFooter,
-                   complaintFooter, complaintOutputsForRecord, complaintRouteError,
-                   complaintRoutingBlock, completeCentralRetry, conciseRouteLabel,
-                   conditionStatus, confirmedTemporaryAssessment, containingMmrAuthorities,
+                   applyDetectionEnhancement, applyRouteRecord, applyTenderRecord,
+                   applyVerifiedHandoff, assertComplaintInvariants, assessmentOf, authHeaders,
+                   authorityComplaintProfile, authorityRoute, averageLuminance, b64ToBytes,
+                   biharCoverage, biharRouteFromGeocode, binaryAssessment, blobToDataUrl,
+                   bmcWardFromBoundary, bodies, buildComplaintOutputs, buildDetectionRequest,
+                   buildTenderMatchRequest, bytesToB64, bytesToBase64, cachedPackBytes,
+                   canSearchTenderCatalog, candidateLeadIsUnambiguous, canonicalJson,
+                   canonicalServiceRequest, catalogResourceWithinReview, centralPotholeRequest,
+                   centralReportIsConfirmed, chhattisgarhCoverage, chhattisgarhRouteFromGeocode,
+                   civicIssueName, clearAllStoredRecords, clearPackCache, compatibleDamage,
+                   compatibleDraftRoute, complaintBodyWithFooter, complaintFooter,
+                   complaintOutputsForRecord, complaintRouteError, complaintRoutingBlock,
+                   completeCentralRetry, conciseRouteLabel, conditionStatus,
+                   confirmedTemporaryAssessment, containingMmrAuthorities,
                    contractPackProvenance, contractVerificationFor, coordinatedRoadNoun,
                    createCivicReport, createReport, currentOfficialRouteBinding, damageTypeOf,
                    dataUrlToBlob, decisionFor, decodeRepairEvidence, delCentralOutbox,
@@ -11541,14 +11527,13 @@
                    exactObjectKeys, exactPinnedContractStateCode, explicitRoadDamageRe,
                    exportDataset, fatal, featuresOf, fetchContractPack, fetchHighwayTile,
                    fetchOptionalCatalogManifest, fetchRoadAgreementPack, fetchRoadNoticePack,
-                   fetchStatePack, fetchWithTimeout, findDuplicateReport, findRepairCandidate,
-                   findRepairCandidateFromReports, finiteCoord, flushCentralOutbox,
-                   flushFeedbackQueue, fmt, footageFor, footageMetadata, fullFramePhoto,
-                   geometryBoundaryDistanceMeters, getCachedStatePack, getContractPackManifest,
-                   getDrive, getFootage, getHighwayPackManifest, getRepairTargetBatch,
-                   getRepairTargetIds, getReport, getRoadAgreementManifest,
-                   getRoadNoticeManifest, getStatePackManifest, goaCoverage,
-                   goaRouteFromGeocode, gpsAccuracyEnvelope, handle, hasAny,
+                   fetchStatePack, fetchWithTimeout, findDuplicateReport, finiteCoord,
+                   flushCentralOutbox, flushFeedbackQueue, fmt, footageFor, footageMetadata,
+                   fullFramePhoto, geometryBoundaryDistanceMeters, getCachedStatePack,
+                   getContractPackManifest, getDrive, getFootage, getHighwayPackManifest,
+                   getRepairTargetBatch, getRepairTargetIds, getReport,
+                   getRoadAgreementManifest, getRoadNoticeManifest, getStatePackManifest,
+                   goaCoverage, goaRouteFromGeocode, gpsAccuracyEnvelope, handle, hasAny,
                    hasAuthoritativeMunicipalOwnership, hasCentralOwnershipProof,
                    hasCoverageGeometry, headingDifference, highwayContractCandidates,
                    highwayPackProvenance, highwayRefsInNotice, highwayRefsOf, highwayTileIdFor,
@@ -11568,8 +11553,7 @@
                    mapStatus, markProjectServiceAvailable, markProjectServiceUnavailable,
                    matchHighwayContract, matchHighwayTile, matchRoadAgreement, matchRoadNotice,
                    matchTender, matchTenderAt, matchTenderFor: matchTender,
-                   matchedMmrAuthorities,
-                   matchesEverySameDriveSighting, materialPavementRe,
+                   matchedMmrAuthorities, matchesEverySameDriveSighting, materialPavementRe,
                    migrateLegacyAndhraPradeshHandoff, migrateLegacyComplaintDrafts,
                    migrateLegacyComplaintRecord, migrateLegacyTamilNaduHandoff, mixedRoadScope,
                    mumbaiFromGeocode, mumbaiWardFromName, municipalCityCoverage,
@@ -11594,9 +11578,9 @@
                    readJson, rebuildOfficialAuthorityIndex, recordCentralRetryFailure,
                    refreshAndPersistOfficialHandoff, refreshGeneratedComplaintFields,
                    registerCentralPothole, rejectedVerdict, remainingStateCoverage,
-                   remainingStateRouteFromGeocode, repairConditionFor, repairProvenanceIsExact,
-                   repairTargetMatch, repairTargetPhotoBytes, replaceStableObject,
-                   reserveDriveCommit, resetContractPackMemory, resetHighwayPackMemory,
+                   remainingStateRouteFromGeocode, repairProvenanceIsExact,
+                   repairTargetPhotoBytes, replaceStableObject, reserveDriveCommit,
+                   resetContractPackMemory, resetHighwayPackMemory,
                    resetRoadAgreementPackMemory, resetRoadNoticePackMemory,
                    resetStatePackMemory, resolvePackUrl, retryCentralOutbox, retryCivicRouting,
                    retryQuery, reverseGeocode, reverseGeocodeCache, reverseGeocodeUncached,
@@ -11641,7 +11625,7 @@
                    validateUttarPradeshPayload, verifiedBdaResponsibility,
                    verifiedContractForComplaint, vodBurstTimes, vodSampleTimes,
                    waitForNominatimSlot, warrantyFor, westBengalCoverage,
-                   withDriveImagePreparation, withSpeedDefaults, writeFeedbackQueue, zip,
+                   withDriveImagePreparation, withSpeedDefaults, writeFeedbackQueue, zip
                  };
 
   window.StandaloneAPI = { __pure, handle, prewarm, prepareComplaint };

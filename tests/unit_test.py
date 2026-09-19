@@ -18,9 +18,11 @@ CASES = r"""
 
   // ---- complete-frame invariant ----
   ok("full frame: no crop selector is exposed", !("selectRoadRegion" in P));
-  ok("full frame: Drive prompt reasons about the complete field of view",
-     P.DETECT_PROMPT.includes("leaving the final full frame")
-       && !P.DETECT_PROMPT.includes("leaving the final crop"));
+  // road-damage-v5 states the invariant directly: one complete supplied image, and no
+  // crop, tile, mask or region of interest anywhere in the instructions.
+  ok("full frame: the prompt asks about one complete supplied image",
+     P.DETECT_PROMPT.includes("single supplied road image")
+       && !/\bcrop|\btile\b|region of interest/i.test(P.DETECT_PROMPT));
   // Repair verification is the native service's contract: the browser bundle carries no
   // repair prompt at all, which timeout_contract_test and llm_contract_parity_test both
   // enforce. Its full-frame wording is checked on the native side.
@@ -203,8 +205,12 @@ CASES = r"""
   ok("repair schema is removed", P.REPAIR_SCHEMA === undefined);
   eq("settings: arbitrary model fails safe", P.normaliseModel("gpt-made-up"), "gpt-5-mini");
   eq("settings: original falls back on mini", P.normaliseDetail("original", "gpt-5-mini"), "high");
-  eq("Drive: accuracy-tested model is pinned", P.DRIVE_DETECTION_MODEL, "gpt-5.6");
-  eq("Drive: accuracy-tested detail is pinned", P.DRIVE_DETECTION_DETAIL, "original");
+  // Native Drive pins its own accuracy-tested model; the browser bundle offers the
+  // contract's models and pins the detail that model is evaluated at.
+  ok("Drive: the accuracy-tested model is offered",
+     P.normaliseModel("gpt-5.6") === "gpt-5.6");
+  eq("Drive: the accuracy-tested model keeps its evaluated detail",
+     P.normaliseDetail("original", "gpt-5.6"), "original");
 
   // ---- saved-video accounting: only completed model verdicts count ----
   eq("footage: every planned verdict completed is a truthful success",
